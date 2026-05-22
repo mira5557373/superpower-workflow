@@ -21,7 +21,7 @@ class ClaudeResult:
     raw: dict | None = None
 
 
-RETRY_DELAYS = [10, 30, 90]
+RETRY_DELAYS = [30, 120, 300]
 TIMEOUT_SECONDS = 7200
 
 

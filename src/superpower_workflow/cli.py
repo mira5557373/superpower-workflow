@@ -186,6 +186,10 @@ def main() -> None:
             )
         for m in state.completed:
             print(f"    + {m}")
+        for m in state.failed:
+            print(f"    x {m} (FAILED)")
+        for m in state.skipped:
+            print(f"    - {m} (skipped)")
         return
 
     if args.command == "run":

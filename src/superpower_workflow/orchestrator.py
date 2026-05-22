@@ -83,10 +83,32 @@ class Orchestrator:
         self.state.spec_sha = self._capture_spec_sha()
         logger = WorkflowLogger(self.claude_dir, run_id)
 
+        milestone_retry_delays = [120, 300, 600]
+        max_retries = len(milestone_retry_delays)
+        consecutive_failures = 0
+
         try:
             for i, ms in enumerate(milestones):
                 name = ms["name"]
                 if name in self.state.completed:
+                    continue
+                if name in self.state.failed or name in self.state.skipped:
+                    continue
+
+                deps_failed = [
+                    d
+                    for d in ms.get("depends_on", [])
+                    if d in self.state.failed or d in self.state.skipped
+                ]
+                if deps_failed:
+                    self.state.skipped.append(name)
+                    save_state(self.claude_dir, self.state)
+                    logger.log(
+                        "MILESTONE_SKIPPED",
+                        name=name,
+                        reason=f"depends on failed: {deps_failed}",
+                    )
+                    print(f"  SKIP: {name} (depends on failed: {deps_failed})")
                     continue
 
                 max_budget = self.config.get("max_total_budget_usd", float("inf"))
@@ -95,24 +117,68 @@ class Orchestrator:
                         f"  FATAL: Total budget ${max_budget} exceeded "
                         f"(${self.state.total_cost_usd:.2f} spent). Stopping."
                     )
-                    logger.log("BUDGET_EXCEEDED", spent=self.state.total_cost_usd, limit=max_budget)
+                    logger.log(
+                        "BUDGET_EXCEEDED",
+                        spent=self.state.total_cost_usd,
+                        limit=max_budget,
+                    )
                     break
 
                 logger.log("MILESTONE_START", name=name)
                 self.state.current_milestone_index = i
-                try:
-                    cost = self._run_milestone(ms, logger)
-                except _PhaseError as e:
-                    logger.log("MILESTONE_FAILED", name=name, phase=e.phase, reason=str(e))
-                    print(f"  FATAL: {name} failed at {e.phase}: {e}")
-                    save_state(self.claude_dir, self.state)
-                    break
+                success = False
 
-                self.state.completed.append(name)
-                self.state.total_cost_usd += cost
-                self.state.current_step = None
-                save_state(self.claude_dir, self.state)
-                logger.log("MILESTONE_COMPLETE", name=name, total_cost=round(cost, 2))
+                for attempt in range(max_retries + 1):
+                    try:
+                        cost = self._run_milestone(ms, logger)
+                        self.state.completed.append(name)
+                        self.state.total_cost_usd += cost
+                        self.state.current_step = None
+                        save_state(self.claude_dir, self.state)
+                        logger.log("MILESTONE_COMPLETE", name=name, total_cost=round(cost, 2))
+                        success = True
+                        consecutive_failures = 0
+                        break
+                    except _PhaseError as e:
+                        if attempt < max_retries:
+                            delay = milestone_retry_delays[attempt]
+                            logger.log(
+                                "MILESTONE_RETRY",
+                                name=name,
+                                attempt=attempt + 1,
+                                phase=e.phase,
+                                reason=str(e),
+                                wait=delay,
+                            )
+                            print(
+                                f"  RETRY: {name} failed at {e.phase} "
+                                f"(attempt {attempt + 1}/{max_retries}). "
+                                f"Waiting {delay}s..."
+                            )
+                            time.sleep(delay)
+                        else:
+                            logger.log(
+                                "MILESTONE_FAILED",
+                                name=name,
+                                phase=e.phase,
+                                reason=str(e),
+                            )
+                            print(
+                                f"  FAILED: {name} after {max_retries + 1} attempts. "
+                                f"Skipping to next."
+                            )
+                            self.state.failed.append(name)
+                            save_state(self.claude_dir, self.state)
+
+                if not success:
+                    consecutive_failures += 1
+                    if consecutive_failures >= 3:
+                        print(
+                            "  FATAL: 3 consecutive milestone failures. "
+                            "Likely systemic issue. Stopping."
+                        )
+                        logger.log("CIRCUIT_BREAKER", consecutive=consecutive_failures)
+                        break
 
                 delay = self.config.get("delay_between_phases_seconds", 10)
                 if delay > 0:
@@ -192,9 +258,14 @@ class Orchestrator:
         return result.stdout.strip()
 
     def _completion_notification(self, logger: WorkflowLogger) -> None:
+        status = "complete"
+        if self.state.failed:
+            status = "partial" if self.state.completed else "failed"
         summary = {
-            "status": "complete",
+            "status": status,
             "completed": self.state.completed,
+            "failed": self.state.failed,
+            "skipped": self.state.skipped,
             "total_cost_usd": round(self.state.total_cost_usd, 2),
             "run_id": self.state.run_id,
         }
@@ -206,10 +277,12 @@ class Orchestrator:
             milestones=len(self.state.completed),
         )
         print("\a")
-        print(
-            f"  Run complete. {len(self.state.completed)} milestones, "
-            f"${self.state.total_cost_usd:.2f} total."
-        )
+        parts = [f"{len(self.state.completed)} completed"]
+        if self.state.failed:
+            parts.append(f"{len(self.state.failed)} failed")
+        if self.state.skipped:
+            parts.append(f"{len(self.state.skipped)} skipped")
+        print(f"  Run {status}. {', '.join(parts)}. ${self.state.total_cost_usd:.2f} total.")
 
         webhook = self.config.get("notification_webhook")
         if webhook:

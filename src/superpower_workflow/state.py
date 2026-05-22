@@ -20,6 +20,8 @@ class WorkflowState:
     last_phase_session_id: str | None = None
     plan_commit_sha: str | None = None
     completed: list[str] = field(default_factory=list)
+    failed: list[str] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
     total_cost_usd: float = 0.0
     spec_sha: str = ""
     run_id: str = ""
