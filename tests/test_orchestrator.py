@@ -146,3 +146,38 @@ def test_preflight_rejects_no_milestones(tmp_path):
         orch = Orchestrator(tmp_path)
         result = orch._preflight_checks()
     assert result is False
+
+
+def test_phase_error_stops_milestone(tmp_path):
+    _config(tmp_path)
+    error_result = ClaudeResult(text="network error", is_error=True)
+
+    with (
+        patch("superpower_workflow.orchestrator.run_claude", return_value=error_result),
+        patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
+    ):
+        orch = Orchestrator(tmp_path)
+        orch.run()
+    state = load_state(tmp_path / ".claude")
+    assert "m1" not in state.completed
+
+
+def test_config_validation_rejects_missing_budgets(tmp_path):
+    from superpower_workflow.orchestrator import validate_config
+
+    errors = validate_config({"spec": "s.md", "model": "opus", "milestones": []})
+    assert any("budgets" in e for e in errors)
+
+
+def test_config_validation_passes_valid(tmp_path):
+    from superpower_workflow.orchestrator import validate_config
+
+    errors = validate_config(
+        {
+            "spec": "s.md",
+            "model": "opus",
+            "milestones": [],
+            "budgets": {"plan": 25, "implement": 100, "review": 40, "push": 3},
+        }
+    )
+    assert errors == []

@@ -101,7 +101,10 @@ def _cmd_decompose(project_root: Path) -> None:
 
     print(f"  Decomposing spec: {spec_path}")
     milestones = decompose(
-        spec_path=spec_path, model=config.get("model", "opus"), cwd=str(project_root)
+        spec_path=spec_path,
+        model=config.get("model", "opus"),
+        cwd=str(project_root),
+        fallback_model=config.get("fallback_model"),
     )
     if not milestones:
         print("  Error: decomposition returned no milestones")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 
+from superpower_workflow.prompts import system_prompt
 from superpower_workflow.runner import run_claude
 
 DECOMPOSE_PROMPT = """Read the spec at {spec_path}. Identify implementation milestones.
@@ -23,15 +24,22 @@ Proposed milestones:
 {milestones_json}"""
 
 
-def decompose(spec_path: str, model: str, cwd: str) -> list[dict]:
-    """Two-pass decomposition: propose then validate milestones."""
-    # Pass 1: Propose milestones
+def decompose(
+    spec_path: str,
+    model: str,
+    cwd: str,
+    fallback_model: str | None = None,
+) -> list[dict]:
+    sys_prompt = system_prompt()
+
     result = run_claude(
         DECOMPOSE_PROMPT.format(spec_path=spec_path),
         model=model,
         effort="max",
         budget=10.0,
         cwd=cwd,
+        system_prompt=sys_prompt,
+        fallback_model=fallback_model,
     )
     if result.is_error:
         return []
@@ -39,7 +47,6 @@ def decompose(spec_path: str, model: str, cwd: str) -> list[dict]:
     if not milestones:
         return []
 
-    # Pass 2: Validate
     validate_result = run_claude(
         VALIDATE_PROMPT.format(
             spec_path=spec_path, milestones_json=json.dumps(milestones, indent=2)
@@ -48,6 +55,8 @@ def decompose(spec_path: str, model: str, cwd: str) -> list[dict]:
         effort="max",
         budget=10.0,
         cwd=cwd,
+        system_prompt=sys_prompt,
+        fallback_model=fallback_model,
     )
     if not validate_result.is_error:
         validated = _extract_json_array(validate_result.text)
@@ -60,7 +69,6 @@ def decompose(spec_path: str, model: str, cwd: str) -> list[dict]:
 
 
 def _extract_json_array(text: str) -> list[dict]:
-    """Extract JSON array from text, handling markdown code blocks."""
     cleaned = re.sub(r"```json\s*", "", text)
     cleaned = re.sub(r"```\s*", "", cleaned)
     cleaned = cleaned.strip()

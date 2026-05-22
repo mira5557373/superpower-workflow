@@ -16,7 +16,7 @@ from superpower_workflow.prompts import (
     phase_d_prompt,
     system_prompt,
 )
-from superpower_workflow.runner import run_claude
+from superpower_workflow.runner import ClaudeResult, run_claude
 from superpower_workflow.state import (
     GAP_REPORT_FILE,
     PHASE_FILE,
@@ -30,12 +30,31 @@ from superpower_workflow.state import (
     save_state,
 )
 
+REQUIRED_CONFIG_KEYS = ("spec", "model", "budgets", "milestones")
+
+
+def validate_config(config: dict) -> list[str]:
+    errors = []
+    for key in REQUIRED_CONFIG_KEYS:
+        if key not in config:
+            errors.append(f"Missing required field: '{key}'")
+    if "budgets" in config:
+        for phase in ("plan", "implement", "review", "push"):
+            if phase not in config["budgets"]:
+                errors.append(f"Missing budget for phase: '{phase}'")
+    return errors
+
 
 class Orchestrator:
     def __init__(self, project_root: Path) -> None:
         self.root = project_root
         self.claude_dir = project_root / ".claude"
         self.config = load_config(self.claude_dir)
+        config_errors = validate_config(self.config)
+        if config_errors:
+            raise ValueError(
+                "Invalid workflow.json:\n" + "\n".join(f"  - {e}" for e in config_errors)
+            )
         self.state = load_state(self.claude_dir)
         self.sys_prompt = system_prompt()
         self.cwd = str(project_root)
@@ -73,14 +92,22 @@ class Orchestrator:
                 max_budget = self.config.get("max_total_budget_usd", float("inf"))
                 if self.state.total_cost_usd >= max_budget:
                     print(
-                        f"  FATAL: Total budget ${max_budget} exceeded (${self.state.total_cost_usd:.2f} spent). Stopping."
+                        f"  FATAL: Total budget ${max_budget} exceeded "
+                        f"(${self.state.total_cost_usd:.2f} spent). Stopping."
                     )
                     logger.log("BUDGET_EXCEEDED", spent=self.state.total_cost_usd, limit=max_budget)
                     break
 
                 logger.log("MILESTONE_START", name=name)
                 self.state.current_milestone_index = i
-                cost = self._run_milestone(ms, logger)
+                try:
+                    cost = self._run_milestone(ms, logger)
+                except _PhaseError as e:
+                    logger.log("MILESTONE_FAILED", name=name, phase=e.phase, reason=str(e))
+                    print(f"  FATAL: {name} failed at {e.phase}: {e}")
+                    save_state(self.claude_dir, self.state)
+                    break
+
                 self.state.completed.append(name)
                 self.state.total_cost_usd += cost
                 self.state.current_step = None
@@ -142,7 +169,8 @@ class Orchestrator:
         if self.state.total_cost_usd >= max_budget:
             release_lock(self.claude_dir)
             print(
-                f"  FATAL: Budget already exceeded (${self.state.total_cost_usd:.2f} >= ${max_budget})"
+                f"  FATAL: Budget already exceeded "
+                f"(${self.state.total_cost_usd:.2f} >= ${max_budget})"
             )
             return False
 
@@ -173,11 +201,14 @@ class Orchestrator:
         summary_path = self.claude_dir / "workflow-complete.json"
         summary_path.write_text(json.dumps(summary, indent=2))
         logger.log(
-            "RUN_COMPLETE", cost=summary["total_cost_usd"], milestones=len(self.state.completed)
+            "RUN_COMPLETE",
+            cost=summary["total_cost_usd"],
+            milestones=len(self.state.completed),
         )
-        print("\a")  # terminal bell
+        print("\a")
         print(
-            f"  Run complete. {len(self.state.completed)} milestones, ${self.state.total_cost_usd:.2f} total."
+            f"  Run complete. {len(self.state.completed)} milestones, "
+            f"${self.state.total_cost_usd:.2f} total."
         )
 
         webhook = self.config.get("notification_webhook")
@@ -194,6 +225,10 @@ class Orchestrator:
                 urllib.request.urlopen(req, timeout=10)
             except Exception:
                 print("  Warning: webhook notification failed")
+
+    def _check_phase_result(self, r: ClaudeResult, phase: str) -> None:
+        if r.is_error:
+            raise _PhaseError(phase, r.text or "claude -p returned an error")
 
     def _run_milestone(self, ms: dict, logger: WorkflowLogger) -> float:
         name = ms["name"]
@@ -227,6 +262,7 @@ class Orchestrator:
         )
         cost += r.cost_usd
         clear_phase_state(self.claude_dir)
+        self._check_phase_result(r, "Phase A")
         logger.log("PHASE_A_COMPLETE", cost=round(r.cost_usd, 2))
 
         sha_result = subprocess.run(
@@ -237,6 +273,7 @@ class Orchestrator:
         )
         self.state.plan_commit_sha = sha_result.stdout.strip()
         self.state.last_phase_session_id = r.session_id
+        save_state(self.claude_dir, self.state)
 
         subprocess.run(["git", "tag", f"pre-impl/{name}"], capture_output=True, cwd=self.cwd)
 
@@ -256,6 +293,7 @@ class Orchestrator:
         )
         cost += r.cost_usd
         self.state.last_phase_session_id = r.session_id
+        self._check_phase_result(r, "Phase B")
         logger.log("PHASE_B_COMPLETE", cost=round(r.cost_usd, 2))
 
         # Phase C: Review + Fix
@@ -284,6 +322,7 @@ class Orchestrator:
         )
         cost += r.cost_usd
         clear_phase_state(self.claude_dir)
+        self._check_phase_result(r, "Phase C")
         logger.log("PHASE_C_COMPLETE", cost=round(r.cost_usd, 2))
 
         # Phase D: Push + Tag
@@ -331,3 +370,9 @@ class Orchestrator:
                 return str(f)
         print(f"  WARNING: No plan file found matching '{name}' in {plans_dir}")
         return f"docs/superpowers/plans/{name}.md"
+
+
+class _PhaseError(Exception):
+    def __init__(self, phase: str, message: str) -> None:
+        self.phase = phase
+        super().__init__(message)
