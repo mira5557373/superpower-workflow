@@ -1,7 +1,8 @@
-"""Core milestone orchestrator that manages the four-phase workflow."""
+"""Core milestone orchestrator: pre-flight checks -> phases A/B/C/D -> state update."""
 
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 from pathlib import Path
@@ -17,6 +18,8 @@ from superpower_workflow.prompts import (
 )
 from superpower_workflow.runner import run_claude
 from superpower_workflow.state import (
+    GAP_REPORT_FILE,
+    PHASE_FILE,
     PhaseState,
     acquire_lock,
     clear_phase_state,
@@ -39,31 +42,42 @@ class Orchestrator:
 
     def run(
         self,
-        dry_run=False,
-        milestone_filter=None,
-        from_ms=None,
-        to_ms=None,
-        phase_prefix=None,
+        dry_run: bool = False,
+        milestone_filter: str | None = None,
+        from_ms: str | None = None,
+        to_ms: str | None = None,
+        phase_prefix: str | None = None,
     ) -> None:
         milestones = self._filter_milestones(milestone_filter, from_ms, to_ms, phase_prefix)
+
         if dry_run:
             for ms in milestones:
                 print(f"  [DRY RUN] Would execute: {ms['name']}")
             return
 
+        if not self._preflight_checks():
+            return
+
         run_id = time.strftime("%Y%m%d-%H%M%S")
         self.state.run_id = run_id
         self.state.started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.state.spec_sha = self._capture_spec_sha()
         logger = WorkflowLogger(self.claude_dir, run_id)
 
         try:
-            if not acquire_lock(self.claude_dir):
-                print("Another orchestration is running.")
-                return
             for i, ms in enumerate(milestones):
                 name = ms["name"]
                 if name in self.state.completed:
                     continue
+
+                max_budget = self.config.get("max_total_budget_usd", float("inf"))
+                if self.state.total_cost_usd >= max_budget:
+                    print(
+                        f"  FATAL: Total budget ${max_budget} exceeded (${self.state.total_cost_usd:.2f} spent). Stopping."
+                    )
+                    logger.log("BUDGET_EXCEEDED", spent=self.state.total_cost_usd, limit=max_budget)
+                    break
+
                 logger.log("MILESTONE_START", name=name)
                 self.state.current_milestone_index = i
                 cost = self._run_milestone(ms, logger)
@@ -72,14 +86,116 @@ class Orchestrator:
                 self.state.current_step = None
                 save_state(self.claude_dir, self.state)
                 logger.log("MILESTONE_COMPLETE", name=name, total_cost=round(cost, 2))
+
                 delay = self.config.get("delay_between_phases_seconds", 10)
                 if delay > 0:
                     time.sleep(delay)
+
+            self._completion_notification(logger)
         finally:
             release_lock(self.claude_dir)
             logger.close()
 
-    def _run_milestone(self, ms, logger) -> float:
+    def _preflight_checks(self) -> bool:
+        if not acquire_lock(self.claude_dir):
+            print("  FATAL: Another orchestration is running.")
+            return False
+
+        git_status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            cwd=self.cwd,
+        )
+        if git_status.stdout.strip():
+            release_lock(self.claude_dir)
+            print("  FATAL: Uncommitted changes detected. Commit or stash before running.")
+            return False
+
+        verify = self.config.get("verify_commands", {})
+        for name, cmd in verify.items():
+            if cmd is None:
+                continue
+            result = subprocess.run(cmd, shell=True, capture_output=True, cwd=self.cwd)
+            if result.returncode != 0:
+                release_lock(self.claude_dir)
+                print(f"  FATAL: Verify command '{name}' failed: {cmd}")
+                return False
+
+        milestones = self.config.get("milestones", [])
+        if not milestones:
+            release_lock(self.claude_dir)
+            print("  FATAL: No milestones in workflow.json. Run: sw decompose")
+            return False
+
+        names = [m["name"] for m in milestones]
+        for ms in milestones:
+            for dep in ms.get("depends_on", []):
+                if (
+                    dep not in names or names.index(dep) >= names.index(ms["name"])
+                ) and dep not in self.state.completed:
+                    release_lock(self.claude_dir)
+                    print(f"  FATAL: Dependency '{dep}' for '{ms['name']}' not satisfied.")
+                    return False
+
+        max_budget = self.config.get("max_total_budget_usd", float("inf"))
+        if self.state.total_cost_usd >= max_budget:
+            release_lock(self.claude_dir)
+            print(
+                f"  FATAL: Budget already exceeded (${self.state.total_cost_usd:.2f} >= ${max_budget})"
+            )
+            return False
+
+        for name in (PHASE_FILE, GAP_REPORT_FILE):
+            (self.claude_dir / name).unlink(missing_ok=True)
+
+        return True
+
+    def _capture_spec_sha(self) -> str:
+        spec_path = self.config.get("spec", "")
+        if not spec_path:
+            return ""
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%H", "--", spec_path],
+            capture_output=True,
+            text=True,
+            cwd=self.cwd,
+        )
+        return result.stdout.strip()
+
+    def _completion_notification(self, logger: WorkflowLogger) -> None:
+        summary = {
+            "status": "complete",
+            "completed": self.state.completed,
+            "total_cost_usd": round(self.state.total_cost_usd, 2),
+            "run_id": self.state.run_id,
+        }
+        summary_path = self.claude_dir / "workflow-complete.json"
+        summary_path.write_text(json.dumps(summary, indent=2))
+        logger.log(
+            "RUN_COMPLETE", cost=summary["total_cost_usd"], milestones=len(self.state.completed)
+        )
+        print("\a")  # terminal bell
+        print(
+            f"  Run complete. {len(self.state.completed)} milestones, ${self.state.total_cost_usd:.2f} total."
+        )
+
+        webhook = self.config.get("notification_webhook")
+        if webhook:
+            try:
+                import urllib.request
+
+                req = urllib.request.Request(
+                    webhook,
+                    data=json.dumps(summary).encode(),
+                    method="POST",
+                    headers={"Content-Type": "application/json"},
+                )
+                urllib.request.urlopen(req, timeout=10)
+            except Exception:
+                print("  Warning: webhook notification failed")
+
+    def _run_milestone(self, ms: dict, logger: WorkflowLogger) -> float:
         name = ms["name"]
         sections = ms.get("spec_sections", "")
         spec = self.config["spec"]
@@ -113,7 +229,6 @@ class Orchestrator:
         clear_phase_state(self.claude_dir)
         logger.log("PHASE_A_COMPLETE", cost=round(r.cost_usd, 2))
 
-        # Capture plan_commit_sha
         sha_result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             capture_output=True,
@@ -122,12 +237,8 @@ class Orchestrator:
         )
         self.state.plan_commit_sha = sha_result.stdout.strip()
         self.state.last_phase_session_id = r.session_id
-        # Rollback tag
-        subprocess.run(
-            ["git", "tag", f"pre-impl/{name}"],
-            capture_output=True,
-            cwd=self.cwd,
-        )
+
+        subprocess.run(["git", "tag", f"pre-impl/{name}"], capture_output=True, cwd=self.cwd)
 
         # Phase B: Implement
         self.state.current_step = "implement"
@@ -193,7 +304,13 @@ class Orchestrator:
         logger.log("PHASE_D_COMPLETE", cost=round(r.cost_usd, 2))
         return cost
 
-    def _filter_milestones(self, milestone, from_ms, to_ms, phase_prefix=None):
+    def _filter_milestones(
+        self,
+        milestone: str | None,
+        from_ms: str | None,
+        to_ms: str | None,
+        phase_prefix: str | None = None,
+    ) -> list[dict]:
         all_ms = self.config.get("milestones", [])
         if milestone:
             return [m for m in all_ms if m["name"] == milestone]
@@ -207,7 +324,7 @@ class Orchestrator:
             return all_ms[start:end]
         return all_ms
 
-    def _find_plan_path(self, name):
+    def _find_plan_path(self, name: str) -> str:
         plans_dir = Path(self.cwd) / "docs" / "superpowers" / "plans"
         if plans_dir.exists():
             for f in sorted(plans_dir.glob(f"*{name}*")):

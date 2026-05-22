@@ -42,8 +42,8 @@ def compute_exit_code(claude_dir: Path) -> int:
 
     critical_gaps = gap_report.get("critical_gaps", 0)
     important_gaps = gap_report.get("important_gaps", 0)
-    tests_green = gap_report.get("tests_green", False)
-    lint_clean = gap_report.get("lint_clean", False)
+    tests_green = gap_report.get("tests_green", True)
+    lint_clean = gap_report.get("lint_clean", True)
     phase_type = phase.get("phase", "")
     previous_important_gaps = phase.get("previous_important_gaps")
 

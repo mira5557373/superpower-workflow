@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 from pathlib import Path
 
@@ -39,14 +38,26 @@ def _cmd_init(project_root: Path) -> None:
         print(f"  workflow.json already exists at {config_path}")
         return
 
-    template_dir = Path(__file__).resolve().parent.parent.parent / "templates"
-    template = template_dir / "workflow.json"
-    if template.exists():
-        shutil.copy2(template, config_path)
-    else:
-        config_path.write_text(
-            json.dumps({"schema_version": 1, "spec": "", "milestones": []}, indent=2)
-        )
+    default_config = {
+        "schema_version": 1,
+        "spec": "",
+        "model": "opus",
+        "fallback_model": "haiku",
+        "effort": {"plan": "max", "implement": "high", "review": "max", "push": "low"},
+        "budgets": {"plan": 25, "implement": 100, "review": 40, "push": 3},
+        "max_total_budget_usd": 500,
+        "delay_between_phases_seconds": 10,
+        "convergence": {
+            "max_iterations": 5,
+            "min_gaps_for_substantial": 20,
+            "persistent_gap_downgrade_after": 3,
+        },
+        "verify_commands": {"test": "python -m pytest -q", "lint": None, "format": None},
+        "git_strategy": "main",
+        "notification_webhook": None,
+        "milestones": [],
+    }
+    config_path.write_text(json.dumps(default_config, indent=2))
 
     specs_dir = project_root / "docs" / "superpowers" / "specs"
     if specs_dir.exists():
