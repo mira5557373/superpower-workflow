@@ -37,8 +37,15 @@ class Orchestrator:
         self.sys_prompt = system_prompt()
         self.cwd = str(project_root)
 
-    def run(self, dry_run=False, milestone_filter=None, from_ms=None, to_ms=None) -> None:
-        milestones = self._filter_milestones(milestone_filter, from_ms, to_ms)
+    def run(
+        self,
+        dry_run=False,
+        milestone_filter=None,
+        from_ms=None,
+        to_ms=None,
+        phase_prefix=None,
+    ) -> None:
+        milestones = self._filter_milestones(milestone_filter, from_ms, to_ms, phase_prefix)
         if dry_run:
             for ms in milestones:
                 print(f"  [DRY RUN] Would execute: {ms['name']}")
@@ -186,10 +193,13 @@ class Orchestrator:
         logger.log("PHASE_D_COMPLETE", cost=round(r.cost_usd, 2))
         return cost
 
-    def _filter_milestones(self, milestone, from_ms, to_ms):
+    def _filter_milestones(self, milestone, from_ms, to_ms, phase_prefix=None):
         all_ms = self.config.get("milestones", [])
         if milestone:
             return [m for m in all_ms if m["name"] == milestone]
+        if phase_prefix:
+            prefix = f"{phase_prefix}-"
+            return [m for m in all_ms if m["name"].startswith(prefix)]
         if from_ms or to_ms:
             names = [m["name"] for m in all_ms]
             start = names.index(from_ms) if from_ms and from_ms in names else 0
@@ -202,4 +212,5 @@ class Orchestrator:
         if plans_dir.exists():
             for f in sorted(plans_dir.glob(f"*{name}*")):
                 return str(f)
-        return f"docs/superpowers/plans/*{name}*.md"
+        print(f"  WARNING: No plan file found matching '{name}' in {plans_dir}")
+        return f"docs/superpowers/plans/{name}.md"

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -29,6 +31,98 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _cmd_init(project_root: Path) -> None:
+    claude_dir = project_root / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    config_path = claude_dir / "workflow.json"
+    if config_path.exists():
+        print(f"  workflow.json already exists at {config_path}")
+        return
+
+    template_dir = Path(__file__).resolve().parent.parent.parent / "templates"
+    template = template_dir / "workflow.json"
+    if template.exists():
+        shutil.copy2(template, config_path)
+    else:
+        config_path.write_text(
+            json.dumps({"schema_version": 1, "spec": "", "milestones": []}, indent=2)
+        )
+
+    specs_dir = project_root / "docs" / "superpowers" / "specs"
+    if specs_dir.exists():
+        specs = sorted(specs_dir.glob("*.md"))
+        if specs:
+            config = json.loads(config_path.read_text())
+            config["spec"] = str(specs[-1].relative_to(project_root))
+            config_path.write_text(json.dumps(config, indent=2))
+            print(f"  Auto-discovered spec: {config['spec']}")
+
+    gitignore = project_root / ".gitignore"
+    entries = [
+        ".claude/workflow-state.json",
+        ".claude/.workflow-phase.json",
+        ".claude/.gap-report.json",
+        ".claude/.workflow.lock",
+        ".claude/workflow-*.log",
+    ]
+    existing = gitignore.read_text() if gitignore.exists() else ""
+    new_entries = [e for e in entries if e not in existing]
+    if new_entries:
+        with open(gitignore, "a") as f:
+            f.write("\n# superpower-workflow runtime files\n")
+            for e in new_entries:
+                f.write(f"{e}\n")
+        print(f"  Added {len(new_entries)} entries to .gitignore")
+
+    print(f"  Created {config_path}")
+    print("  Edit the spec path and verify_commands, then run: sw decompose")
+
+
+def _cmd_decompose(project_root: Path) -> None:
+    from superpower_workflow.decomposer import decompose
+    from superpower_workflow.state import load_config
+
+    config = load_config(project_root / ".claude")
+    spec_path = config.get("spec", "")
+    if not spec_path or not (project_root / spec_path).exists():
+        print(f"  Error: spec not found at '{spec_path}'. Update .claude/workflow.json")
+        sys.exit(1)
+
+    print(f"  Decomposing spec: {spec_path}")
+    milestones = decompose(
+        spec_path=spec_path, model=config.get("model", "opus"), cwd=str(project_root)
+    )
+    if not milestones:
+        print("  Error: decomposition returned no milestones")
+        sys.exit(1)
+
+    config["milestones"] = milestones
+    config_path = project_root / ".claude" / "workflow.json"
+    config_path.write_text(json.dumps(config, indent=2))
+    print(f"  Wrote {len(milestones)} milestones to workflow.json:")
+    for ms in milestones:
+        print(f"    - {ms['name']}: {ms.get('description', '')}")
+
+
+def _cmd_resume(project_root: Path) -> None:
+    from superpower_workflow.orchestrator import Orchestrator
+    from superpower_workflow.state import load_state
+
+    state = load_state(project_root / ".claude")
+    if not state.current_step and not state.completed:
+        print("  Nothing to resume. Run: sw run")
+        return
+
+    step = state.current_step
+    idx = state.current_milestone_index
+    print(f"  Resuming from milestone #{idx}, step={step or 'next milestone'}")
+    if step == "implement":
+        print("  Phase B was interrupted. Checking git for partial progress...")
+
+    orch = Orchestrator(project_root)
+    orch.run()
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -36,6 +130,10 @@ def main() -> None:
 
     if args.command is None:
         parser.print_help()
+        return
+
+    if args.command == "init":
+        _cmd_init(project_root)
         return
 
     if args.command == "doctor":
@@ -46,6 +144,10 @@ def main() -> None:
             status = "+" if r.ok else "x"
             print(f"  {status} {r.message}")
         sys.exit(0 if all(r.ok for r in results) else 1)
+
+    if args.command == "decompose":
+        _cmd_decompose(project_root)
+        return
 
     if args.command == "estimate":
         from superpower_workflow.estimator import estimate
@@ -81,7 +183,10 @@ def main() -> None:
             milestone_filter=args.milestone,
             from_ms=args.from_ms,
             to_ms=args.to_ms,
+            phase_prefix=getattr(args, "phase", None),
         )
         return
 
-    print(f"Command '{args.command}' not yet implemented.")
+    if args.command == "resume":
+        _cmd_resume(project_root)
+        return

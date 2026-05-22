@@ -80,6 +80,9 @@ def run_claude(
             return ClaudeResult(is_error=True)
 
         except subprocess.TimeoutExpired:
+            if attempt < len(RETRY_DELAYS):
+                time.sleep(RETRY_DELAYS[attempt])
+                continue
             return ClaudeResult(is_error=True, timed_out=True)
 
     return ClaudeResult(is_error=True)

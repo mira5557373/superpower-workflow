@@ -53,6 +53,9 @@ def decompose(spec_path: str, model: str, cwd: str) -> list[dict]:
         validated = _extract_json_array(validate_result.text)
         if validated:
             return validated
+        print("  Warning: validation pass returned no milestones, using unvalidated results")
+    else:
+        print("  Warning: validation pass failed, using unvalidated results")
     return milestones
 
 
