@@ -8,7 +8,9 @@ def system_prompt() -> str:
         "Do NOT ask clarifying questions. Use best judgment and note uncertainties.\n"
         "Follow all instructions in CLAUDE.md if present.\n"
         "If your context was compacted, re-read the plan or spec before continuing.\n"
-        "Use conventional commits. Follow TDD when implementing code."
+        "Use conventional commits. Follow TDD when implementing code.\n"
+        "Include a Generated-By trailer on every commit: "
+        'git commit --trailer "Generated-By: <your-model-name>"'
     )
 
 
@@ -45,7 +47,9 @@ def phase_b_prompt(name: str, context_summary: str, plan_path: str) -> str:
         f"Commit each task individually with conventional commit messages.\n"
         f"\nWrite code with production deployment in mind: structured logging, error handling,\n"
         f"input validation at boundaries. TDD first -- after tests pass, add production\n"
-        f"concerns as a refactoring step within the same task.\n\n"
+        f"concerns as a refactoring step within the same task.\n"
+        f"\nAfter each task, before committing: run lint on changed files, fix issues. "
+        f"Do NOT commit code that fails lint or tests. These are HARD gates.\n\n"
         f"If context is compacted, re-read the plan at {plan_path}."
     )
 

@@ -99,6 +99,18 @@ def test_phase_c_prompt_includes_production_review():
     assert "production-readiness-review" in p
 
 
+def test_system_prompt_includes_trailer_instruction():
+    p = system_prompt()
+    assert "Generated-By" in p
+    assert "git commit --trailer" in p
+
+
+def test_phase_b_prompt_includes_quality_gate_instruction():
+    p = phase_b_prompt(name="m1", context_summary="", plan_path="plan.md")
+    assert "lint" in p.lower()
+    assert "Do NOT commit" in p
+
+
 def test_phase_c_prompt_fix_order():
     p = phase_c_prompt(
         name="m1",
