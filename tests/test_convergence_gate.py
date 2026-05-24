@@ -192,6 +192,83 @@ class TestIsStuck:
         assert _is_stuck(current, previous) is False
 
 
+class TestLoopDetectionIntegration:
+    """Test loop detection wired into compute_exit_code."""
+
+    def test_stuck_loop_allows_stop(self, tmp_claude_dir):
+        """Repeated gaps across iterations -> exit 0 (allow stop)."""
+        summaries = ["[ultrathink] Same gap A", "[ultrathink] Same gap B"]
+        _write(
+            tmp_claude_dir,
+            phase={
+                "phase": "ultrathink",
+                "iteration": 2,
+                "max_iterations": 5,
+                "previous_important_gaps": 3,
+                "previous_gap_summaries": summaries,
+            },
+            gap_report={
+                "critical_gaps": 0,
+                "important_gaps": 3,
+                "tests_green": True,
+                "lint_clean": True,
+                "gap_summaries": summaries,
+            },
+        )
+        assert compute_exit_code(tmp_claude_dir) == 0
+
+    def test_not_stuck_continues_iteration(self, tmp_claude_dir):
+        """Different gaps across iterations -> exit 2 (block stop)."""
+        _write(
+            tmp_claude_dir,
+            phase={
+                "phase": "ultrathink",
+                "iteration": 1,
+                "max_iterations": 5,
+                "previous_important_gaps": 5,
+                "previous_gap_summaries": [
+                    "[ultrathink] Old gap X",
+                    "[ultrathink] Old gap Y",
+                ],
+            },
+            gap_report={
+                "critical_gaps": 0,
+                "important_gaps": 4,
+                "tests_green": True,
+                "lint_clean": True,
+                "gap_summaries": [
+                    "[ultrathink] New gap A",
+                    "[ultrathink] New gap B",
+                ],
+            },
+        )
+        assert compute_exit_code(tmp_claude_dir) == 2
+
+    def test_increment_stores_current_summaries(self, tmp_claude_dir):
+        """After blocking, phase file stores current gap_summaries as previous."""
+        _write(
+            tmp_claude_dir,
+            phase={
+                "phase": "ultrathink",
+                "iteration": 0,
+                "max_iterations": 5,
+            },
+            gap_report={
+                "critical_gaps": 0,
+                "important_gaps": 5,
+                "tests_green": True,
+                "lint_clean": True,
+                "gap_summaries": ["[ultrathink] Gap A", "[ultrathink] Gap B"],
+            },
+        )
+        compute_exit_code(tmp_claude_dir)
+        updated = json.loads((tmp_claude_dir / ".workflow-phase.json").read_text())
+        assert updated["previous_gap_summaries"] == [
+            "[ultrathink] Gap A",
+            "[ultrathink] Gap B",
+        ]
+
+
 class TestMalformedGapReport:
     """Test error handling for malformed gap report."""
 

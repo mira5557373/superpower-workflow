@@ -59,6 +59,11 @@ def compute_exit_code(claude_dir: Path) -> int:
         _increment_iteration(phase_path, phase)
         return 2
 
+    current_summaries = gap_report.get("gap_summaries", [])
+    prev_summaries = phase.get("previous_gap_summaries", [])
+    if _is_stuck(current_summaries, prev_summaries):
+        return 0
+
     critical_gaps = gap_report.get("critical_gaps", 0)
     important_gaps = gap_report.get("important_gaps", 0)
     tests_green = gap_report.get("tests_green", True)
@@ -81,17 +86,27 @@ def compute_exit_code(claude_dir: Path) -> int:
     if converged:
         return 0
 
-    _increment_iteration(phase_path, phase, current_important=important_gaps)
+    _increment_iteration(
+        phase_path,
+        phase,
+        current_important=important_gaps,
+        current_summaries=current_summaries,
+    )
     return 2
 
 
 def _increment_iteration(
-    phase_path: Path, phase: dict, current_important: int | None = None
+    phase_path: Path,
+    phase: dict,
+    current_important: int | None = None,
+    current_summaries: list[str] | None = None,
 ) -> None:
-    """Increment iteration counter and optionally update previous_important_gaps."""
+    """Increment iteration counter and optionally update gap tracking."""
     phase["iteration"] = phase.get("iteration", 0) + 1
     if current_important is not None:
         phase["previous_important_gaps"] = current_important
+    if current_summaries is not None:
+        phase["previous_gap_summaries"] = current_summaries
     tmp = phase_path.with_suffix(".tmp")
     tmp.write_text(json.dumps(phase, indent=2))
     os.replace(str(tmp), str(phase_path))
