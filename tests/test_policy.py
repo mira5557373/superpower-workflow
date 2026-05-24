@@ -83,6 +83,107 @@ class TestBannedImports:
         assert passed is True
 
 
+class TestRequiredLicense:
+    def test_passes_when_license_present(self, tmp_path):
+        (tmp_path / "LICENSE").write_text("MIT License\n\nCopyright 2026...")
+        engine = PolicyEngine({"required_license": "MIT"})
+        passed, _ = engine.check(tmp_path, files=[])
+        assert passed is True
+
+    def test_fails_when_no_license_file(self, tmp_path):
+        engine = PolicyEngine({"required_license": "MIT"})
+        passed, violations = engine.check(tmp_path, files=[])
+        assert passed is False
+        assert any("LICENSE" in v for v in violations)
+
+    def test_fails_when_wrong_license(self, tmp_path):
+        (tmp_path / "LICENSE").write_text("Apache License 2.0\n...")
+        engine = PolicyEngine({"required_license": "MIT"})
+        passed, violations = engine.check(tmp_path, files=[])
+        assert passed is False
+        assert any("MIT" in v for v in violations)
+
+    def test_checks_license_txt_variant(self, tmp_path):
+        (tmp_path / "LICENSE.txt").write_text("MIT License\n...")
+        engine = PolicyEngine({"required_license": "MIT"})
+        passed, _ = engine.check(tmp_path, files=[])
+        assert passed is True
+
+    def test_skipped_when_not_configured(self, tmp_path):
+        engine = PolicyEngine({})
+        passed, _ = engine.check(tmp_path, files=[])
+        assert passed is True
+
+
+class TestRequireTypeHints:
+    def test_passes_with_hints(self, tmp_path):
+        code = "def add(a: int, b: int) -> int:\n    return a + b\n"
+        (tmp_path / "good.py").write_text(code)
+        engine = PolicyEngine({"require_type_hints": True})
+        passed, _ = engine.check(tmp_path, files=[tmp_path / "good.py"])
+        assert passed is True
+
+    def test_fails_without_return_hint(self, tmp_path):
+        code = "def add(a: int, b: int):\n    return a + b\n"
+        (tmp_path / "bad.py").write_text(code)
+        engine = PolicyEngine({"require_type_hints": True})
+        passed, violations = engine.check(tmp_path, files=[tmp_path / "bad.py"])
+        assert passed is False
+        assert any("add" in v for v in violations)
+
+    def test_fails_without_arg_hints(self, tmp_path):
+        code = "def add(a, b) -> int:\n    return a + b\n"
+        (tmp_path / "bad.py").write_text(code)
+        engine = PolicyEngine({"require_type_hints": True})
+        passed, violations = engine.check(tmp_path, files=[tmp_path / "bad.py"])
+        assert passed is False
+
+    def test_skips_private_functions(self, tmp_path):
+        code = "def _helper(x):\n    return x\n"
+        (tmp_path / "priv.py").write_text(code)
+        engine = PolicyEngine({"require_type_hints": True})
+        passed, _ = engine.check(tmp_path, files=[tmp_path / "priv.py"])
+        assert passed is True
+
+    def test_skips_dunder_methods(self, tmp_path):
+        code = "class A:\n    def __init__(self):\n        pass\n"
+        (tmp_path / "cls.py").write_text(code)
+        engine = PolicyEngine({"require_type_hints": True})
+        passed, _ = engine.check(tmp_path, files=[tmp_path / "cls.py"])
+        assert passed is True
+
+    def test_allows_self_without_annotation(self, tmp_path):
+        code = "class A:\n    def method(self, x: int) -> None:\n        pass\n"
+        (tmp_path / "cls.py").write_text(code)
+        engine = PolicyEngine({"require_type_hints": True})
+        passed, _ = engine.check(tmp_path, files=[tmp_path / "cls.py"])
+        assert passed is True
+
+    def test_skipped_when_not_configured(self, tmp_path):
+        code = "def add(a, b):\n    return a + b\n"
+        (tmp_path / "any.py").write_text(code)
+        engine = PolicyEngine({})
+        passed, _ = engine.check(tmp_path, files=[tmp_path / "any.py"])
+        assert passed is True
+
+    def test_handles_syntax_error(self, tmp_path):
+        (tmp_path / "broken.py").write_text("def (\n")
+        engine = PolicyEngine({"require_type_hints": True})
+        passed, _ = engine.check(tmp_path, files=[tmp_path / "broken.py"])
+        assert passed is True
+
+
+class TestChangedFilesScoping:
+    def test_check_uses_changed_files_when_base_sha_provided(self, tmp_path):
+        (tmp_path / "changed.py").write_text("\n".join(f"x{i}=1" for i in range(200)))
+        (tmp_path / "unchanged.py").write_text("\n".join(f"x{i}=1" for i in range(200)))
+        engine = PolicyEngine({"max_file_lines": 100})
+        passed, violations = engine.check(tmp_path, files=[tmp_path / "changed.py"])
+        assert passed is False
+        assert any("changed.py" in v for v in violations)
+        assert not any("unchanged.py" in v for v in violations)
+
+
 class TestChangedFilesDiscovery:
     def test_changed_files_from_git_diff(self, tmp_path):
         from subprocess import CompletedProcess

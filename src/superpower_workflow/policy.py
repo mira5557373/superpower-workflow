@@ -24,6 +24,11 @@ class PolicyEngine:
         banned = self._policies.get("banned_imports")
         if banned is not None:
             violations.extend(self._check_banned_imports(files, banned))
+        license_id = self._policies.get("required_license")
+        if license_id is not None:
+            violations.extend(self._check_required_license(cwd, license_id))
+        if self._policies.get("require_type_hints"):
+            violations.extend(self._check_type_hints(files))
         return len(violations) == 0, violations
 
     def _changed_files(self, cwd: Path, base_sha: str | None) -> list[Path]:
@@ -78,4 +83,43 @@ class PolicyEngine:
                     full = f"{node.value.id}.{node.attr}"
                     if full in banned_set:
                         violations.append(f"banned_imports: {f.name} uses {full}")
+        return violations
+
+    def _check_required_license(self, cwd: Path, spdx_id: str) -> list[str]:
+        for name in ("LICENSE", "LICENSE.txt", "LICENSE.md", "LICENCE"):
+            path = cwd / name
+            if path.exists():
+                content = path.read_text(encoding="utf-8", errors="replace")
+                if spdx_id.upper() in content.upper():
+                    return []
+                return [f"required_license: {name} does not contain '{spdx_id}'"]
+        return [f"required_license: no LICENSE file found (expected {spdx_id})"]
+
+    def _check_type_hints(self, files: list[Path]) -> list[str]:
+        violations: list[str] = []
+        for f in files:
+            if not f.exists() or f.suffix != ".py":
+                continue
+            try:
+                tree = ast.parse(f.read_text(encoding="utf-8"), filename=str(f))
+            except (SyntaxError, OSError):
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if node.name.startswith("_"):
+                    continue
+                if node.returns is None:
+                    violations.append(
+                        f"require_type_hints: {f.name}:{node.name} missing return annotation"
+                    )
+                    continue
+                for arg in node.args.args:
+                    if arg.arg in ("self", "cls"):
+                        continue
+                    if arg.annotation is None:
+                        violations.append(
+                            f"require_type_hints: {f.name}:{node.name} "
+                            f"param '{arg.arg}' missing annotation"
+                        )
         return violations
