@@ -57,6 +57,10 @@ def _cmd_init(project_root: Path) -> None:
         },
         "verify_commands": {"test": "python -m pytest -q", "lint": None, "format": None},
         "git_strategy": "main",
+        "telemetry": {
+            "enabled": True,
+            "path": ".claude/telemetry.jsonl",
+        },
         "notification_webhook": None,
         "milestones": [],
     }
@@ -78,6 +82,7 @@ def _cmd_init(project_root: Path) -> None:
         ".claude/.gap-report.json",
         ".claude/.workflow.lock",
         ".claude/workflow-*.log",
+        ".claude/telemetry.jsonl",
     ]
     existing = gitignore.read_text() if gitignore.exists() else ""
     new_entries = [e for e in entries if e not in existing]

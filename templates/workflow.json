@@ -28,6 +28,10 @@
     "format": "python -m ruff format --check ."
   },
   "git_strategy": "main",
+  "telemetry": {
+    "enabled": true,
+    "path": ".claude/telemetry.jsonl"
+  },
   "notification_webhook": null,
   "milestones": []
 }

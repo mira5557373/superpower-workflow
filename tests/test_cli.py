@@ -188,3 +188,16 @@ def test_metrics_json_output(tmp_path, capsys):
     data = json.loads(captured.out)
     assert "total_cost" in data
     assert "cost_per_task" in data
+
+
+def test_init_adds_telemetry_to_gitignore(tmp_path):
+    _cmd_init(tmp_path)
+    gitignore = (tmp_path / ".gitignore").read_text()
+    assert "telemetry.jsonl" in gitignore
+
+
+def test_init_default_config_has_telemetry(tmp_path):
+    _cmd_init(tmp_path)
+    config = json.loads((tmp_path / ".claude" / "workflow.json").read_text())
+    assert "telemetry" in config
+    assert config["telemetry"]["enabled"] is True
