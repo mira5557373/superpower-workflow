@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "spec": "docs/superpowers/specs/2026-05-24-sp1-quality-gates.md",
+  "model": "opus",
+  "fallback_model": "claude-opus-4-6",
+  "effort": {
+    "plan": "max",
+    "implement": "high",
+    "review": "max",
+    "push": "low"
+  },
+  "budgets": {
+    "plan": 10,
+    "implement": 80,
+    "review": 30,
+    "push": 3
+  },
+  "max_total_budget_usd": 10000,
+  "delay_between_phases_seconds": 10,
+  "convergence": {
+    "max_iterations": 5,
+    "min_gaps_for_substantial": 20,
+    "persistent_gap_downgrade_after": 3
+  },
+  "verify_commands": {
+    "test": ".venv\\Scripts\\pytest -q",
+    "lint": ".venv\\Scripts\\ruff check src/ tests/",
+    "format": ".venv\\Scripts\\ruff format --check src/ tests/"
+  },
+  "git_strategy": "main",
+  "notification_webhook": null,
+  "milestones": [
+    {
+      "name": "sp1-quality-gates",
+      "spec_sections": "2, 3, 4, 5, 6, 7, 8, 9, 10, 11",
+      "description": "Add code-enforced quality gates: self-review pipeline, coverage targets, loop detection, backpressure, git trailers, dep vulnerability scan. Hybrid: skills instruct + orchestrator verifies.",
+      "depends_on": [],
+      "budget_override": null
+    }
+  ]
+}

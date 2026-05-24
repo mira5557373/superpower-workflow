@@ -7,3 +7,10 @@ dist/
 build/
 .pytest_cache/
 .ruff_cache/
+
+# superpower-workflow runtime files
+.claude/workflow-state.json
+.claude/.workflow-phase.json
+.claude/.gap-report.json
+.claude/.workflow.lock
+.claude/workflow-*.log
