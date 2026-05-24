@@ -230,3 +230,33 @@ class TelemetryReader:
     def total_cost(self, run_id: str | None = None) -> float:
         source = self.events_for_run(run_id) if run_id else self.events()
         return sum(e.get("total_cost_usd", 0.0) for e in source if e.get("type") == "run_completed")
+
+    def rework_rate(self, run_id: str | None = None) -> float:
+        source = self.events_for_run(run_id) if run_id else self.events()
+        milestones = [e for e in source if e.get("type") == "milestone_started"]
+        retries = [e for e in source if e.get("type") == "retry_attempt"]
+        if not milestones:
+            return 0.0
+        return len(retries) / len(milestones)
+
+    def defect_density(self, run_id: str | None = None) -> float:
+        source = self.events_for_run(run_id) if run_id else self.events()
+        gate_results = [e for e in source if e.get("type") == "quality_gate_result"]
+        if not gate_results:
+            return 0.0
+        failures = sum(1 for e in gate_results if not e.get("passed", True))
+        return failures / len(gate_results)
+
+    def quality_trend(self, run_id: str | None = None) -> list[dict]:
+        source = self.events_for_run(run_id) if run_id else self.events()
+        return [
+            {
+                "milestone": e.get("milestone", ""),
+                "phase": e.get("phase", ""),
+                "total_gaps_found": e.get("total_gaps_found", 0),
+                "critical_gaps": e.get("critical_gaps", 0),
+                "converged": e.get("converged", False),
+            }
+            for e in source
+            if e.get("type") == "gap_report"
+        ]

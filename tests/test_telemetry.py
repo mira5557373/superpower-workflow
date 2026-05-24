@@ -467,3 +467,84 @@ class TestCostMetrics:
         reader = TelemetryReader(path)
         costs = reader.cost_by_milestone(run_id="r2")
         assert costs == {"m1": 15.0}
+
+
+class TestQualityMetrics:
+    def test_rework_rate(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        _write_events(
+            path,
+            [
+                {"type": "milestone_started", "run_id": "r1", "milestone": "m1"},
+                {"type": "milestone_started", "run_id": "r1", "milestone": "m2"},
+                {"type": "retry_attempt", "run_id": "r1", "milestone": "m1", "attempt": 1},
+                {"type": "retry_attempt", "run_id": "r1", "milestone": "m1", "attempt": 2},
+            ],
+        )
+        reader = TelemetryReader(path)
+        assert reader.rework_rate() == 1.0
+
+    def test_rework_rate_no_milestones(self, tmp_path):
+        path = tmp_path / "nonexistent.jsonl"
+        reader = TelemetryReader(path)
+        assert reader.rework_rate() == 0.0
+
+    def test_defect_density(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        _write_events(
+            path,
+            [
+                {"type": "quality_gate_result", "run_id": "r1", "passed": True},
+                {"type": "quality_gate_result", "run_id": "r1", "passed": False},
+                {"type": "quality_gate_result", "run_id": "r1", "passed": True},
+                {"type": "quality_gate_result", "run_id": "r1", "passed": False},
+            ],
+        )
+        reader = TelemetryReader(path)
+        assert reader.defect_density() == 0.5
+
+    def test_defect_density_no_checks(self, tmp_path):
+        path = tmp_path / "nonexistent.jsonl"
+        reader = TelemetryReader(path)
+        assert reader.defect_density() == 0.0
+
+    def test_quality_trend(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        _write_events(
+            path,
+            [
+                {
+                    "type": "gap_report",
+                    "run_id": "r1",
+                    "milestone": "m1",
+                    "phase": "plan",
+                    "total_gaps_found": 12,
+                    "critical_gaps": 2,
+                    "converged": False,
+                },
+                {
+                    "type": "gap_report",
+                    "run_id": "r1",
+                    "milestone": "m1",
+                    "phase": "review",
+                    "total_gaps_found": 5,
+                    "critical_gaps": 0,
+                    "converged": True,
+                },
+                {
+                    "type": "gap_report",
+                    "run_id": "r1",
+                    "milestone": "m2",
+                    "phase": "plan",
+                    "total_gaps_found": 8,
+                    "critical_gaps": 1,
+                    "converged": False,
+                },
+            ],
+        )
+        reader = TelemetryReader(path)
+        trend = reader.quality_trend()
+        assert len(trend) == 3
+        assert trend[0]["total_gaps_found"] == 12
+        assert trend[1]["total_gaps_found"] == 5
+        assert trend[2]["critical_gaps"] == 1
