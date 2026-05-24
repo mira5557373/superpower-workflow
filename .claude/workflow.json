@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "spec": "docs/superpowers/specs/2026-05-24-sp1-quality-gates.md",
+  "spec": "docs/superpowers/specs/roadmap.md",
   "model": "opus",
   "fallback_model": "claude-opus-4-6",
   "effort": {
@@ -35,6 +35,63 @@
       "spec_sections": "2, 3, 4, 5, 6, 7, 8, 9, 10, 11",
       "description": "Add code-enforced quality gates: self-review pipeline, coverage targets, loop detection, backpressure, git trailers, dep vulnerability scan. Hybrid: skills instruct + orchestrator verifies.",
       "depends_on": [],
+      "budget_override": null
+    },
+    {
+      "name": "sp2-telemetry",
+      "spec_sections": "all",
+      "description": "Structured JSONL telemetry, quality trends, rework rate, cost-per-task, sw analytics command.",
+      "depends_on": [
+        "sp1-quality-gates"
+      ],
+      "budget_override": null
+    },
+    {
+      "name": "sp3-dashboard",
+      "spec_sections": "all",
+      "description": "Web dashboard (localhost:3000, SSE), terminal TUI (sw watch), optional Prometheus metrics.",
+      "depends_on": [
+        "sp2-telemetry"
+      ],
+      "budget_override": null
+    },
+    {
+      "name": "sp4-security",
+      "spec_sections": "all",
+      "description": "HMAC audit trail, CycloneDX SBOM, Ed25519 signing, secrets broker, policy engine.",
+      "depends_on": [
+        "sp1-quality-gates"
+      ],
+      "budget_override": null
+    },
+    {
+      "name": "sp5-integrations",
+      "spec_sections": "all",
+      "description": "GitHub Issues, Linear/Jira, CI self-correction, Slack notifications, PR auto-creation.",
+      "depends_on": [
+        "sp2-telemetry"
+      ],
+      "budget_override": null
+    },
+    {
+      "name": "sp6-parallel",
+      "spec_sections": "all",
+      "description": "Git worktree isolation, multi-model routing, best-of-N, remote SSH execution, Agent Teams.",
+      "depends_on": [
+        "sp1-quality-gates"
+      ],
+      "budget_override": null
+    },
+    {
+      "name": "sp7-docs-dx-plugins",
+      "spec_sections": "all",
+      "description": "Auto README/CHANGELOG/API docs/diagrams, sw bootstrap, sw upgrade, plugin system with entry points.",
+      "depends_on": [
+        "sp2-telemetry",
+        "sp4-security",
+        "sp5-integrations",
+        "sp6-parallel"
+      ],
       "budget_override": null
     }
   ]
