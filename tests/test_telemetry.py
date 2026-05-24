@@ -548,3 +548,66 @@ class TestQualityMetrics:
         assert trend[0]["total_gaps_found"] == 12
         assert trend[1]["total_gaps_found"] == 5
         assert trend[2]["critical_gaps"] == 1
+
+
+class TestDurationMetrics:
+    def test_duration_by_milestone(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        _write_events(
+            path,
+            [
+                {
+                    "type": "milestone_completed",
+                    "run_id": "r1",
+                    "milestone": "m1",
+                    "duration_seconds": 300.0,
+                },
+                {
+                    "type": "milestone_completed",
+                    "run_id": "r1",
+                    "milestone": "m2",
+                    "duration_seconds": 600.0,
+                },
+            ],
+        )
+        reader = TelemetryReader(path)
+        durations = reader.duration_by_milestone()
+        assert durations == {"m1": 300.0, "m2": 600.0}
+
+    def test_duration_by_phase(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        _write_events(
+            path,
+            [
+                {"type": "phase_completed", "run_id": "r1", "phase": "plan", "duration_ms": 60000},
+                {
+                    "type": "phase_completed",
+                    "run_id": "r1",
+                    "phase": "implement",
+                    "duration_ms": 120000,
+                },
+                {"type": "phase_completed", "run_id": "r1", "phase": "plan", "duration_ms": 30000},
+            ],
+        )
+        reader = TelemetryReader(path)
+        durations = reader.duration_by_phase()
+        assert durations == {"plan": 90000, "implement": 120000}
+
+    def test_total_duration(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        _write_events(
+            path,
+            [
+                {"type": "run_completed", "run_id": "r1", "duration_seconds": 1200.0},
+                {"type": "run_completed", "run_id": "r2", "duration_seconds": 800.0},
+            ],
+        )
+        reader = TelemetryReader(path)
+        assert reader.total_duration() == 2000.0
+
+    def test_duration_empty_file(self, tmp_path):
+        path = tmp_path / "nonexistent.jsonl"
+        reader = TelemetryReader(path)
+        assert reader.duration_by_milestone() == {}
+        assert reader.duration_by_phase() == {}
+        assert reader.total_duration() == 0.0

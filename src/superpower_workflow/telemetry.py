@@ -260,3 +260,26 @@ class TelemetryReader:
             for e in source
             if e.get("type") == "gap_report"
         ]
+
+    def duration_by_milestone(self, run_id: str | None = None) -> dict[str, float]:
+        source = self.events_for_run(run_id) if run_id else self.events()
+        durations: dict[str, float] = {}
+        for e in source:
+            if e.get("type") == "milestone_completed":
+                durations[e["milestone"]] = e.get("duration_seconds", 0.0)
+        return durations
+
+    def duration_by_phase(self, run_id: str | None = None) -> dict[str, int]:
+        source = self.events_for_run(run_id) if run_id else self.events()
+        durations: dict[str, int] = {}
+        for e in source:
+            if e.get("type") == "phase_completed":
+                phase = e.get("phase", "unknown")
+                durations[phase] = durations.get(phase, 0) + e.get("duration_ms", 0)
+        return durations
+
+    def total_duration(self, run_id: str | None = None) -> float:
+        source = self.events_for_run(run_id) if run_id else self.events()
+        return sum(
+            e.get("duration_seconds", 0.0) for e in source if e.get("type") == "run_completed"
+        )
