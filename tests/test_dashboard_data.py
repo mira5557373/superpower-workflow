@@ -82,7 +82,10 @@ class TestDashboardSnapshot:
     def test_snapshot_timestamp_auto_set(self):
         snap = DashboardSnapshot()
         assert snap.timestamp != ""
-        assert "T" in snap.timestamp
+        parts = snap.timestamp.split("T")
+        assert len(parts) == 2
+        assert parts[1].endswith("Z")
+        assert len(parts[0].split("-")) == 3
 
     def test_snapshot_explicit_timestamp_preserved(self):
         snap = DashboardSnapshot(timestamp="2026-01-01T00:00:00Z")

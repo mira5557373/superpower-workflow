@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import ClassVar
 
 from superpower_workflow.dashboard.data import DashboardData, DashboardSnapshot
 from superpower_workflow.dashboard.static import DASHBOARD_HTML
@@ -61,10 +62,10 @@ def format_sse_keepalive() -> str:
     return ": keepalive\n\n"
 
 
-def make_handler(data: DashboardData) -> type:
+def make_handler(data: DashboardData) -> type[BaseHTTPRequestHandler]:
     class DashboardHandler(BaseHTTPRequestHandler):
-        _data: DashboardData = data
-        _shutdown_event: threading.Event = threading.Event()
+        _data: ClassVar[DashboardData] = data
+        _shutdown_event: ClassVar[threading.Event] = threading.Event()
 
         def do_GET(self) -> None:
             if self.path == "/":
