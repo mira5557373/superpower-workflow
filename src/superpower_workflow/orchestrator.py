@@ -680,27 +680,29 @@ class Orchestrator:
                 else:
                     detail = ""
                     logger.log("QUALITY_GATE_PASSED", gate=gate_name)
-                self._telemetry.emit(
-                    QualityGateResult(
-                        milestone=milestone,
-                        checkpoint=checkpoint,
-                        gate=gate_name,
-                        passed=result.returncode == 0,
-                        detail=detail if result.returncode != 0 else "",
+                if self._telemetry:
+                    self._telemetry.emit(
+                        QualityGateResult(
+                            milestone=milestone,
+                            checkpoint=checkpoint,
+                            gate=gate_name,
+                            passed=result.returncode == 0,
+                            detail=detail if result.returncode != 0 else "",
+                        )
                     )
-                )
             except (subprocess.TimeoutExpired, FileNotFoundError) as e:
                 failures.append(f"{gate_name}: {e}")
                 logger.log("QUALITY_GATE_ERROR", gate=gate_name, error=str(e))
-                self._telemetry.emit(
-                    QualityGateResult(
-                        milestone=milestone,
-                        checkpoint=checkpoint,
-                        gate=gate_name,
-                        passed=False,
-                        detail=str(e),
+                if self._telemetry:
+                    self._telemetry.emit(
+                        QualityGateResult(
+                            milestone=milestone,
+                            checkpoint=checkpoint,
+                            gate=gate_name,
+                            passed=False,
+                            detail=str(e),
+                        )
                     )
-                )
         return len(failures) == 0, failures
 
     def _check_coverage(self, logger: WorkflowLogger, milestone: str = "") -> tuple[bool, float]:
@@ -736,14 +738,15 @@ class Orchestrator:
             coverage = self._parse_coverage(report_path)
             if coverage >= threshold:
                 logger.log("COVERAGE_PASSED", coverage=coverage, threshold=threshold)
-                self._telemetry.emit(
-                    CoverageResult(
-                        milestone=milestone,
-                        coverage_pct=coverage,
-                        threshold=threshold,
-                        passed=True,
+                if self._telemetry:
+                    self._telemetry.emit(
+                        CoverageResult(
+                            milestone=milestone,
+                            coverage_pct=coverage,
+                            threshold=threshold,
+                            passed=True,
+                        )
                     )
-                )
                 return True, extra_cost
             logger.log(
                 "COVERAGE_BELOW",
@@ -751,14 +754,15 @@ class Orchestrator:
                 threshold=threshold,
                 attempt=attempt + 1,
             )
-            self._telemetry.emit(
-                CoverageResult(
-                    milestone=milestone,
-                    coverage_pct=coverage,
-                    threshold=threshold,
-                    passed=False,
+            if self._telemetry:
+                self._telemetry.emit(
+                    CoverageResult(
+                        milestone=milestone,
+                        coverage_pct=coverage,
+                        threshold=threshold,
+                        passed=False,
+                    )
                 )
-            )
             if attempt < max_attempts - 1:
                 r = run_claude(
                     f"Branch coverage is {coverage}% (threshold: {threshold}%). "
