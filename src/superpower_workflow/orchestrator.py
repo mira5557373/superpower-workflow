@@ -10,6 +10,7 @@ from pathlib import Path
 from superpower_workflow.audit import AuditTrail, derive_key
 from superpower_workflow.context import build_context_summary
 from superpower_workflow.logger import WorkflowLogger
+from superpower_workflow.policy import PolicyEngine
 from superpower_workflow.prompts import (
     phase_a_prompt,
     phase_b_prompt,
@@ -575,6 +576,31 @@ class Orchestrator:
             if not passed:
                 logger.log("QUALITY_GATES_STILL_FAILING", failures=str(failures))
 
+        policy_passed, policy_violations = self._check_policies(
+            logger, milestone=name, checkpoint="quality_check_b"
+        )
+        if not policy_passed:
+            fix_prompt = (
+                f"Policy violations after {name}:\n"
+                + "\n".join(f"- {v}" for v in policy_violations)
+                + "\nFix ALL violations. Commit the fix."
+            )
+            r = run_claude(
+                fix_prompt,
+                model=model,
+                effort="high",
+                budget=10.0,
+                cwd=self.cwd,
+                system_prompt=self.sys_prompt,
+                fallback_model=fallback,
+            )
+            cost += r.cost_usd
+            policy_passed, remaining = self._check_policies(
+                logger, milestone=name, checkpoint="quality_check_b_recheck"
+            )
+            if not policy_passed:
+                logger.log("POLICY_FIX_FAILED", violations=len(remaining))
+
         _, cov_cost = self._check_coverage(logger, milestone=name)
         cost += cov_cost
         plan_sha = self.state.plan_commit_sha or ""
@@ -663,6 +689,31 @@ class Orchestrator:
             )
             if not passed:
                 logger.log("QUALITY_GATES_STILL_FAILING", failures=str(failures))
+
+        policy_passed, policy_violations = self._check_policies(
+            logger, milestone=name, checkpoint="quality_check_c"
+        )
+        if not policy_passed:
+            fix_prompt = (
+                f"Policy violations after {name}:\n"
+                + "\n".join(f"- {v}" for v in policy_violations)
+                + "\nFix ALL violations. Commit the fix."
+            )
+            r = run_claude(
+                fix_prompt,
+                model=model,
+                effort="high",
+                budget=10.0,
+                cwd=self.cwd,
+                system_prompt=self.sys_prompt,
+                fallback_model=fallback,
+            )
+            cost += r.cost_usd
+            policy_passed, remaining = self._check_policies(
+                logger, milestone=name, checkpoint="quality_check_c_recheck"
+            )
+            if not policy_passed:
+                logger.log("POLICY_FIX_FAILED", violations=len(remaining))
 
         _, cov_cost = self._check_coverage(logger, milestone=name)
         cost += cov_cost
@@ -780,6 +831,30 @@ class Orchestrator:
                         )
                     )
         return len(failures) == 0, failures
+
+    def _check_policies(
+        self,
+        logger: WorkflowLogger,
+        milestone: str = "",
+        checkpoint: str = "",
+    ) -> tuple[bool, list[str]]:
+        policies_config = self.config.get("policies", {})
+        if not policies_config:
+            return True, []
+        engine = PolicyEngine(policies_config)
+        base_sha = self.state.plan_commit_sha or ""
+        passed, violations = engine.check(Path(self.cwd), base_sha=base_sha)
+        for v in violations:
+            logger.log("POLICY_VIOLATION", checkpoint=checkpoint, detail=v)
+            self._audit.append(
+                "POLICY_VIOLATION",
+                run_id=self.state.run_id,
+                milestone=milestone,
+                data={"checkpoint": checkpoint, "violation": v},
+            )
+        if passed:
+            logger.log("POLICY_CHECK_PASSED", checkpoint=checkpoint)
+        return passed, violations
 
     def _check_coverage(self, logger: WorkflowLogger, milestone: str = "") -> tuple[bool, float]:
         """Check branch coverage against threshold, iterating with Claude if below.

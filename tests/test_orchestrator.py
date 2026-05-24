@@ -1197,3 +1197,78 @@ class TestSecretsIntegration:
             orch.run()
         captured = capsys.readouterr()
         assert "Warning" in captured.out or "m1" in load_state(tmp_path / ".claude").completed
+
+
+def _config_with_policies(tmp_path, policies=None):
+    config = _config(tmp_path)
+    config["policies"] = policies or {"max_file_lines": 500}
+    (tmp_path / ".claude" / "workflow.json").write_text(json.dumps(config))
+    return config
+
+
+class TestPolicyIntegration:
+    def test_policy_check_runs_at_checkpoints(self, tmp_path):
+        _config_with_policies(tmp_path, policies={"max_file_lines": 500})
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        state = load_state(tmp_path / ".claude")
+        assert "m1" in state.completed
+
+    def test_policy_violation_triggers_fix(self, tmp_path):
+        _config_with_policies(tmp_path, policies={"banned_imports": ["os.system"]})
+        prompts = []
+        call_count = {"n": 0}
+
+        def mock_run_claude(prompt, **kwargs):
+            call_count["n"] += 1
+            prompts.append(prompt)
+            if call_count["n"] == 3:
+                bad_file = tmp_path / "src" / "bad.py"
+                bad_file.parent.mkdir(parents=True, exist_ok=True)
+                bad_file.write_text("import json\n")
+            return _ok_result()
+
+        bad_file = tmp_path / "src" / "bad.py"
+        bad_file.parent.mkdir(parents=True, exist_ok=True)
+        bad_file.write_text("import os\nos.system('ls')\n")
+
+        def mock_subprocess(cmd, **kwargs):
+            if isinstance(cmd, list) and "diff" in cmd and "--name-only" in cmd:
+                return CompletedProcess(args=cmd, returncode=0, stdout="src/bad.py\n", stderr="")
+            return _smart_subprocess(cmd, **kwargs)
+
+        with (
+            patch(
+                "superpower_workflow.orchestrator.run_claude",
+                side_effect=mock_run_claude,
+            ),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=mock_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        fix_prompts = [p for p in prompts if "Policy" in p or "policy" in p]
+        assert len(fix_prompts) >= 1
+
+    def test_no_policies_section_works(self, tmp_path):
+        _config(tmp_path)
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        state = load_state(tmp_path / ".claude")
+        assert "m1" in state.completed
