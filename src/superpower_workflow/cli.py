@@ -77,6 +77,11 @@ def _cmd_init(project_root: Path) -> None:
             "enabled": True,
             "path": ".claude/telemetry.jsonl",
         },
+        "dashboard": {
+            "host": "localhost",
+            "port": 3000,
+            "watch_interval": 2,
+        },
         "notification_webhook": None,
         "milestones": [],
     }

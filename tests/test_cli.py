@@ -243,3 +243,25 @@ def test_parser_watch_interval_flag():
 def test_parser_watch_default_interval():
     args = build_parser().parse_args(["watch"])
     assert args.interval is None
+
+
+def test_init_config_has_dashboard_section(tmp_path: Path):
+    _cmd_init(tmp_path)
+    config = json.loads((tmp_path / ".claude" / "workflow.json").read_text())
+    assert "dashboard" in config
+    assert config["dashboard"]["port"] == 3000
+    assert config["dashboard"]["host"] == "localhost"
+    assert config["dashboard"]["watch_interval"] == 2
+
+
+def test_dashboard_reads_port_from_config(tmp_path: Path):
+    """sw dashboard uses port from workflow.json if not overridden."""
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    config = {
+        "schema_version": 1,
+        "milestones": [],
+        "dashboard": {"port": 8888, "host": "localhost", "watch_interval": 2},
+    }
+    (claude_dir / "workflow.json").write_text(json.dumps(config))
+    assert config["dashboard"]["port"] == 8888
