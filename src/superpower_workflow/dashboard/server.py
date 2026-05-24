@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import threading
+from http.server import BaseHTTPRequestHandler
 
-from superpower_workflow.dashboard.data import DashboardSnapshot
+from superpower_workflow.dashboard.data import DashboardData, DashboardSnapshot
+from superpower_workflow.dashboard.static import DASHBOARD_HTML
 
 _GAUGE_METRICS = [
     ("sw_milestones_total", "Total milestones in workflow", "milestones_total"),
@@ -56,3 +59,78 @@ def format_sse_event(snapshot: DashboardSnapshot) -> str:
 
 def format_sse_keepalive() -> str:
     return ": keepalive\n\n"
+
+
+def make_handler(data: DashboardData) -> type:
+    class DashboardHandler(BaseHTTPRequestHandler):
+        _data: DashboardData = data
+        _shutdown_event: threading.Event = threading.Event()
+
+        def do_GET(self) -> None:
+            if self.path == "/":
+                self._serve_html()
+            elif self.path == "/api/snapshot":
+                self._serve_snapshot()
+            elif self.path == "/api/events":
+                self._serve_sse()
+            elif self.path == "/metrics":
+                self._serve_metrics()
+            else:
+                self.send_error(404)
+
+        def _serve_html(self) -> None:
+            body = DASHBOARD_HTML.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _serve_snapshot(self) -> None:
+            snap = self._data.load_snapshot()
+            body = json.dumps(snap.to_dict()).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _serve_sse(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            try:
+                snap = self._data.load_snapshot()
+                self.wfile.write(format_sse_event(snap).encode())
+                self.wfile.flush()
+                last_mtimes = self._data._snapshot_mtimes()
+                while not self._shutdown_event.is_set():
+                    self._shutdown_event.wait(timeout=2)
+                    if self._shutdown_event.is_set():
+                        break
+                    current_mtimes = self._data._snapshot_mtimes()
+                    if current_mtimes != last_mtimes:
+                        snap = self._data.load_snapshot()
+                        self.wfile.write(format_sse_event(snap).encode())
+                        last_mtimes = current_mtimes
+                    else:
+                        self.wfile.write(format_sse_keepalive().encode())
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+
+        def _serve_metrics(self) -> None:
+            snap = self._data.load_snapshot()
+            body = render_prometheus(snap).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    return DashboardHandler

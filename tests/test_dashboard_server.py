@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import http.client
 import json
+import threading
+from http.server import ThreadingHTTPServer
 
-from superpower_workflow.dashboard.data import DashboardSnapshot
+from superpower_workflow.dashboard.data import DashboardData, DashboardSnapshot
 from superpower_workflow.dashboard.server import (
     format_sse_event,
     format_sse_keepalive,
+    make_handler,
     render_prometheus,
 )
 
@@ -94,3 +98,91 @@ class TestFormatSSE:
         lines = raw.strip().split("\n")
         assert len(lines) == 1
         assert lines[0].startswith("data: ")
+
+
+def _make_test_server(tmp_path):
+    """Create a test server on a random port."""
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    (claude_dir / "workflow.json").write_text(
+        json.dumps({"schema_version": 1, "model": "opus", "milestones": []})
+    )
+    data = DashboardData(tmp_path)
+    handler_cls = make_handler(data)
+    server = ThreadingHTTPServer(("localhost", 0), handler_cls)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, port
+
+
+class TestDashboardHandler:
+    def test_root_returns_html(self, tmp_path):
+        server, port = _make_test_server(tmp_path)
+        try:
+            conn = http.client.HTTPConnection("localhost", port, timeout=5)
+            conn.request("GET", "/")
+            resp = conn.getresponse()
+            body = resp.read().decode()
+            assert resp.status == 200
+            assert "text/html" in resp.getheader("Content-Type", "")
+            assert "<!DOCTYPE html>" in body
+            conn.close()
+        finally:
+            server.shutdown()
+
+    def test_api_snapshot_returns_json(self, tmp_path):
+        server, port = _make_test_server(tmp_path)
+        try:
+            conn = http.client.HTTPConnection("localhost", port, timeout=5)
+            conn.request("GET", "/api/snapshot")
+            resp = conn.getresponse()
+            body = resp.read().decode()
+            assert resp.status == 200
+            assert "application/json" in resp.getheader("Content-Type", "")
+            parsed = json.loads(body)
+            assert "status" in parsed
+            assert "milestones_total" in parsed
+            conn.close()
+        finally:
+            server.shutdown()
+
+    def test_metrics_returns_prometheus_text(self, tmp_path):
+        server, port = _make_test_server(tmp_path)
+        try:
+            conn = http.client.HTTPConnection("localhost", port, timeout=5)
+            conn.request("GET", "/metrics")
+            resp = conn.getresponse()
+            body = resp.read().decode()
+            assert resp.status == 200
+            content_type = resp.getheader("Content-Type", "")
+            assert "text/plain" in content_type
+            assert "sw_milestones_total" in body
+            conn.close()
+        finally:
+            server.shutdown()
+
+    def test_api_events_returns_event_stream(self, tmp_path):
+        server, port = _make_test_server(tmp_path)
+        try:
+            conn = http.client.HTTPConnection("localhost", port, timeout=5)
+            conn.request("GET", "/api/events")
+            resp = conn.getresponse()
+            assert resp.status == 200
+            assert "text/event-stream" in resp.getheader("Content-Type", "")
+            line = resp.readline()
+            assert b"data: " in line
+            conn.close()
+        finally:
+            server.shutdown()
+
+    def test_unknown_path_returns_404(self, tmp_path):
+        server, port = _make_test_server(tmp_path)
+        try:
+            conn = http.client.HTTPConnection("localhost", port, timeout=5)
+            conn.request("GET", "/nonexistent")
+            resp = conn.getresponse()
+            assert resp.status == 404
+            conn.close()
+        finally:
+            server.shutdown()
