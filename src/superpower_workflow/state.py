@@ -34,6 +34,7 @@ class PhaseState:
     iteration: int = 0
     max_iterations: int = 5
     previous_important_gaps: int | None = None
+    previous_gap_summaries: list[str] = field(default_factory=list)
 
 
 def _atomic_write(path: Path, data: dict) -> None:

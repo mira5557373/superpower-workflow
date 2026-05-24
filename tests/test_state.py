@@ -147,6 +147,34 @@ class TestPhaseState:
         assert loaded is not None
         assert loaded.previous_important_gaps == 15
 
+    def test_phase_state_gap_summaries_roundtrip(self, tmp_claude_dir):
+        """PhaseState saves and loads previous_gap_summaries correctly."""
+        phase = PhaseState(
+            phase="ultrathink",
+            iteration=2,
+            max_iterations=5,
+            previous_important_gaps=4,
+            previous_gap_summaries=[
+                "[ultrathink] Store.put missing error",
+                "[ultrathink] No tests for edge case",
+            ],
+        )
+        save_phase_state(tmp_claude_dir, phase)
+        loaded = load_phase_state(tmp_claude_dir)
+        assert loaded is not None
+        assert loaded.previous_gap_summaries == [
+            "[ultrathink] Store.put missing error",
+            "[ultrathink] No tests for edge case",
+        ]
+
+    def test_phase_state_gap_summaries_default_empty(self, tmp_claude_dir):
+        """PhaseState defaults previous_gap_summaries to empty list."""
+        phase = PhaseState(phase="review", iteration=0)
+        save_phase_state(tmp_claude_dir, phase)
+        loaded = load_phase_state(tmp_claude_dir)
+        assert loaded is not None
+        assert loaded.previous_gap_summaries == []
+
     def test_load_phase_state_returns_none_when_missing(self, tmp_claude_dir):
         """load_phase_state returns None when phase file is missing."""
         loaded = load_phase_state(tmp_claude_dir)
