@@ -29,6 +29,11 @@ from superpower_workflow.state import (
     save_phase_state,
     save_state,
 )
+from superpower_workflow.telemetry import (
+    RunCompleted,
+    RunStarted,
+    TelemetryEmitter,
+)
 
 REQUIRED_CONFIG_KEYS = ("spec", "model", "budgets", "milestones")
 
@@ -58,6 +63,8 @@ class Orchestrator:
         self.state = load_state(self.claude_dir)
         self.sys_prompt = system_prompt()
         self.cwd = str(project_root)
+        self._telemetry: TelemetryEmitter | None = None
+        self._run_start: float = 0.0
 
     def run(
         self,
@@ -82,6 +89,23 @@ class Orchestrator:
         self.state.started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ")
         self.state.spec_sha = self._capture_spec_sha()
         logger = WorkflowLogger(self.claude_dir, run_id)
+
+        telemetry_config = self.config.get("telemetry", {})
+        telemetry_path = Path(self.cwd) / telemetry_config.get("path", ".claude/telemetry.jsonl")
+        if telemetry_config.get("enabled", True):
+            self._telemetry = TelemetryEmitter(telemetry_path, run_id)
+        else:
+            self._telemetry = TelemetryEmitter.disabled()
+
+        self._telemetry.emit(
+            RunStarted(
+                spec_sha=self.state.spec_sha,
+                model=self.config["model"],
+                milestone_count=len(milestones),
+                max_budget_usd=self.config.get("max_total_budget_usd", 0),
+            )
+        )
+        self._run_start = time.monotonic()
 
         milestone_retry_delays = [120, 300, 600]
         max_retries = len(milestone_retry_delays)
@@ -188,6 +212,8 @@ class Orchestrator:
         finally:
             release_lock(self.claude_dir)
             logger.close()
+            if self._telemetry:
+                self._telemetry.close()
 
     def _preflight_checks(self) -> bool:
         if not acquire_lock(self.claude_dir):
@@ -269,6 +295,22 @@ class Orchestrator:
             "total_cost_usd": round(self.state.total_cost_usd, 2),
             "run_id": self.state.run_id,
         }
+        if self._telemetry:
+            from superpower_workflow.context import _count_test_files
+
+            self._telemetry.emit(
+                RunCompleted(
+                    status=status,
+                    completed_count=len(self.state.completed),
+                    failed_count=len(self.state.failed),
+                    skipped_count=len(self.state.skipped),
+                    total_cost_usd=round(self.state.total_cost_usd, 2),
+                    duration_seconds=round(time.monotonic() - self._run_start, 1),
+                    test_file_count=_count_test_files(self.root),
+                )
+            )
+            self._telemetry.close()
+
         summary_path = self.claude_dir / "workflow-complete.json"
         summary_path.write_text(json.dumps(summary, indent=2))
         logger.log(

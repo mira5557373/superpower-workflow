@@ -1,4 +1,5 @@
 import json
+import json as json_mod
 import subprocess as subprocess_mod
 from subprocess import CompletedProcess
 from unittest.mock import patch
@@ -7,6 +8,13 @@ from superpower_workflow.logger import WorkflowLogger
 from superpower_workflow.orchestrator import Orchestrator
 from superpower_workflow.runner import ClaudeResult
 from superpower_workflow.state import WorkflowState, load_state, save_state
+
+
+def _read_telemetry(tmp_path):
+    path = tmp_path / ".claude" / "telemetry.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().strip().split("\n") if line.strip()]
 
 
 def _config(tmp_path, milestones=None):
@@ -655,3 +663,68 @@ class TestQualityGateCheckpointC:
             orch.run()
         state = load_state(tmp_path / ".claude")
         assert "m1" in state.completed
+
+
+class TestTelemetryRunEvents:
+    def test_telemetry_file_created(self, tmp_path):
+        _config(tmp_path)
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        telemetry_path = tmp_path / ".claude" / "telemetry.jsonl"
+        assert telemetry_path.exists()
+
+    def test_run_started_event_emitted(self, tmp_path):
+        _config(tmp_path)
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        events = _read_telemetry(tmp_path)
+        started = [e for e in events if e["type"] == "run_started"]
+        assert len(started) == 1
+        assert started[0]["model"] == "opus"
+        assert started[0]["milestone_count"] == 1
+
+    def test_run_completed_event_emitted(self, tmp_path):
+        _config(tmp_path)
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        events = _read_telemetry(tmp_path)
+        completed = [e for e in events if e["type"] == "run_completed"]
+        assert len(completed) == 1
+        assert completed[0]["status"] == "complete"
+        assert completed[0]["completed_count"] == 1
+
+    def test_telemetry_disabled_by_config(self, tmp_path):
+        config = _config(tmp_path)
+        config["telemetry"] = {"enabled": False}
+        (tmp_path / ".claude" / "workflow.json").write_text(json_mod.dumps(config))
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        assert not (tmp_path / ".claude" / "telemetry.jsonl").exists()
