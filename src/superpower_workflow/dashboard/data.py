@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import calendar
+import json
 import time
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
+
+from superpower_workflow.state import load_state
+from superpower_workflow.telemetry import TelemetryReader
 
 
 @dataclass
@@ -44,3 +50,93 @@ class DashboardSnapshot:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def _parse_utc_timestamp(ts: str) -> float:
+    try:
+        return calendar.timegm(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ"))
+    except (ValueError, OverflowError):
+        return 0.0
+
+
+class DashboardData:
+    def __init__(self, project_root: Path) -> None:
+        self._root = project_root
+        self._claude_dir = project_root / ".claude"
+
+    def _load_config(self) -> dict:
+        path = self._claude_dir / "workflow.json"
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _telemetry_path(self, config: dict) -> Path:
+        rel = config.get("telemetry", {}).get("path", ".claude/telemetry.jsonl")
+        return self._root / rel
+
+    def load_snapshot(self) -> DashboardSnapshot:
+        config = self._load_config()
+        milestones = config.get("milestones", [])
+        model = config.get("model", "")
+
+        state = load_state(self._claude_dir)
+        reader = TelemetryReader(self._telemetry_path(config))
+        run_id = state.run_id or reader.latest_run_id() or ""
+
+        completed = list(state.completed)
+        failed = list(state.failed)
+        skipped = list(state.skipped)
+
+        if not state.started_at and not completed and not failed:
+            status = "idle"
+        elif state.current_step:
+            status = "running"
+        elif failed:
+            status = "failed"
+        else:
+            status = "completed"
+
+        current_milestone = ""
+        current_phase = state.current_step or ""
+        idx = state.current_milestone_index
+        if status == "running" and idx < len(milestones):
+            current_milestone = milestones[idx].get("name", "")
+
+        elapsed = 0.0
+        if state.started_at:
+            start_epoch = _parse_utc_timestamp(state.started_at)
+            if start_epoch > 0:
+                elapsed = time.time() - start_epoch
+
+        milestone_names = [m.get("name", "") for m in milestones]
+
+        return DashboardSnapshot(
+            run_id=run_id,
+            status=status,
+            model=model,
+            milestones_total=len(milestones),
+            milestones_completed=len(completed),
+            milestones_failed=len(failed),
+            milestones_skipped=len(skipped),
+            current_milestone=current_milestone,
+            current_phase=current_phase,
+            completed=completed,
+            failed=failed,
+            skipped=skipped,
+            total_cost_usd=state.total_cost_usd,
+            cost_by_milestone=reader.cost_by_milestone(run_id=run_id) if run_id else {},
+            cost_by_phase=reader.cost_by_phase(run_id=run_id) if run_id else {},
+            cost_per_task=reader.cost_per_successful_task(run_id=run_id) if run_id else 0.0,
+            elapsed_seconds=elapsed,
+            total_duration_seconds=reader.total_duration(run_id=run_id) if run_id else 0.0,
+            duration_by_milestone=reader.duration_by_milestone(run_id=run_id) if run_id else {},
+            duration_by_phase=reader.duration_by_phase(run_id=run_id) if run_id else {},
+            rework_rate=reader.rework_rate(run_id=run_id) if run_id else 0.0,
+            defect_density=reader.defect_density(run_id=run_id) if run_id else 0.0,
+            quality_trend=reader.quality_trend(run_id=run_id) if run_id else [],
+            milestone_names=milestone_names,
+            started_at=state.started_at,
+        )
