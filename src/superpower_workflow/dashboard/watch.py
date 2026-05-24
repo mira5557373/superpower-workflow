@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from superpower_workflow.dashboard.data import DashboardSnapshot
+import sys
+import threading
+from typing import IO
+
+from superpower_workflow.dashboard.data import DashboardData, DashboardSnapshot
 
 _BOLD = "\033[1m"
 _GREEN = "\033[32m"
@@ -70,3 +74,33 @@ def render_frame(snapshot: DashboardSnapshot) -> str:
     lines.append("")
 
     return "\n".join(lines)
+
+
+_CLEAR_SCREEN = "\033[2J\033[H"
+
+
+class TerminalWatch:
+    def __init__(
+        self,
+        data: DashboardData,
+        interval: float = 2.0,
+        output: IO[str] | None = None,
+    ) -> None:
+        self._data = data
+        self._interval = interval
+        self._output = output or sys.stdout
+        self._stop_event = threading.Event()
+
+    def start(self) -> None:
+        try:
+            while not self._stop_event.is_set():
+                snapshot = self._data.load_snapshot()
+                frame = render_frame(snapshot)
+                self._output.write(_CLEAR_SCREEN + frame)
+                self._output.flush()
+                self._stop_event.wait(timeout=self._interval)
+        except KeyboardInterrupt:
+            pass
+
+    def stop(self) -> None:
+        self._stop_event.set()

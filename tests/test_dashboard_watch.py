@@ -1,7 +1,21 @@
 from __future__ import annotations
 
-from superpower_workflow.dashboard.data import DashboardSnapshot
-from superpower_workflow.dashboard.watch import render_frame
+import json
+import threading
+import time
+from io import StringIO
+
+from superpower_workflow.dashboard.data import DashboardData, DashboardSnapshot
+from superpower_workflow.dashboard.watch import TerminalWatch, render_frame
+
+
+def _setup_watch_project(tmp_path):
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    (claude_dir / "workflow.json").write_text(
+        json.dumps({"schema_version": 1, "model": "opus", "milestones": [{"name": "m1"}]})
+    )
+    return DashboardData(tmp_path)
 
 
 class TestRenderFrame:
@@ -83,3 +97,66 @@ class TestRenderFrame:
         frame = render_frame(snap)
         assert "m3" in frame
         assert "m4" in frame
+
+
+class TestTerminalWatch:
+    def test_renders_initial_frame(self, tmp_path):
+        data = _setup_watch_project(tmp_path)
+        output = StringIO()
+        watch = TerminalWatch(data, interval=0.1, output=output)
+
+        def stop_soon():
+            time.sleep(0.5)
+            watch.stop()
+
+        t = threading.Thread(target=stop_soon, daemon=True)
+        t.start()
+        watch.start()
+        t.join(timeout=3)
+        assert "sw watch" in output.getvalue()
+
+    def test_stop_event_exits_loop(self, tmp_path):
+        data = _setup_watch_project(tmp_path)
+        output = StringIO()
+        watch = TerminalWatch(data, interval=0.1, output=output)
+        watch.stop()
+        watch.start()  # Should exit immediately since stop is already set
+
+    def test_detects_changes_and_rerenders(self, tmp_path):
+        data = _setup_watch_project(tmp_path)
+        output = StringIO()
+        watch = TerminalWatch(data, interval=0.1, output=output)
+
+        def update_and_stop():
+            time.sleep(0.4)
+            state_path = tmp_path / ".claude" / "workflow-state.json"
+            state_path.write_text(
+                json.dumps(
+                    {"current_step": "implement", "completed": [], "failed": [], "skipped": []}
+                )
+            )
+            time.sleep(0.5)
+            watch.stop()
+
+        t = threading.Thread(target=update_and_stop, daemon=True)
+        t.start()
+        watch.start()
+        t.join(timeout=5)
+        content = output.getvalue()
+        assert content.count("sw watch") >= 2
+
+    def test_custom_interval(self, tmp_path):
+        data = _setup_watch_project(tmp_path)
+        output = StringIO()
+        watch = TerminalWatch(data, interval=0.1, output=output)
+
+        def stop_soon():
+            time.sleep(0.6)
+            watch.stop()
+
+        t = threading.Thread(target=stop_soon, daemon=True)
+        t.start()
+        watch.start()
+        t.join(timeout=3)
+        frames = output.getvalue().count("sw watch")
+        assert frames >= 3
