@@ -169,6 +169,7 @@ def test_phase_error_stops_milestone(tmp_path):
     with (
         patch("superpower_workflow.orchestrator.run_claude", return_value=error_result),
         patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
+        patch("superpower_workflow.orchestrator.time.sleep"),
     ):
         orch = Orchestrator(tmp_path)
         orch.run()
