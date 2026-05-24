@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
-from http.server import BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from superpower_workflow.dashboard.data import DashboardData, DashboardSnapshot
 from superpower_workflow.dashboard.static import DASHBOARD_HTML
@@ -134,3 +134,41 @@ def make_handler(data: DashboardData) -> type:
             pass
 
     return DashboardHandler
+
+
+class DashboardServer:
+    def __init__(
+        self,
+        data: DashboardData,
+        host: str = "localhost",
+        port: int = 3000,
+    ) -> None:
+        self._data = data
+        self._host = host
+        self._port = port
+        self._server: ThreadingHTTPServer | None = None
+        self._thread: threading.Thread | None = None
+        self._handler_cls: type | None = None
+
+    @property
+    def port(self) -> int:
+        if self._server is not None:
+            return self._server.server_address[1]
+        return self._port
+
+    def start(self) -> None:
+        self._handler_cls = make_handler(self._data)
+        self._handler_cls._shutdown_event.clear()
+        self._server = ThreadingHTTPServer((self._host, self._port), self._handler_cls)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        if self._handler_cls is not None:
+            self._handler_cls._shutdown_event.set()
+        if self._server is not None:
+            self._server.shutdown()
+            self._server = None
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+            self._thread = None

@@ -7,6 +7,7 @@ from http.server import ThreadingHTTPServer
 
 from superpower_workflow.dashboard.data import DashboardData, DashboardSnapshot
 from superpower_workflow.dashboard.server import (
+    DashboardServer,
     format_sse_event,
     format_sse_keepalive,
     make_handler,
@@ -186,3 +187,48 @@ class TestDashboardHandler:
             conn.close()
         finally:
             server.shutdown()
+
+
+def _make_data(tmp_path):
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    (claude_dir / "workflow.json").write_text(json.dumps({"milestones": []}))
+    return DashboardData(tmp_path)
+
+
+class TestDashboardServer:
+    def test_start_and_stop(self, tmp_path):
+        data = _make_data(tmp_path)
+        server = DashboardServer(data, host="localhost", port=0)
+        server.start()
+        assert server.port > 0
+
+        conn = http.client.HTTPConnection("localhost", server.port, timeout=5)
+        conn.request("GET", "/api/snapshot")
+        resp = conn.getresponse()
+        assert resp.status == 200
+        conn.close()
+
+        server.stop()
+
+    def test_port_property_before_start(self, tmp_path):
+        data = _make_data(tmp_path)
+        server = DashboardServer(data, port=9876)
+        assert server.port == 9876
+
+    def test_stop_is_idempotent(self, tmp_path):
+        data = _make_data(tmp_path)
+        server = DashboardServer(data, host="localhost", port=0)
+        server.start()
+        server.stop()
+        server.stop()
+
+    def test_random_port_allocation(self, tmp_path):
+        data = _make_data(tmp_path)
+        server = DashboardServer(data, host="localhost", port=0)
+        server.start()
+        try:
+            assert server.port != 0
+            assert 1024 <= server.port <= 65535
+        finally:
+            server.stop()
