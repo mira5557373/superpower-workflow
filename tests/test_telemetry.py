@@ -5,6 +5,8 @@ from superpower_workflow.telemetry import (
     MilestoneFailed,
     MilestoneSkipped,
     MilestoneStarted,
+    PhaseCompleted,
+    PhaseStarted,
     RunCompleted,
     RunStarted,
     TelemetryEvent,
@@ -115,3 +117,37 @@ class TestMilestoneEvents:
         d = e.to_dict()
         assert d["type"] == "milestone_skipped"
         assert "m1" in d["reason"]
+
+
+class TestPhaseEvents:
+    def test_phase_started(self):
+        e = PhaseStarted(run_id="r1", milestone="m1", phase="plan")
+        d = e.to_dict()
+        assert d["type"] == "phase_started"
+        assert d["milestone"] == "m1"
+        assert d["phase"] == "plan"
+
+    def test_phase_completed(self):
+        e = PhaseCompleted(
+            run_id="r1",
+            milestone="m1",
+            phase="implement",
+            cost_usd=25.0,
+            duration_ms=60000,
+            session_id="s1",
+            input_tokens=5000,
+            output_tokens=3000,
+        )
+        d = e.to_dict()
+        assert d["type"] == "phase_completed"
+        assert d["cost_usd"] == 25.0
+        assert d["duration_ms"] == 60000
+        assert d["session_id"] == "s1"
+        assert d["input_tokens"] == 5000
+        assert d["output_tokens"] == 3000
+
+    def test_phase_completed_defaults_tokens_to_zero(self):
+        e = PhaseCompleted(run_id="r1", milestone="m1", phase="plan")
+        d = e.to_dict()
+        assert d["input_tokens"] == 0
+        assert d["output_tokens"] == 0

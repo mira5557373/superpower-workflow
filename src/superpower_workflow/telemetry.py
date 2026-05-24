@@ -75,3 +75,22 @@ class MilestoneSkipped(TelemetryEvent):
     EVENT_TYPE: ClassVar[str] = "milestone_skipped"
     milestone: str = ""
     reason: str = ""
+
+
+@dataclass
+class PhaseStarted(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "phase_started"
+    milestone: str = ""
+    phase: str = ""
+
+
+@dataclass
+class PhaseCompleted(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "phase_completed"
+    milestone: str = ""
+    phase: str = ""
+    cost_usd: float = 0.0
+    duration_ms: int = 0
+    session_id: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
