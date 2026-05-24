@@ -7,15 +7,18 @@
 
 Each SP gets its own spec → plan → `sw run` cycle. Order matters — later SPs depend on earlier ones.
 
-### SP1: Quality Gates (→ v0.2.0) — NOT STARTED
-**Scope:** Self-review pipeline (lint + SAST + secret scan before commit), coverage-target test generation, loop detection, backpressure gates, git trailers for AI attribution, dependency vulnerability scanning.
-**Depends on:** Nothing (enhances existing Phase B/C)
+### SP1: Quality Gates (→ v0.2.0) — SPEC COMPLETE
+**Scope:** Self-review pipeline, coverage-target test generation, loop detection, backpressure gates, git trailers, dependency vulnerability scanning.
+**Depends on:** Nothing
 **Key interfaces:**
-- Quality gate results feed into gap report (gap_summaries)
-- Git trailers added to every commit by subagents
-- Dep scan results integrated into production-readiness skill
-**Spec:** (not yet written)
-**Status:** Not started
+- Quality gate checkpoints after Phase B AND Phase C
+- `quality_gates` config section in workflow.json (optional, backward compatible)
+- New state values: quality_check_b, quality_check_c
+- Loop detection via previous_gap_summaries in phase state
+- Git trailers: Generated-By: {model} on every commit
+**Spec:** `docs/superpowers/specs/2026-05-24-sp1-quality-gates.md`
+**Validation:** 45 gaps across 2 ultrathink passes
+**Status:** Spec complete, ready for plan + implementation
 
 ### SP2: Telemetry & Analytics (→ v0.3.0) — NOT STARTED
 **Scope:** Structured telemetry (JSONL), quality trend tracking, rework rate, defect density, cost-per-successful-task metrics.
