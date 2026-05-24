@@ -1,6 +1,14 @@
 import json
 
-from superpower_workflow.telemetry import RunCompleted, RunStarted, TelemetryEvent
+from superpower_workflow.telemetry import (
+    MilestoneCompleted,
+    MilestoneFailed,
+    MilestoneSkipped,
+    MilestoneStarted,
+    RunCompleted,
+    RunStarted,
+    TelemetryEvent,
+)
 
 
 class TestTelemetryEventBase:
@@ -76,3 +84,34 @@ class TestRunEvents:
             parsed = json.loads(event.to_json_line())
             assert "type" in parsed
             assert "run_id" in parsed
+
+
+class TestMilestoneEvents:
+    def test_milestone_started(self):
+        e = MilestoneStarted(run_id="r1", milestone="m1", index=0)
+        d = e.to_dict()
+        assert d["type"] == "milestone_started"
+        assert d["milestone"] == "m1"
+        assert d["index"] == 0
+
+    def test_milestone_completed(self):
+        e = MilestoneCompleted(run_id="r1", milestone="m1", cost_usd=15.0, duration_seconds=300.0)
+        d = e.to_dict()
+        assert d["type"] == "milestone_completed"
+        assert d["cost_usd"] == 15.0
+        assert d["duration_seconds"] == 300.0
+
+    def test_milestone_failed(self):
+        e = MilestoneFailed(
+            run_id="r1", milestone="m1", phase="Phase B", reason="timeout", attempts=3
+        )
+        d = e.to_dict()
+        assert d["type"] == "milestone_failed"
+        assert d["phase"] == "Phase B"
+        assert d["attempts"] == 3
+
+    def test_milestone_skipped(self):
+        e = MilestoneSkipped(run_id="r1", milestone="m2", reason="depends on failed: ['m1']")
+        d = e.to_dict()
+        assert d["type"] == "milestone_skipped"
+        assert "m1" in d["reason"]

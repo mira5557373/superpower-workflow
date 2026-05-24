@@ -44,3 +44,34 @@ class RunCompleted(TelemetryEvent):
     total_cost_usd: float = 0.0
     duration_seconds: float = 0.0
     test_file_count: int = 0
+
+
+@dataclass
+class MilestoneStarted(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "milestone_started"
+    milestone: str = ""
+    index: int = 0
+
+
+@dataclass
+class MilestoneCompleted(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "milestone_completed"
+    milestone: str = ""
+    cost_usd: float = 0.0
+    duration_seconds: float = 0.0
+
+
+@dataclass
+class MilestoneFailed(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "milestone_failed"
+    milestone: str = ""
+    phase: str = ""
+    reason: str = ""
+    attempts: int = 0
+
+
+@dataclass
+class MilestoneSkipped(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "milestone_skipped"
+    milestone: str = ""
+    reason: str = ""
