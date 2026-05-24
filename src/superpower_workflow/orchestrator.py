@@ -351,7 +351,6 @@ class Orchestrator:
                     test_file_count=_count_test_files(self.root),
                 )
             )
-            self._telemetry.close()
 
         summary_path = self.claude_dir / "workflow-complete.json"
         summary_path.write_text(json.dumps(summary, indent=2))

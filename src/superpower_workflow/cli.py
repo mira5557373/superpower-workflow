@@ -100,7 +100,15 @@ def _cmd_init(project_root: Path) -> None:
 def _cmd_metrics(project_root: Path, json_output: bool = False) -> None:
     from superpower_workflow.telemetry import TelemetryReader
 
-    path = project_root / ".claude" / "telemetry.jsonl"
+    telemetry_rel = ".claude/telemetry.jsonl"
+    config_path = project_root / ".claude" / "workflow.json"
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text())
+            telemetry_rel = config.get("telemetry", {}).get("path", telemetry_rel)
+        except (json.JSONDecodeError, OSError):
+            pass
+    path = project_root / telemetry_rel
     reader = TelemetryReader(path)
     events = reader.events()
 
@@ -115,6 +123,7 @@ def _cmd_metrics(project_root: Path, json_output: bool = False) -> None:
             "cost_by_milestone": reader.cost_by_milestone(),
             "cost_by_phase": reader.cost_by_phase(),
             "duration_by_milestone": reader.duration_by_milestone(),
+            "duration_by_phase": reader.duration_by_phase(),
             "rework_rate": reader.rework_rate(),
             "defect_density": reader.defect_density(),
             "quality_trend": reader.quality_trend(),

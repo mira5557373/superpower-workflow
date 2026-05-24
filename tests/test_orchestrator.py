@@ -1,5 +1,4 @@
 import json
-import json as json_mod
 import subprocess as subprocess_mod
 from subprocess import CompletedProcess
 from unittest.mock import patch
@@ -717,7 +716,7 @@ class TestTelemetryRunEvents:
     def test_telemetry_disabled_by_config(self, tmp_path):
         config = _config(tmp_path)
         config["telemetry"] = {"enabled": False}
-        (tmp_path / ".claude" / "workflow.json").write_text(json_mod.dumps(config))
+        (tmp_path / ".claude" / "workflow.json").write_text(json.dumps(config))
         with (
             patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
             patch(
