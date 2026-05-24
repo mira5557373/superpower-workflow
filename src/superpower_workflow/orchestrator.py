@@ -7,6 +7,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from superpower_workflow.audit import AuditTrail, derive_key
 from superpower_workflow.context import build_context_summary
 from superpower_workflow.logger import WorkflowLogger
 from superpower_workflow.prompts import (
@@ -74,6 +75,7 @@ class Orchestrator:
         self.sys_prompt = system_prompt()
         self.cwd = str(project_root)
         self._telemetry: TelemetryEmitter | None = None
+        self._audit = AuditTrail.disabled()
         self._run_start: float = 0.0
 
     def run(
@@ -116,6 +118,26 @@ class Orchestrator:
             )
         )
         self._run_start = time.monotonic()
+
+        security_config = self.config.get("security", {})
+        if security_config.get("audit_trail", False):
+            audit_key = derive_key()
+            if audit_key:
+                audit_path = Path(self.cwd) / ".claude" / "audit-trail.jsonl"
+                self._audit = AuditTrail(audit_path, key=audit_key)
+            else:
+                self._audit = AuditTrail.disabled()
+        else:
+            self._audit = AuditTrail.disabled()
+
+        self._audit.append(
+            "RUN_START",
+            run_id=run_id,
+            data={
+                "model": self.config["model"],
+                "milestone_count": len(milestones),
+            },
+        )
 
         milestone_retry_delays = [120, 300, 600]
         max_retries = len(milestone_retry_delays)
@@ -166,6 +188,7 @@ class Orchestrator:
 
                 logger.log("MILESTONE_START", name=name)
                 self._telemetry.emit(MilestoneStarted(milestone=name, index=i))
+                self._audit.append("MILESTONE_START", run_id=run_id, milestone=name)
                 milestone_start = time.monotonic()
                 self.state.current_milestone_index = i
                 success = False
@@ -178,6 +201,12 @@ class Orchestrator:
                         self.state.current_step = None
                         save_state(self.claude_dir, self.state)
                         logger.log("MILESTONE_COMPLETE", name=name, total_cost=round(cost, 2))
+                        self._audit.append(
+                            "MILESTONE_COMPLETE",
+                            run_id=run_id,
+                            milestone=name,
+                            data={"cost": round(cost, 2)},
+                        )
                         self._telemetry.emit(
                             MilestoneCompleted(
                                 milestone=name,
@@ -352,6 +381,16 @@ class Orchestrator:
                 )
             )
 
+        self._audit.append(
+            "RUN_COMPLETE",
+            run_id=self.state.run_id,
+            data={
+                "status": status,
+                "completed": len(self.state.completed),
+                "cost": round(self.state.total_cost_usd, 2),
+            },
+        )
+
         summary_path = self.claude_dir / "workflow-complete.json"
         summary_path.write_text(json.dumps(summary, indent=2))
         logger.log(
@@ -438,6 +477,12 @@ class Orchestrator:
             )
         )
         logger.log("PHASE_A_COMPLETE", cost=round(r.cost_usd, 2))
+        self._audit.append(
+            "PHASE_COMPLETE",
+            run_id=self.state.run_id,
+            milestone=name,
+            data={"phase": "plan", "cost": round(r.cost_usd, 2)},
+        )
 
         sha_result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -481,6 +526,12 @@ class Orchestrator:
             )
         )
         logger.log("PHASE_B_COMPLETE", cost=round(r.cost_usd, 2))
+        self._audit.append(
+            "PHASE_COMPLETE",
+            run_id=self.state.run_id,
+            milestone=name,
+            data={"phase": "implement", "cost": round(r.cost_usd, 2)},
+        )
 
         # Quality Gates Checkpoint #1
         self.state.current_step = "quality_check_b"
@@ -564,6 +615,12 @@ class Orchestrator:
             )
         )
         logger.log("PHASE_C_COMPLETE", cost=round(r.cost_usd, 2))
+        self._audit.append(
+            "PHASE_COMPLETE",
+            run_id=self.state.run_id,
+            milestone=name,
+            data={"phase": "review", "cost": round(r.cost_usd, 2)},
+        )
 
         # Quality Gates Checkpoint #2
         self.state.current_step = "quality_check_c"
@@ -626,6 +683,12 @@ class Orchestrator:
             )
         )
         logger.log("PHASE_D_COMPLETE", cost=round(r.cost_usd, 2))
+        self._audit.append(
+            "PHASE_COMPLETE",
+            run_id=self.state.run_id,
+            milestone=name,
+            data={"phase": "push", "cost": round(r.cost_usd, 2)},
+        )
         return cost
 
     def _filter_milestones(

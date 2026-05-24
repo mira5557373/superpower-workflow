@@ -1,8 +1,10 @@
 import json
+import os as os_mod
 import subprocess as subprocess_mod
 from subprocess import CompletedProcess
 from unittest.mock import patch
 
+from superpower_workflow.audit import AuditTrail, _hkdf_sha256
 from superpower_workflow.logger import WorkflowLogger
 from superpower_workflow.orchestrator import Orchestrator
 from superpower_workflow.runner import ClaudeResult
@@ -995,3 +997,144 @@ class TestTelemetryIntegration:
         assert any(e["type"] == "run_started" for e in events)
         assert any(e["type"] == "run_completed" for e in events)
         assert any(e["type"] in ("milestone_failed", "retry_attempt") for e in events)
+
+
+def _read_audit_trail(tmp_path):
+    path = tmp_path / ".claude" / "audit-trail.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().strip().split("\n") if line.strip()]
+
+
+def _config_with_security(tmp_path, security=None, gates=None):
+    config = _config(tmp_path)
+    config["security"] = security or {"audit_trail": True}
+    if gates:
+        config["quality_gates"] = gates
+    (tmp_path / ".claude" / "workflow.json").write_text(json.dumps(config))
+    return config
+
+
+class TestAuditTrailIntegration:
+    def test_audit_trail_created_when_enabled(self, tmp_path):
+        _config_with_security(tmp_path)
+        with (
+            patch.dict(os_mod.environ, {"SW_AUDIT_KEY": "test-key"}),
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        trail = _read_audit_trail(tmp_path)
+        assert len(trail) > 0
+
+    def test_audit_trail_has_run_events(self, tmp_path):
+        _config_with_security(tmp_path)
+        with (
+            patch.dict(os_mod.environ, {"SW_AUDIT_KEY": "test-key"}),
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        trail = _read_audit_trail(tmp_path)
+        events = [e["event"] for e in trail]
+        assert "RUN_START" in events
+        assert "RUN_COMPLETE" in events
+
+    def test_audit_trail_has_milestone_events(self, tmp_path):
+        _config_with_security(tmp_path)
+        with (
+            patch.dict(os_mod.environ, {"SW_AUDIT_KEY": "test-key"}),
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        trail = _read_audit_trail(tmp_path)
+        events = [e["event"] for e in trail]
+        assert "MILESTONE_START" in events
+        assert "MILESTONE_COMPLETE" in events
+
+    def test_audit_trail_has_phase_events(self, tmp_path):
+        _config_with_security(tmp_path)
+        with (
+            patch.dict(os_mod.environ, {"SW_AUDIT_KEY": "test-key"}),
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        trail = _read_audit_trail(tmp_path)
+        events = [e["event"] for e in trail]
+        assert "PHASE_COMPLETE" in events
+
+    def test_audit_chain_verifies(self, tmp_path):
+        _config_with_security(tmp_path)
+        key = _hkdf_sha256(b"test-key", info=b"sw-audit-trail")
+        with (
+            patch.dict(os_mod.environ, {"SW_AUDIT_KEY": "test-key"}),
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        audit_path = tmp_path / ".claude" / "audit-trail.jsonl"
+        trail = AuditTrail(audit_path, key=key)
+        valid, _ = trail.verify()
+        assert valid is True
+
+    def test_no_audit_when_disabled(self, tmp_path):
+        _config_with_security(tmp_path, security={"audit_trail": False})
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        assert not (tmp_path / ".claude" / "audit-trail.jsonl").exists()
+
+    def test_no_audit_when_no_security_section(self, tmp_path):
+        _config(tmp_path)
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        assert not (tmp_path / ".claude" / "audit-trail.jsonl").exists()
+
+    def test_no_audit_when_key_missing(self, tmp_path):
+        _config_with_security(tmp_path)
+        with (
+            patch.dict(os_mod.environ, {}, clear=True),
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        assert not (tmp_path / ".claude" / "audit-trail.jsonl").exists()
