@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
-from superpower_workflow.dashboard.data import DashboardSnapshot
+from superpower_workflow.dashboard.data import DashboardData, DashboardSnapshot
+from superpower_workflow.dashboard.server import DashboardServer
+from superpower_workflow.dashboard.watch import TerminalWatch
 
-__all__ = ["DashboardSnapshot"]
+__all__ = [
+    "DashboardData",
+    "DashboardServer",
+    "DashboardSnapshot",
+    "TerminalWatch",
+]
