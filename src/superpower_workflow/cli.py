@@ -39,6 +39,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Refresh interval in seconds (default: from config or 2)",
     )
 
+    audit_p = sub.add_parser("audit", help="Audit trail commands")
+    audit_sub = audit_p.add_subparsers(dest="audit_command")
+    audit_sub.add_parser("verify", help="Verify audit trail chain integrity")
+    sig_p = audit_sub.add_parser("verify-sig", help="Verify artifact signature")
+    sig_p.add_argument("tag", help="Git tag to verify")
+    sig_p.add_argument("--public-key", help="Ed25519 public key (hex)")
+
     run_p = sub.add_parser("run", help="Execute milestones")
     run_p.add_argument("--milestone", help="Run a specific milestone")
     run_p.add_argument("--from", dest="from_ms", help="Start from milestone")
@@ -236,6 +243,48 @@ def _cmd_watch(project_root: Path, interval: float | None = None) -> None:
     watch.start()
 
 
+def _cmd_audit_verify(project_root: Path) -> None:
+    from superpower_workflow.audit import AuditTrail, derive_key
+
+    audit_path = project_root / ".claude" / "audit-trail.jsonl"
+    if not audit_path.exists():
+        print("  No audit trail found.")
+        return
+    key = derive_key()
+    if not key:
+        print("  Error: SW_AUDIT_KEY not set. Cannot verify.")
+        return
+    trail = AuditTrail(audit_path, key=key)
+    valid, last_seq = trail.verify()
+    if valid:
+        print(f"  Audit trail OK. {last_seq + 1} entries verified.")
+    else:
+        print(f"  INVALID: chain broken after seq {last_seq}. Possible tampering.")
+        sys.exit(1)
+
+
+def _cmd_audit_verify_sig(project_root: Path, tag: str, public_key: str | None) -> None:
+    from superpower_workflow.security import verify_signature
+
+    if not public_key:
+        config_path = project_root / ".claude" / "workflow.json"
+        if config_path.exists():
+            try:
+                config = json.loads(config_path.read_text())
+                public_key = config.get("security", {}).get("public_key", "")
+            except (json.JSONDecodeError, OSError):
+                pass
+    if not public_key:
+        print("  Error: No public key. Use --public-key or set security.public_key in config.")
+        return
+    valid = verify_signature(tag=tag, public_key_hex=public_key, cwd=str(project_root))
+    if valid:
+        print(f"  Signature valid for {tag}.")
+    else:
+        print(f"  Signature INVALID or missing for {tag}.")
+        sys.exit(1)
+
+
 def _cmd_decompose(project_root: Path) -> None:
     from superpower_workflow.decomposer import decompose
     from superpower_workflow.state import load_config
@@ -295,6 +344,19 @@ def main() -> None:
 
     if args.command == "init":
         _cmd_init(project_root)
+        return
+
+    if args.command == "audit":
+        if args.audit_command == "verify":
+            _cmd_audit_verify(project_root)
+        elif args.audit_command == "verify-sig":
+            _cmd_audit_verify_sig(
+                project_root,
+                tag=args.tag,
+                public_key=getattr(args, "public_key", None),
+            )
+        else:
+            parser.parse_args(["audit", "--help"])
         return
 
     if args.command == "doctor":

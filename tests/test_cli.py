@@ -1,5 +1,7 @@
 import json
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 from superpower_workflow.cli import _cmd_init, build_parser
 
@@ -265,3 +267,73 @@ def test_dashboard_reads_port_from_config(tmp_path: Path):
     }
     (claude_dir / "workflow.json").write_text(json.dumps(config))
     assert config["dashboard"]["port"] == 8888
+
+
+def test_parser_audit_verify_command():
+    parser = build_parser()
+    args = parser.parse_args(["audit", "verify"])
+    assert args.command == "audit"
+    assert args.audit_command == "verify"
+
+
+def test_parser_audit_verify_sig_command():
+    parser = build_parser()
+    args = parser.parse_args(["audit", "verify-sig", "v1.0"])
+    assert args.command == "audit"
+    assert args.audit_command == "verify-sig"
+    assert args.tag == "v1.0"
+
+
+def test_parser_audit_verify_sig_with_key():
+    parser = build_parser()
+    args = parser.parse_args(["audit", "verify-sig", "v1.0", "--public-key", "abc"])
+    assert args.public_key == "abc"
+
+
+def test_audit_verify_no_trail(tmp_path, capsys):
+    from superpower_workflow.cli import _cmd_audit_verify
+
+    _cmd_audit_verify(tmp_path)
+    captured = capsys.readouterr()
+    assert "No audit trail" in captured.out or "valid" in captured.out.lower()
+
+
+def test_audit_verify_valid_chain(tmp_path, capsys):
+    from superpower_workflow.audit import AuditTrail, _hkdf_sha256
+    from superpower_workflow.cli import _cmd_audit_verify
+
+    key = _hkdf_sha256(b"test-key", info=b"sw-audit-trail")
+    path = tmp_path / ".claude" / "audit-trail.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    trail = AuditTrail(path, key=key)
+    trail.append("A")
+    trail.append("B")
+
+    with patch.dict(os.environ, {"SW_AUDIT_KEY": "test-key"}):
+        _cmd_audit_verify(tmp_path)
+    captured = capsys.readouterr()
+    assert "valid" in captured.out.lower() or "OK" in captured.out
+
+
+def test_audit_verify_tampered_chain(tmp_path, capsys):
+    import pytest
+
+    from superpower_workflow.audit import AuditTrail, _hkdf_sha256
+    from superpower_workflow.cli import _cmd_audit_verify
+
+    key = _hkdf_sha256(b"test-key", info=b"sw-audit-trail")
+    path = tmp_path / ".claude" / "audit-trail.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    trail = AuditTrail(path, key=key)
+    trail.append("A")
+    trail.append("B")
+    lines = path.read_text().strip().split("\n")
+    entry = json.loads(lines[0])
+    entry["data"] = {"tampered": True}
+    lines[0] = json.dumps(entry)
+    path.write_text("\n".join(lines) + "\n")
+
+    with patch.dict(os.environ, {"SW_AUDIT_KEY": "test-key"}), pytest.raises(SystemExit):
+        _cmd_audit_verify(tmp_path)
+    captured = capsys.readouterr()
+    assert "INVALID" in captured.out or "tamper" in captured.out.lower()
