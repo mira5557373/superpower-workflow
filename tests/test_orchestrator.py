@@ -814,3 +814,92 @@ class TestTelemetryMilestonePhaseEvents:
         events = _read_telemetry(tmp_path)
         skipped = [e for e in events if e["type"] == "milestone_skipped"]
         assert any(e["milestone"] == "m2" for e in skipped)
+
+
+class TestTelemetryQualityEvents:
+    def test_quality_gate_events_emitted(self, tmp_path):
+        _config_with_gates(tmp_path)
+        success = CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=lambda cmd, **kw: (
+                    success if isinstance(cmd, str) else _smart_subprocess(cmd, **kw)
+                ),
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        events = _read_telemetry(tmp_path)
+        gate_events = [e for e in events if e["type"] == "quality_gate_result"]
+        assert len(gate_events) >= 2
+        assert all(e["passed"] for e in gate_events)
+
+    def test_retry_event_emitted_on_failure(self, tmp_path):
+        _config(tmp_path)
+        error_result = ClaudeResult(text="fail", is_error=True)
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=error_result),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+            patch("superpower_workflow.orchestrator.time.sleep"),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        events = _read_telemetry(tmp_path)
+        retries = [e for e in events if e["type"] == "retry_attempt"]
+        assert len(retries) >= 1
+        assert retries[0]["attempt"] >= 1
+
+    def test_milestone_failed_event_emitted(self, tmp_path):
+        _config(tmp_path)
+        error_result = ClaudeResult(text="fail", is_error=True)
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=error_result),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+            patch("superpower_workflow.orchestrator.time.sleep"),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        events = _read_telemetry(tmp_path)
+        failed = [e for e in events if e["type"] == "milestone_failed"]
+        assert len(failed) == 1
+        assert failed[0]["milestone"] == "m1"
+
+    def test_gap_report_captured_after_phase_a(self, tmp_path):
+        _config(tmp_path)
+        gap_data = {
+            "critical_gaps": 0,
+            "important_gaps": 2,
+            "total_gaps_found": 5,
+            "converged": True,
+        }
+        (tmp_path / ".claude" / ".gap-report.json").write_text(json.dumps(gap_data))
+
+        call_count = {"n": 0}
+
+        def mock_run_claude(prompt, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                (tmp_path / ".claude" / ".gap-report.json").write_text(json.dumps(gap_data))
+            return _ok_result()
+
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", side_effect=mock_run_claude),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        events = _read_telemetry(tmp_path)
+        gaps = [e for e in events if e["type"] == "gap_report"]
+        assert len(gaps) >= 1
+        assert gaps[0]["important_gaps"] == 2

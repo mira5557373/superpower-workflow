@@ -30,11 +30,16 @@ from superpower_workflow.state import (
     save_state,
 )
 from superpower_workflow.telemetry import (
+    CoverageResult,
+    GapReport,
     MilestoneCompleted,
+    MilestoneFailed,
     MilestoneSkipped,
     MilestoneStarted,
     PhaseCompleted,
     PhaseStarted,
+    QualityGateResult,
+    RetryAttempt,
     RunCompleted,
     RunStarted,
     TelemetryEmitter,
@@ -186,6 +191,15 @@ class Orchestrator:
                     except _PhaseError as e:
                         if attempt < max_retries:
                             delay = milestone_retry_delays[attempt]
+                            self._telemetry.emit(
+                                RetryAttempt(
+                                    milestone=name,
+                                    phase=e.phase,
+                                    attempt=attempt + 1,
+                                    reason=str(e),
+                                    delay_seconds=delay,
+                                )
+                            )
                             logger.log(
                                 "MILESTONE_RETRY",
                                 name=name,
@@ -201,6 +215,14 @@ class Orchestrator:
                             )
                             time.sleep(delay)
                         else:
+                            self._telemetry.emit(
+                                MilestoneFailed(
+                                    milestone=name,
+                                    phase=e.phase,
+                                    reason=str(e),
+                                    attempts=max_retries + 1,
+                                )
+                            )
                             logger.log(
                                 "MILESTONE_FAILED",
                                 name=name,
@@ -402,6 +424,7 @@ class Orchestrator:
             fallback_model=fallback,
         )
         cost += r.cost_usd
+        self._emit_gap_report(name, "plan")
         clear_phase_state(self.claude_dir)
         self._check_phase_result(r, "Phase A")
         self._telemetry.emit(
@@ -463,7 +486,9 @@ class Orchestrator:
         # Quality Gates Checkpoint #1
         self.state.current_step = "quality_check_b"
         save_state(self.claude_dir, self.state)
-        passed, failures = self._verify_quality_gates(logger)
+        passed, failures = self._verify_quality_gates(
+            logger, milestone=name, checkpoint="quality_check_b"
+        )
         if not passed:
             fix_prompt = (
                 f"Quality gates failed after Phase B for {name}:\n"
@@ -480,11 +505,13 @@ class Orchestrator:
                 fallback_model=fallback,
             )
             cost += r.cost_usd
-            passed, failures = self._verify_quality_gates(logger)
+            passed, failures = self._verify_quality_gates(
+                logger, milestone=name, checkpoint="quality_check_b"
+            )
             if not passed:
                 logger.log("QUALITY_GATES_STILL_FAILING", failures=str(failures))
 
-        _, cov_cost = self._check_coverage(logger)
+        _, cov_cost = self._check_coverage(logger, milestone=name)
         cost += cov_cost
         plan_sha = self.state.plan_commit_sha or ""
         self._check_trailers(plan_sha, logger)
@@ -523,6 +550,7 @@ class Orchestrator:
             fallback_model=fallback,
         )
         cost += r.cost_usd
+        self._emit_gap_report(name, "review")
         clear_phase_state(self.claude_dir)
         self._check_phase_result(r, "Phase C")
         self._telemetry.emit(
@@ -541,7 +569,9 @@ class Orchestrator:
         # Quality Gates Checkpoint #2
         self.state.current_step = "quality_check_c"
         save_state(self.claude_dir, self.state)
-        passed, failures = self._verify_quality_gates(logger)
+        passed, failures = self._verify_quality_gates(
+            logger, milestone=name, checkpoint="quality_check_c"
+        )
         if not passed:
             fix_prompt = (
                 f"Quality gates failed after Phase C for {name}:\n"
@@ -558,11 +588,13 @@ class Orchestrator:
                 fallback_model=fallback,
             )
             cost += r.cost_usd
-            passed, failures = self._verify_quality_gates(logger)
+            passed, failures = self._verify_quality_gates(
+                logger, milestone=name, checkpoint="quality_check_c"
+            )
             if not passed:
                 logger.log("QUALITY_GATES_STILL_FAILING", failures=str(failures))
 
-        _, cov_cost = self._check_coverage(logger)
+        _, cov_cost = self._check_coverage(logger, milestone=name)
         cost += cov_cost
         plan_sha = self.state.plan_commit_sha or ""
         self._check_trailers(plan_sha, logger)
@@ -617,7 +649,12 @@ class Orchestrator:
             return all_ms[start:end]
         return all_ms
 
-    def _verify_quality_gates(self, logger: WorkflowLogger) -> tuple[bool, list[str]]:
+    def _verify_quality_gates(
+        self,
+        logger: WorkflowLogger,
+        milestone: str = "",
+        checkpoint: str = "",
+    ) -> tuple[bool, list[str]]:
         """Run all configured quality gates. Returns (all_passed, failure_details)."""
         gates = self.config.get("quality_gates", {})
         if not gates:
@@ -641,13 +678,32 @@ class Orchestrator:
                     failures.append(f"{gate_name}: {detail}")
                     logger.log("QUALITY_GATE_FAILED", gate=gate_name)
                 else:
+                    detail = ""
                     logger.log("QUALITY_GATE_PASSED", gate=gate_name)
+                self._telemetry.emit(
+                    QualityGateResult(
+                        milestone=milestone,
+                        checkpoint=checkpoint,
+                        gate=gate_name,
+                        passed=result.returncode == 0,
+                        detail=detail if result.returncode != 0 else "",
+                    )
+                )
             except (subprocess.TimeoutExpired, FileNotFoundError) as e:
                 failures.append(f"{gate_name}: {e}")
                 logger.log("QUALITY_GATE_ERROR", gate=gate_name, error=str(e))
+                self._telemetry.emit(
+                    QualityGateResult(
+                        milestone=milestone,
+                        checkpoint=checkpoint,
+                        gate=gate_name,
+                        passed=False,
+                        detail=str(e),
+                    )
+                )
         return len(failures) == 0, failures
 
-    def _check_coverage(self, logger: WorkflowLogger) -> tuple[bool, float]:
+    def _check_coverage(self, logger: WorkflowLogger, milestone: str = "") -> tuple[bool, float]:
         """Check branch coverage against threshold, iterating with Claude if below.
 
         Returns (passed, accumulated_cost).
@@ -680,12 +736,28 @@ class Orchestrator:
             coverage = self._parse_coverage(report_path)
             if coverage >= threshold:
                 logger.log("COVERAGE_PASSED", coverage=coverage, threshold=threshold)
+                self._telemetry.emit(
+                    CoverageResult(
+                        milestone=milestone,
+                        coverage_pct=coverage,
+                        threshold=threshold,
+                        passed=True,
+                    )
+                )
                 return True, extra_cost
             logger.log(
                 "COVERAGE_BELOW",
                 coverage=coverage,
                 threshold=threshold,
                 attempt=attempt + 1,
+            )
+            self._telemetry.emit(
+                CoverageResult(
+                    milestone=milestone,
+                    coverage_pct=coverage,
+                    threshold=threshold,
+                    passed=False,
+                )
             )
             if attempt < max_attempts - 1:
                 r = run_claude(
@@ -737,6 +809,28 @@ class Orchestrator:
                     commits=str(missing[:5]),
                 )
         except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+
+    def _emit_gap_report(self, milestone: str, phase: str) -> None:
+        gap_path = self.claude_dir / GAP_REPORT_FILE
+        if not gap_path.exists():
+            return
+        try:
+            data = json.loads(gap_path.read_text())
+            self._telemetry.emit(
+                GapReport(
+                    milestone=milestone,
+                    phase=phase,
+                    critical_gaps=data.get("critical_gaps", 0),
+                    architectural_gaps=data.get("architectural_gaps", 0),
+                    important_gaps=data.get("important_gaps", 0),
+                    minor_gaps=data.get("minor_gaps", 0),
+                    deferred_gaps=data.get("deferred_gaps", 0),
+                    total_gaps_found=data.get("total_gaps_found", 0),
+                    converged=data.get("converged", False),
+                )
+            )
+        except (json.JSONDecodeError, OSError):
             pass
 
     def _find_plan_path(self, name: str) -> str:
