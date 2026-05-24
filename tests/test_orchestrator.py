@@ -1138,3 +1138,62 @@ class TestAuditTrailIntegration:
             orch = Orchestrator(tmp_path)
             orch.run()
         assert not (tmp_path / ".claude" / "audit-trail.jsonl").exists()
+
+
+def _config_with_secrets(tmp_path, secrets=None):
+    config = _config(tmp_path)
+    config["secrets"] = secrets or {"db_password": "DB_PASS"}
+    (tmp_path / ".claude" / "workflow.json").write_text(json.dumps(config))
+    return config
+
+
+class TestSecretsIntegration:
+    def test_secrets_fragment_in_system_prompt(self, tmp_path):
+        _config_with_secrets(tmp_path)
+        prompts = []
+
+        def mock_run_claude(prompt, **kwargs):
+            prompts.append(kwargs.get("system_prompt", ""))
+            return _ok_result()
+
+        with (
+            patch.dict(os_mod.environ, {"DB_PASS": "hunter2"}),
+            patch("superpower_workflow.orchestrator.run_claude", side_effect=mock_run_claude),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        assert any("$DB_PASS" in p for p in prompts)
+        assert not any("hunter2" in p for p in prompts)
+
+    def test_no_secrets_section_works(self, tmp_path):
+        _config(tmp_path)
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        state = load_state(tmp_path / ".claude")
+        assert "m1" in state.completed
+
+    def test_missing_env_var_warns_and_continues(self, tmp_path, capsys):
+        _config_with_secrets(tmp_path)
+        with (
+            patch.dict(os_mod.environ, {}, clear=True),
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        captured = capsys.readouterr()
+        assert "Warning" in captured.out or "m1" in load_state(tmp_path / ".claude").completed

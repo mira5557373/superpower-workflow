@@ -18,6 +18,7 @@ from superpower_workflow.prompts import (
     system_prompt,
 )
 from superpower_workflow.runner import ClaudeResult, run_claude
+from superpower_workflow.security import SecretsHandler
 from superpower_workflow.state import (
     GAP_REPORT_FILE,
     PHASE_FILE,
@@ -73,6 +74,19 @@ class Orchestrator:
             )
         self.state = load_state(self.claude_dir)
         self.sys_prompt = system_prompt()
+        secrets_config = self.config.get("secrets", {})
+        if secrets_config:
+            self._secrets = SecretsHandler(secrets_config)
+            try:
+                self._secrets.resolve()
+            except ValueError as e:
+                print(f"  Warning: {e}")
+                self._secrets = SecretsHandler({})
+            fragment = self._secrets.prompt_fragment()
+            if fragment:
+                self.sys_prompt = self.sys_prompt + "\n\n" + fragment
+        else:
+            self._secrets = SecretsHandler({})
         self.cwd = str(project_root)
         self._telemetry: TelemetryEmitter | None = None
         self._audit = AuditTrail.disabled()
