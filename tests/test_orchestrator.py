@@ -1353,3 +1353,139 @@ class TestSbomAndSigningIntegration:
             orch.run()
         state = load_state(tmp_path / ".claude")
         assert "m1" in state.completed
+
+
+class TestSP4Integration:
+    def test_full_run_with_all_security_features(self, tmp_path):
+        config = _config(tmp_path)
+        config["security"] = {
+            "audit_trail": True,
+            "sign_artifacts": False,
+            "sbom_tool": "",
+        }
+        config["secrets"] = {"token": "MY_TOKEN"}
+        config["policies"] = {"max_file_lines": 1000}
+        (tmp_path / ".claude" / "workflow.json").write_text(json.dumps(config))
+
+        with (
+            patch.dict(os_mod.environ, {"SW_AUDIT_KEY": "key", "MY_TOKEN": "val"}),
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+
+        state = load_state(tmp_path / ".claude")
+        assert "m1" in state.completed
+
+        trail = _read_audit_trail(tmp_path)
+        assert len(trail) > 0
+        events = [e["event"] for e in trail]
+        assert "RUN_START" in events
+        assert "RUN_COMPLETE" in events
+
+    def test_backward_compatible_no_security_keys(self, tmp_path):
+        _config(tmp_path)
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        state = load_state(tmp_path / ".claude")
+        assert "m1" in state.completed
+        assert not (tmp_path / ".claude" / "audit-trail.jsonl").exists()
+
+    def test_audit_trail_survives_milestone_failure(self, tmp_path):
+        config = _config(tmp_path)
+        config["security"] = {"audit_trail": True}
+        (tmp_path / ".claude" / "workflow.json").write_text(json.dumps(config))
+        error_result = ClaudeResult(text="fail", is_error=True)
+        with (
+            patch.dict(os_mod.environ, {"SW_AUDIT_KEY": "key"}),
+            patch("superpower_workflow.orchestrator.run_claude", return_value=error_result),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+            patch("superpower_workflow.orchestrator.time.sleep"),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        trail = _read_audit_trail(tmp_path)
+        assert any(e["event"] == "RUN_START" for e in trail)
+        assert any(e["event"] == "RUN_COMPLETE" for e in trail)
+
+    def test_multi_milestone_audit_chain_valid(self, tmp_path):
+        config = _config(
+            tmp_path,
+            milestones=[
+                {"name": "m1", "spec_sections": "1", "depends_on": []},
+                {"name": "m2", "spec_sections": "2", "depends_on": ["m1"]},
+            ],
+        )
+        config["security"] = {"audit_trail": True}
+        (tmp_path / ".claude" / "workflow.json").write_text(json.dumps(config))
+        with (
+            patch.dict(os_mod.environ, {"SW_AUDIT_KEY": "key"}),
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        from superpower_workflow.audit import AuditTrail, _hkdf_sha256
+
+        key = _hkdf_sha256(b"key", info=b"sw-audit-trail")
+        audit_path = tmp_path / ".claude" / "audit-trail.jsonl"
+        trail = AuditTrail(audit_path, key=key)
+        valid, last_seq = trail.verify()
+        assert valid is True
+        assert last_seq > 5
+
+    def test_telemetry_and_audit_coexist(self, tmp_path):
+        config = _config(tmp_path)
+        config["security"] = {"audit_trail": True}
+        (tmp_path / ".claude" / "workflow.json").write_text(json.dumps(config))
+        with (
+            patch.dict(os_mod.environ, {"SW_AUDIT_KEY": "key"}),
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        telemetry = _read_telemetry(tmp_path)
+        audit = _read_audit_trail(tmp_path)
+        assert len(telemetry) > 0
+        assert len(audit) > 0
+        assert any(e["type"] == "run_started" for e in telemetry)
+        assert any(e["event"] == "RUN_START" for e in audit)
+
+    def test_all_run_ids_consistent_in_audit(self, tmp_path):
+        config = _config(tmp_path)
+        config["security"] = {"audit_trail": True}
+        (tmp_path / ".claude" / "workflow.json").write_text(json.dumps(config))
+        with (
+            patch.dict(os_mod.environ, {"SW_AUDIT_KEY": "key"}),
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        trail = _read_audit_trail(tmp_path)
+        run_ids = {e["run_id"] for e in trail if e["run_id"]}
+        assert len(run_ids) == 1
