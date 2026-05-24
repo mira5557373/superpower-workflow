@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from superpower_workflow.dashboard.data import DashboardSnapshot
 
 _GAUGE_METRICS = [
@@ -45,3 +47,12 @@ def render_prometheus(snapshot: DashboardSnapshot) -> str:
         lines.append("")
 
     return "\n".join(lines) + "\n"
+
+
+def format_sse_event(snapshot: DashboardSnapshot) -> str:
+    payload = json.dumps(snapshot.to_dict(), separators=(",", ":"))
+    return f"data: {payload}\n\n"
+
+
+def format_sse_keepalive() -> str:
+    return ": keepalive\n\n"

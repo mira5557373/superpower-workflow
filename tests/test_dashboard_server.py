@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import json
+
 from superpower_workflow.dashboard.data import DashboardSnapshot
-from superpower_workflow.dashboard.server import render_prometheus
+from superpower_workflow.dashboard.server import (
+    format_sse_event,
+    format_sse_keepalive,
+    render_prometheus,
+)
 
 
 class TestRenderPrometheus:
@@ -52,3 +58,39 @@ class TestRenderPrometheus:
         snap = DashboardSnapshot()
         text = render_prometheus(snap)
         assert text.endswith("\n")
+
+
+class TestFormatSSE:
+    def test_sse_event_has_data_prefix(self):
+        snap = DashboardSnapshot(run_id="r1", status="running")
+        raw = format_sse_event(snap)
+        assert raw.startswith("data: ")
+
+    def test_sse_event_ends_with_double_newline(self):
+        snap = DashboardSnapshot()
+        raw = format_sse_event(snap)
+        assert raw.endswith("\n\n")
+
+    def test_sse_event_payload_is_valid_json(self):
+        snap = DashboardSnapshot(
+            run_id="r1",
+            milestones_total=5,
+            total_cost_usd=42.5,
+        )
+        raw = format_sse_event(snap)
+        payload = raw.removeprefix("data: ").strip()
+        parsed = json.loads(payload)
+        assert parsed["run_id"] == "r1"
+        assert parsed["milestones_total"] == 5
+        assert parsed["total_cost_usd"] == 42.5
+
+    def test_sse_keepalive_format(self):
+        raw = format_sse_keepalive()
+        assert raw == ": keepalive\n\n"
+
+    def test_sse_event_single_line_data(self):
+        snap = DashboardSnapshot()
+        raw = format_sse_event(snap)
+        lines = raw.strip().split("\n")
+        assert len(lines) == 1
+        assert lines[0].startswith("data: ")
