@@ -1,12 +1,16 @@
 import json
 
 from superpower_workflow.telemetry import (
+    CoverageResult,
+    GapReport,
     MilestoneCompleted,
     MilestoneFailed,
     MilestoneSkipped,
     MilestoneStarted,
     PhaseCompleted,
     PhaseStarted,
+    QualityGateResult,
+    RetryAttempt,
     RunCompleted,
     RunStarted,
     TelemetryEvent,
@@ -151,3 +155,61 @@ class TestPhaseEvents:
         d = e.to_dict()
         assert d["input_tokens"] == 0
         assert d["output_tokens"] == 0
+
+
+class TestQualityEvents:
+    def test_quality_gate_result(self):
+        e = QualityGateResult(
+            run_id="r1",
+            milestone="m1",
+            checkpoint="quality_check_b",
+            gate="lint",
+            passed=False,
+            detail="E501 line too long",
+        )
+        d = e.to_dict()
+        assert d["type"] == "quality_gate_result"
+        assert d["passed"] is False
+        assert d["gate"] == "lint"
+
+    def test_coverage_result(self):
+        e = CoverageResult(
+            run_id="r1",
+            milestone="m1",
+            coverage_pct=85.0,
+            threshold=80.0,
+            passed=True,
+        )
+        d = e.to_dict()
+        assert d["type"] == "coverage_result"
+        assert d["coverage_pct"] == 85.0
+
+    def test_retry_attempt(self):
+        e = RetryAttempt(
+            run_id="r1",
+            milestone="m1",
+            phase="Phase B",
+            attempt=2,
+            reason="timeout",
+            delay_seconds=120,
+        )
+        d = e.to_dict()
+        assert d["type"] == "retry_attempt"
+        assert d["attempt"] == 2
+        assert d["delay_seconds"] == 120
+
+    def test_gap_report(self):
+        e = GapReport(
+            run_id="r1",
+            milestone="m1",
+            phase="plan",
+            critical_gaps=0,
+            important_gaps=3,
+            total_gaps_found=12,
+            converged=True,
+        )
+        d = e.to_dict()
+        assert d["type"] == "gap_report"
+        assert d["critical_gaps"] == 0
+        assert d["total_gaps_found"] == 12
+        assert d["converged"] is True

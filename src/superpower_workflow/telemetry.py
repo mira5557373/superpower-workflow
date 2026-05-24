@@ -94,3 +94,46 @@ class PhaseCompleted(TelemetryEvent):
     session_id: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
+
+
+@dataclass
+class QualityGateResult(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "quality_gate_result"
+    milestone: str = ""
+    checkpoint: str = ""
+    gate: str = ""
+    passed: bool = True
+    detail: str = ""
+
+
+@dataclass
+class CoverageResult(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "coverage_result"
+    milestone: str = ""
+    coverage_pct: float = 0.0
+    threshold: float = 0.0
+    passed: bool = True
+
+
+@dataclass
+class RetryAttempt(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "retry_attempt"
+    milestone: str = ""
+    phase: str = ""
+    attempt: int = 0
+    reason: str = ""
+    delay_seconds: int = 0
+
+
+@dataclass
+class GapReport(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "gap_report"
+    milestone: str = ""
+    phase: str = ""
+    critical_gaps: int = 0
+    architectural_gaps: int = 0
+    important_gaps: int = 0
+    minor_gaps: int = 0
+    deferred_gaps: int = 0
+    total_gaps_found: int = 0
+    converged: bool = False
