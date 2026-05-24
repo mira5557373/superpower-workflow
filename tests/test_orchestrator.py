@@ -271,3 +271,88 @@ class TestVerifyQualityGates:
             logger.close()
         assert passed is False
         assert any("lint" in f for f in failures)
+
+
+class TestCheckCoverage:
+    def test_passes_above_threshold(self, tmp_path):
+        _config_with_gates(
+            tmp_path,
+            gates={
+                "lint": None,
+                "coverage_command": "echo ok",
+                "coverage_threshold": 80,
+                "coverage_report_path": "coverage.json",
+            },
+        )
+        (tmp_path / "coverage.json").write_text(
+            json.dumps({"totals": {"percent_covered_display": "85"}})
+        )
+        success = CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        with patch("superpower_workflow.orchestrator.subprocess.run", return_value=success):
+            orch = Orchestrator(tmp_path)
+            logger = WorkflowLogger(tmp_path / ".claude", "test")
+            result = orch._check_coverage(logger)
+            logger.close()
+        assert result is True
+
+    def test_skipped_when_not_configured(self, tmp_path):
+        _config(tmp_path)
+        with patch(
+            "superpower_workflow.orchestrator.subprocess.run",
+            side_effect=_smart_subprocess,
+        ):
+            orch = Orchestrator(tmp_path)
+            logger = WorkflowLogger(tmp_path / ".claude", "test")
+            result = orch._check_coverage(logger)
+            logger.close()
+        assert result is True
+
+    def test_returns_false_after_max_attempts(self, tmp_path):
+        _config_with_gates(
+            tmp_path,
+            gates={
+                "lint": None,
+                "coverage_command": "echo ok",
+                "coverage_threshold": 80,
+                "coverage_max_attempts": 2,
+                "coverage_report_path": "coverage.json",
+            },
+        )
+        (tmp_path / "coverage.json").write_text(
+            json.dumps({"totals": {"percent_covered_display": "50"}})
+        )
+        success = CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        with (
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                return_value=success,
+            ),
+            patch(
+                "superpower_workflow.orchestrator.run_claude",
+                return_value=_ok_result(),
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            logger = WorkflowLogger(tmp_path / ".claude", "test")
+            result = orch._check_coverage(logger)
+            logger.close()
+        assert result is False
+
+    def test_missing_report_treated_as_zero(self, tmp_path):
+        _config_with_gates(
+            tmp_path,
+            gates={
+                "lint": None,
+                "coverage_command": "echo ok",
+                "coverage_threshold": 80,
+                "coverage_max_attempts": 1,
+                "coverage_report_path": "nonexistent.json",
+            },
+        )
+        success = CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        with patch("superpower_workflow.orchestrator.subprocess.run", return_value=success):
+            orch = Orchestrator(tmp_path)
+            logger = WorkflowLogger(tmp_path / ".claude", "test")
+            result = orch._check_coverage(logger)
+            logger.close()
+        assert result is False

@@ -479,6 +479,58 @@ class Orchestrator:
                 logger.log("QUALITY_GATE_ERROR", gate=gate_name, error=str(e))
         return len(failures) == 0, failures
 
+    def _check_coverage(self, logger: WorkflowLogger) -> bool:
+        """Check branch coverage against threshold, iterating with Claude if below."""
+        gates = self.config.get("quality_gates", {})
+        cmd = gates.get("coverage_command")
+        threshold = gates.get("coverage_threshold", 0)
+        max_attempts = gates.get("coverage_max_attempts", 3)
+        report_path = gates.get("coverage_report_path", "coverage.json")
+        if not cmd or threshold == 0:
+            return True
+        for attempt in range(max_attempts):
+            subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                cwd=self.cwd,
+                timeout=600,
+            )
+            coverage = self._parse_coverage(report_path)
+            if coverage >= threshold:
+                logger.log("COVERAGE_PASSED", coverage=coverage, threshold=threshold)
+                return True
+            logger.log(
+                "COVERAGE_BELOW",
+                coverage=coverage,
+                threshold=threshold,
+                attempt=attempt + 1,
+            )
+            if attempt < max_attempts - 1:
+                run_claude(
+                    f"Branch coverage is {coverage}% (threshold: {threshold}%). "
+                    f"Write additional tests for uncovered code. "
+                    f"Attempt {attempt + 1}/{max_attempts}.",
+                    model=self.config["model"],
+                    effort="high",
+                    budget=10.0,
+                    cwd=self.cwd,
+                    system_prompt=self.sys_prompt,
+                    fallback_model=self.config.get("fallback_model"),
+                )
+        return False
+
+    def _parse_coverage(self, report_path: str) -> float:
+        """Parse coverage.json for branch coverage percentage."""
+        path = Path(self.cwd) / report_path
+        if not path.exists():
+            return 0.0
+        try:
+            data = json.loads(path.read_text())
+            return float(data.get("totals", {}).get("percent_covered_display", "0"))
+        except (json.JSONDecodeError, ValueError, KeyError):
+            return 0.0
+
     def _find_plan_path(self, name: str) -> str:
         plans_dir = Path(self.cwd) / "docs" / "superpowers" / "plans"
         if plans_dir.exists():
