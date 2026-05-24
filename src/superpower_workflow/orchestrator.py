@@ -311,7 +311,12 @@ class Orchestrator:
         fallback = self.config.get("fallback_model")
         budgets = self.config["budgets"]
         effort = self.config.get("effort", {})
-        context = build_context_summary(self.state.completed)
+        context = build_context_summary(
+            self.state.completed,
+            self.root,
+            ms,
+            self.config.get("milestones", []),
+        )
         verify = self.config.get("verify_commands", {})
         convergence = self.config.get("convergence", {})
         cost = 0.0
@@ -368,6 +373,14 @@ class Orchestrator:
         self.state.last_phase_session_id = r.session_id
         self._check_phase_result(r, "Phase B")
         logger.log("PHASE_B_COMPLETE", cost=round(r.cost_usd, 2))
+
+        # Refresh context to include what Phase B built
+        context = build_context_summary(
+            self.state.completed,
+            self.root,
+            ms,
+            self.config.get("milestones", []),
+        )
 
         # Phase C: Review + Fix
         self.state.current_step = "review"
