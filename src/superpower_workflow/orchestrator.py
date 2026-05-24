@@ -398,7 +398,8 @@ class Orchestrator:
             if not passed:
                 logger.log("QUALITY_GATES_STILL_FAILING", failures=str(failures))
 
-        self._check_coverage(logger)
+        _, cov_cost = self._check_coverage(logger)
+        cost += cov_cost
         plan_sha = self.state.plan_commit_sha or ""
         self._check_trailers(plan_sha, logger)
 
@@ -463,7 +464,8 @@ class Orchestrator:
             if not passed:
                 logger.log("QUALITY_GATES_STILL_FAILING", failures=str(failures))
 
-        self._check_coverage(logger)
+        _, cov_cost = self._check_coverage(logger)
+        cost += cov_cost
         plan_sha = self.state.plan_commit_sha or ""
         self._check_trailers(plan_sha, logger)
 
@@ -535,27 +537,40 @@ class Orchestrator:
                 logger.log("QUALITY_GATE_ERROR", gate=gate_name, error=str(e))
         return len(failures) == 0, failures
 
-    def _check_coverage(self, logger: WorkflowLogger) -> bool:
-        """Check branch coverage against threshold, iterating with Claude if below."""
+    def _check_coverage(self, logger: WorkflowLogger) -> tuple[bool, float]:
+        """Check branch coverage against threshold, iterating with Claude if below.
+
+        Returns (passed, accumulated_cost).
+        """
         gates = self.config.get("quality_gates", {})
         cmd = gates.get("coverage_command")
         threshold = gates.get("coverage_threshold", 0)
         max_attempts = gates.get("coverage_max_attempts", 3)
         report_path = gates.get("coverage_report_path", "coverage.json")
         if not cmd or threshold == 0:
-            return True
+            return True, 0.0
+        extra_cost = 0.0
         for attempt in range(max_attempts):
-            subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                cwd=self.cwd,
-                timeout=600,
-            )
+            try:
+                result = subprocess.run(
+                    cmd,
+                    shell=True,
+                    capture_output=True,
+                    cwd=self.cwd,
+                    timeout=600,
+                )
+                if result.returncode != 0:
+                    logger.log(
+                        "COVERAGE_CMD_FAILED",
+                        returncode=result.returncode,
+                        attempt=attempt + 1,
+                    )
+            except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+                logger.log("COVERAGE_CMD_ERROR", error=str(e), attempt=attempt + 1)
             coverage = self._parse_coverage(report_path)
             if coverage >= threshold:
                 logger.log("COVERAGE_PASSED", coverage=coverage, threshold=threshold)
-                return True
+                return True, extra_cost
             logger.log(
                 "COVERAGE_BELOW",
                 coverage=coverage,
@@ -563,7 +578,7 @@ class Orchestrator:
                 attempt=attempt + 1,
             )
             if attempt < max_attempts - 1:
-                run_claude(
+                r = run_claude(
                     f"Branch coverage is {coverage}% (threshold: {threshold}%). "
                     f"Write additional tests for uncovered code. "
                     f"Attempt {attempt + 1}/{max_attempts}.",
@@ -574,7 +589,8 @@ class Orchestrator:
                     system_prompt=self.sys_prompt,
                     fallback_model=self.config.get("fallback_model"),
                 )
-        return False
+                extra_cost += r.cost_usd
+        return False, extra_cost
 
     def _parse_coverage(self, report_path: str) -> float:
         """Parse coverage.json for branch coverage percentage."""

@@ -292,9 +292,10 @@ class TestCheckCoverage:
         with patch("superpower_workflow.orchestrator.subprocess.run", return_value=success):
             orch = Orchestrator(tmp_path)
             logger = WorkflowLogger(tmp_path / ".claude", "test")
-            result = orch._check_coverage(logger)
+            passed, cov_cost = orch._check_coverage(logger)
             logger.close()
-        assert result is True
+        assert passed is True
+        assert cov_cost == 0.0
 
     def test_skipped_when_not_configured(self, tmp_path):
         _config(tmp_path)
@@ -304,9 +305,10 @@ class TestCheckCoverage:
         ):
             orch = Orchestrator(tmp_path)
             logger = WorkflowLogger(tmp_path / ".claude", "test")
-            result = orch._check_coverage(logger)
+            passed, cov_cost = orch._check_coverage(logger)
             logger.close()
-        assert result is True
+        assert passed is True
+        assert cov_cost == 0.0
 
     def test_returns_false_after_max_attempts(self, tmp_path):
         _config_with_gates(
@@ -335,9 +337,10 @@ class TestCheckCoverage:
         ):
             orch = Orchestrator(tmp_path)
             logger = WorkflowLogger(tmp_path / ".claude", "test")
-            result = orch._check_coverage(logger)
+            passed, cov_cost = orch._check_coverage(logger)
             logger.close()
-        assert result is False
+        assert passed is False
+        assert cov_cost > 0.0
 
     def test_missing_report_treated_as_zero(self, tmp_path):
         _config_with_gates(
@@ -354,9 +357,54 @@ class TestCheckCoverage:
         with patch("superpower_workflow.orchestrator.subprocess.run", return_value=success):
             orch = Orchestrator(tmp_path)
             logger = WorkflowLogger(tmp_path / ".claude", "test")
-            result = orch._check_coverage(logger)
+            passed, _ = orch._check_coverage(logger)
             logger.close()
-        assert result is False
+        assert passed is False
+
+    def test_timeout_handled_gracefully(self, tmp_path):
+        _config_with_gates(
+            tmp_path,
+            gates={
+                "lint": None,
+                "coverage_command": "sleep 999",
+                "coverage_threshold": 80,
+                "coverage_max_attempts": 1,
+                "coverage_report_path": "nonexistent.json",
+            },
+        )
+
+        def mock_run(cmd, **kwargs):
+            if isinstance(cmd, str):
+                raise subprocess_mod.TimeoutExpired(cmd=cmd, timeout=600)
+            return _smart_subprocess(cmd, **kwargs)
+
+        with patch("superpower_workflow.orchestrator.subprocess.run", side_effect=mock_run):
+            orch = Orchestrator(tmp_path)
+            logger = WorkflowLogger(tmp_path / ".claude", "test")
+            passed, _ = orch._check_coverage(logger)
+            logger.close()
+        assert passed is False
+
+    def test_coverage_cmd_failure_logged(self, tmp_path):
+        _config_with_gates(
+            tmp_path,
+            gates={
+                "lint": None,
+                "coverage_command": "false",
+                "coverage_threshold": 80,
+                "coverage_max_attempts": 1,
+                "coverage_report_path": "nonexistent.json",
+            },
+        )
+        fail = CompletedProcess(args=[], returncode=1, stdout="", stderr="error")
+        with patch("superpower_workflow.orchestrator.subprocess.run", return_value=fail):
+            orch = Orchestrator(tmp_path)
+            logger = WorkflowLogger(tmp_path / ".claude", "test")
+            passed, _ = orch._check_coverage(logger)
+            logger.close()
+        assert passed is False
+        log_content = (tmp_path / ".claude" / "workflow-test.log").read_text()
+        assert "COVERAGE_CMD_FAILED" in log_content
 
 
 class TestCheckTrailers:

@@ -107,7 +107,7 @@ def _increment_iteration(
         phase["previous_important_gaps"] = current_important
     if current_summaries is not None:
         phase["previous_gap_summaries"] = current_summaries
-    tmp = phase_path.with_suffix(".tmp")
+    tmp = phase_path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(phase, indent=2))
     os.replace(str(tmp), str(phase_path))
 
