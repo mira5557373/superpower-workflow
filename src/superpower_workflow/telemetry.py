@@ -168,3 +168,34 @@ class TelemetryEmitter:
     @classmethod
     def disabled(cls) -> TelemetryEmitter:
         return cls(path=None, run_id="")
+
+
+class TelemetryReader:
+    def __init__(self, path: Path) -> None:
+        self._path = path
+
+    def events(self) -> list[dict]:
+        if not self._path.exists():
+            return []
+        result = []
+        for line in self._path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                result.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return result
+
+    def events_by_type(self, event_type: str) -> list[dict]:
+        return [e for e in self.events() if e.get("type") == event_type]
+
+    def events_for_run(self, run_id: str) -> list[dict]:
+        return [e for e in self.events() if e.get("run_id") == run_id]
+
+    def latest_run_id(self) -> str | None:
+        started = self.events_by_type("run_started")
+        if not started:
+            return None
+        return started[-1].get("run_id")

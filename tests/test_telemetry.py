@@ -15,6 +15,7 @@ from superpower_workflow.telemetry import (
     RunStarted,
     TelemetryEmitter,
     TelemetryEvent,
+    TelemetryReader,
 )
 
 
@@ -274,3 +275,89 @@ class TestTelemetryEmitter:
         emitter.emit(RunStarted(model="opus"))
         emitter.close()
         emitter.close()
+
+
+def _write_events(path, events):
+    with open(path, "w", encoding="utf-8") as f:
+        for e in events:
+            f.write(json.dumps(e) + "\n")
+
+
+class TestTelemetryReader:
+    def test_reads_all_events(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        _write_events(
+            path,
+            [
+                {"type": "run_started", "run_id": "r1"},
+                {"type": "run_completed", "run_id": "r1"},
+            ],
+        )
+        reader = TelemetryReader(path)
+        assert len(reader.events()) == 2
+
+    def test_empty_file_returns_empty(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        path.write_text("")
+        reader = TelemetryReader(path)
+        assert reader.events() == []
+
+    def test_missing_file_returns_empty(self, tmp_path):
+        path = tmp_path / "nonexistent.jsonl"
+        reader = TelemetryReader(path)
+        assert reader.events() == []
+
+    def test_filter_by_type(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        _write_events(
+            path,
+            [
+                {"type": "run_started", "run_id": "r1"},
+                {"type": "phase_completed", "run_id": "r1", "phase": "plan"},
+                {"type": "phase_completed", "run_id": "r1", "phase": "implement"},
+                {"type": "run_completed", "run_id": "r1"},
+            ],
+        )
+        reader = TelemetryReader(path)
+        phases = reader.events_by_type("phase_completed")
+        assert len(phases) == 2
+
+    def test_filter_by_run_id(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        _write_events(
+            path,
+            [
+                {"type": "run_started", "run_id": "r1"},
+                {"type": "run_started", "run_id": "r2"},
+                {"type": "run_completed", "run_id": "r1"},
+            ],
+        )
+        reader = TelemetryReader(path)
+        r1_events = reader.events_for_run("r1")
+        assert len(r1_events) == 2
+
+    def test_skips_malformed_lines(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        path.write_text(
+            '{"type":"run_started","run_id":"r1"}\nnot-json\n{"type":"run_completed","run_id":"r1"}\n'
+        )
+        reader = TelemetryReader(path)
+        assert len(reader.events()) == 2
+
+    def test_latest_run_id(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        _write_events(
+            path,
+            [
+                {"type": "run_started", "run_id": "r1"},
+                {"type": "run_completed", "run_id": "r1"},
+                {"type": "run_started", "run_id": "r2"},
+            ],
+        )
+        reader = TelemetryReader(path)
+        assert reader.latest_run_id() == "r2"
+
+    def test_latest_run_id_empty(self, tmp_path):
+        path = tmp_path / "nonexistent.jsonl"
+        reader = TelemetryReader(path)
+        assert reader.latest_run_id() is None
