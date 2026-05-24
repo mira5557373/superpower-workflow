@@ -1272,3 +1272,84 @@ class TestPolicyIntegration:
             orch.run()
         state = load_state(tmp_path / ".claude")
         assert "m1" in state.completed
+
+
+class TestSbomAndSigningIntegration:
+    def test_sbom_generated_in_phase_d(self, tmp_path):
+        config = _config(tmp_path)
+        config["security"] = {
+            "audit_trail": False,
+            "sbom_tool": "echo sbom",
+            "sbom_output": ".claude/sbom-{milestone}.json",
+        }
+        (tmp_path / ".claude" / "workflow.json").write_text(json.dumps(config))
+        sbom_calls = []
+
+        def mock_subprocess(cmd, **kwargs):
+            cmd_str = " ".join(cmd) if isinstance(cmd, list) else cmd
+            if "sbom" in cmd_str:
+                sbom_calls.append(cmd_str)
+                return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+            if isinstance(cmd, str):
+                return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+            return _smart_subprocess(cmd, **kwargs)
+
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=mock_subprocess,
+            ),
+            patch("superpower_workflow.security.subprocess.run", side_effect=mock_subprocess),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        assert len(sbom_calls) >= 1
+
+    def test_signing_called_in_phase_d(self, tmp_path):
+        if not __import__("superpower_workflow.security", fromlist=["HAS_CRYPTO"]).HAS_CRYPTO:
+            return
+        config = _config(tmp_path)
+        config["security"] = {
+            "audit_trail": False,
+            "sign_artifacts": True,
+        }
+        (tmp_path / ".claude" / "workflow.json").write_text(json.dumps(config))
+
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        key_hex = Ed25519PrivateKey.generate().private_bytes_raw().hex()
+
+        note_calls = []
+
+        def mock_subprocess(cmd, **kwargs):
+            if isinstance(cmd, list) and "notes" in cmd:
+                note_calls.append(cmd)
+            return _smart_subprocess(cmd, **kwargs)
+
+        with (
+            patch.dict(os_mod.environ, {"SW_SIGN_KEY": key_hex}),
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=mock_subprocess,
+            ),
+            patch("superpower_workflow.security.subprocess.run", side_effect=mock_subprocess),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        assert any("notes" in str(c) for c in note_calls)
+
+    def test_no_security_config_skips_both(self, tmp_path):
+        _config(tmp_path)
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        state = load_state(tmp_path / ".claude")
+        assert "m1" in state.completed

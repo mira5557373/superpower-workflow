@@ -19,7 +19,7 @@ from superpower_workflow.prompts import (
     system_prompt,
 )
 from superpower_workflow.runner import ClaudeResult, run_claude
-from superpower_workflow.security import SecretsHandler
+from superpower_workflow.security import SecretsHandler, generate_sbom, sign_artifact
 from superpower_workflow.state import (
     GAP_REPORT_FILE,
     PHASE_FILE,
@@ -754,6 +754,42 @@ class Orchestrator:
             milestone=name,
             data={"phase": "push", "cost": round(r.cost_usd, 2)},
         )
+
+        security = self.config.get("security", {})
+        sbom_tool = security.get("sbom_tool", "")
+        sbom_output = security.get("sbom_output", "")
+        if sbom_tool:
+            ok, sbom_path = generate_sbom(
+                tool_cmd=sbom_tool,
+                output_path=sbom_output,
+                cwd=self.cwd,
+                milestone=name,
+            )
+            if ok and sbom_path:
+                logger.log("SBOM_GENERATED", milestone=name, path=sbom_path)
+                self._audit.append(
+                    "SBOM_GENERATED",
+                    run_id=self.state.run_id,
+                    milestone=name,
+                    data={"path": sbom_path},
+                )
+            else:
+                logger.log("SBOM_FAILED", milestone=name)
+
+        if security.get("sign_artifacts", False):
+            tag = name
+            sig = sign_artifact(tag=tag, cwd=self.cwd)
+            if sig:
+                logger.log("ARTIFACT_SIGNED", milestone=name)
+                self._audit.append(
+                    "ARTIFACT_SIGNED",
+                    run_id=self.state.run_id,
+                    milestone=name,
+                    data={"tag": tag},
+                )
+            else:
+                logger.log("SIGNING_SKIPPED", milestone=name)
+
         return cost
 
     def _filter_milestones(
