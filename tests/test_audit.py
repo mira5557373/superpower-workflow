@@ -258,3 +258,99 @@ class TestAuditTrailAppend:
         trail = AuditTrail(path, key=self._key())
         trail.append("TEST")
         assert path.exists()
+
+
+class TestAuditTrailVerify:
+    def _key(self):
+        return _hkdf_sha256(b"test-key", info=b"sw-audit-trail")
+
+    def test_valid_chain(self, tmp_path):
+        path = tmp_path / "audit-trail.jsonl"
+        trail = AuditTrail(path, key=self._key())
+        trail.append("A", run_id="r1")
+        trail.append("B", run_id="r1")
+        trail.append("C", run_id="r1")
+        valid, last_seq = trail.verify()
+        assert valid is True
+        assert last_seq == 2
+
+    def test_empty_file_is_valid(self, tmp_path):
+        path = tmp_path / "audit-trail.jsonl"
+        path.write_text("")
+        trail = AuditTrail(path, key=self._key())
+        valid, last_seq = trail.verify()
+        assert valid is True
+        assert last_seq == -1
+
+    def test_missing_file_is_valid(self, tmp_path):
+        path = tmp_path / "nonexistent.jsonl"
+        trail = AuditTrail(path, key=self._key())
+        valid, last_seq = trail.verify()
+        assert valid is True
+        assert last_seq == -1
+
+    def test_tampered_hash_detected(self, tmp_path):
+        path = tmp_path / "audit-trail.jsonl"
+        trail = AuditTrail(path, key=self._key())
+        trail.append("A")
+        trail.append("B")
+        lines = path.read_text().strip().split("\n")
+        entry = json.loads(lines[0])
+        entry["hash"] = "0" * 64
+        lines[0] = json.dumps(entry)
+        path.write_text("\n".join(lines) + "\n")
+        valid, last_seq = AuditTrail(path, key=self._key()).verify()
+        assert valid is False
+        assert last_seq == -1
+
+    def test_tampered_data_detected(self, tmp_path):
+        path = tmp_path / "audit-trail.jsonl"
+        trail = AuditTrail(path, key=self._key())
+        trail.append("A", data={"cost": 10.0})
+        trail.append("B")
+        lines = path.read_text().strip().split("\n")
+        entry = json.loads(lines[0])
+        entry["data"]["cost"] = 0.0
+        lines[0] = json.dumps(entry)
+        path.write_text("\n".join(lines) + "\n")
+        valid, last_seq = AuditTrail(path, key=self._key()).verify()
+        assert valid is False
+        assert last_seq == -1
+
+    def test_broken_chain_link_detected(self, tmp_path):
+        path = tmp_path / "audit-trail.jsonl"
+        trail = AuditTrail(path, key=self._key())
+        trail.append("A")
+        trail.append("B")
+        trail.append("C")
+        lines = path.read_text().strip().split("\n")
+        path.write_text(lines[0] + "\n" + lines[2] + "\n")
+        valid, last_seq = AuditTrail(path, key=self._key()).verify()
+        assert valid is False
+        assert last_seq == 0
+
+    def test_wrong_key_fails_verification(self, tmp_path):
+        path = tmp_path / "audit-trail.jsonl"
+        trail = AuditTrail(path, key=self._key())
+        trail.append("A")
+        wrong_key = _hkdf_sha256(b"wrong-key", info=b"sw-audit-trail")
+        valid, _ = AuditTrail(path, key=wrong_key).verify()
+        assert valid is False
+
+    def test_single_entry_valid(self, tmp_path):
+        path = tmp_path / "audit-trail.jsonl"
+        trail = AuditTrail(path, key=self._key())
+        trail.append("ONLY")
+        valid, last_seq = trail.verify()
+        assert valid is True
+        assert last_seq == 0
+
+    def test_malformed_json_fails(self, tmp_path):
+        path = tmp_path / "audit-trail.jsonl"
+        trail = AuditTrail(path, key=self._key())
+        trail.append("A")
+        with open(path, "a") as f:
+            f.write("not-json\n")
+        valid, last_seq = trail.verify()
+        assert valid is False
+        assert last_seq == 0

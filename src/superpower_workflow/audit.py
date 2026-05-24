@@ -113,6 +113,28 @@ class AuditTrail:
         self._prev_hash = entry["hash"]
         self._seq += 1
 
+    def verify(self) -> tuple[bool, int]:
+        if not self._path.exists():
+            return True, -1
+        prev_hash = ""
+        last_valid = -1
+        for line in self._path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                return False, last_valid
+            if entry.get("prev_hash", "") != prev_hash:
+                return False, last_valid
+            canonical = _canonical_json(entry)
+            computed = _compute_hash(canonical, self._key)
+            if entry.get("hash", "") != computed:
+                return False, last_valid
+            prev_hash = entry["hash"]
+            last_valid = entry.get("seq", last_valid)
+        return True, last_valid
+
     @classmethod
     def disabled(cls) -> AuditTrail:
         return cls(Path(os.devnull), key=None)
