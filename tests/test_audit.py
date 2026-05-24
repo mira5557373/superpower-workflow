@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from superpower_workflow.audit import (
     AuditEntry,
+    AuditTrail,
     _canonical_json,
     _compute_hash,
     _hkdf_sha256,
@@ -176,3 +177,84 @@ class TestDeriveKey:
         with patch.dict(os.environ, {"SW_AUDIT_KEY": ""}):
             key = derive_key()
         assert key is None
+
+
+class TestAuditTrailAppend:
+    def _key(self):
+        return _hkdf_sha256(b"test-key", info=b"sw-audit-trail")
+
+    def test_creates_file(self, tmp_path):
+        path = tmp_path / "audit-trail.jsonl"
+        trail = AuditTrail(path, key=self._key())
+        trail.append("TEST_EVENT", run_id="r1")
+        assert path.exists()
+
+    def test_writes_valid_jsonl(self, tmp_path):
+        path = tmp_path / "audit-trail.jsonl"
+        trail = AuditTrail(path, key=self._key())
+        trail.append("EVENT_A", run_id="r1")
+        trail.append("EVENT_B", run_id="r1", milestone="m1")
+        lines = path.read_text().strip().split("\n")
+        assert len(lines) == 2
+        for line in lines:
+            parsed = json.loads(line)
+            assert "seq" in parsed
+            assert "hash" in parsed
+
+    def test_seq_increments(self, tmp_path):
+        path = tmp_path / "audit-trail.jsonl"
+        trail = AuditTrail(path, key=self._key())
+        trail.append("A")
+        trail.append("B")
+        trail.append("C")
+        lines = [json.loads(ln) for ln in path.read_text().strip().split("\n")]
+        assert lines[0]["seq"] == 0
+        assert lines[1]["seq"] == 1
+        assert lines[2]["seq"] == 2
+
+    def test_chain_links_prev_hash(self, tmp_path):
+        path = tmp_path / "audit-trail.jsonl"
+        trail = AuditTrail(path, key=self._key())
+        trail.append("A")
+        trail.append("B")
+        lines = [json.loads(ln) for ln in path.read_text().strip().split("\n")]
+        assert lines[0]["prev_hash"] == ""
+        assert lines[1]["prev_hash"] == lines[0]["hash"]
+
+    def test_hash_is_valid_hex(self, tmp_path):
+        path = tmp_path / "audit-trail.jsonl"
+        trail = AuditTrail(path, key=self._key())
+        trail.append("TEST")
+        entry = json.loads(path.read_text().strip())
+        assert len(entry["hash"]) == 64
+        int(entry["hash"], 16)
+
+    def test_data_field_stored(self, tmp_path):
+        path = tmp_path / "audit-trail.jsonl"
+        trail = AuditTrail(path, key=self._key())
+        trail.append("TEST", data={"cost": 4.20, "phase": "B"})
+        entry = json.loads(path.read_text().strip())
+        assert entry["data"] == {"cost": 4.20, "phase": "B"}
+
+    def test_appends_to_existing_file(self, tmp_path):
+        path = tmp_path / "audit-trail.jsonl"
+        trail = AuditTrail(path, key=self._key())
+        trail.append("A")
+        trail.append("B")
+        trail2 = AuditTrail(path, key=self._key())
+        trail2.append("C")
+        lines = path.read_text().strip().split("\n")
+        assert len(lines) == 3
+        entries = [json.loads(ln) for ln in lines]
+        assert entries[2]["seq"] == 2
+        assert entries[2]["prev_hash"] == entries[1]["hash"]
+
+    def test_disabled_trail_writes_nothing(self, tmp_path):
+        trail = AuditTrail.disabled()
+        trail.append("TEST")
+
+    def test_creates_parent_directory(self, tmp_path):
+        path = tmp_path / "nested" / "dir" / "audit-trail.jsonl"
+        trail = AuditTrail(path, key=self._key())
+        trail.append("TEST")
+        assert path.exists()

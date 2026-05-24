@@ -6,6 +6,7 @@ import json
 import os
 import time
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 
 @dataclass
@@ -48,3 +49,70 @@ def derive_key(env_var: str = "SW_AUDIT_KEY") -> bytes | None:
     if not raw:
         return None
     return _hkdf_sha256(raw.encode(), info=b"sw-audit-trail")
+
+
+class AuditTrail:
+    def __init__(self, path: Path, key: bytes | None = None) -> None:
+        self._path = path
+        self._key = key
+        self._seq = 0
+        self._prev_hash = ""
+        self._enabled = key is not None
+        if self._enabled:
+            self._load_last()
+
+    def _load_last(self) -> None:
+        if not self._path.exists():
+            return
+        try:
+            with open(self._path, "rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                if size == 0:
+                    return
+                chunk = min(size, 4096)
+                f.seek(-chunk, 2)
+                tail = f.read().decode("utf-8")
+            for line in reversed(tail.splitlines()):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    self._seq = entry.get("seq", 0) + 1
+                    self._prev_hash = entry.get("hash", "")
+                    return
+                except json.JSONDecodeError:
+                    continue
+        except OSError:
+            return
+
+    def append(
+        self,
+        event: str,
+        run_id: str = "",
+        milestone: str = "",
+        data: dict | None = None,
+    ) -> None:
+        if not self._enabled:
+            return
+        entry = {
+            "seq": self._seq,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "event": event,
+            "run_id": run_id,
+            "milestone": milestone,
+            "data": data or {},
+            "prev_hash": self._prev_hash,
+        }
+        canonical = _canonical_json(entry)
+        entry["hash"] = _compute_hash(canonical, self._key)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self._path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+        self._prev_hash = entry["hash"]
+        self._seq += 1
+
+    @classmethod
+    def disabled(cls) -> AuditTrail:
+        return cls(Path(os.devnull), key=None)
