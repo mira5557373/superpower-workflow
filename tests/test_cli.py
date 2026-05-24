@@ -201,3 +201,29 @@ def test_init_default_config_has_telemetry(tmp_path):
     config = json.loads((tmp_path / ".claude" / "workflow.json").read_text())
     assert "telemetry" in config
     assert config["telemetry"]["enabled"] is True
+
+
+def test_parser_dashboard_command():
+    parser = build_parser()
+    args = parser.parse_args(["dashboard"])
+    assert args.command == "dashboard"
+
+
+def test_parser_dashboard_port_flag():
+    args = build_parser().parse_args(["dashboard", "--port", "8080"])
+    assert args.port == 8080
+
+
+def test_parser_dashboard_default_port():
+    args = build_parser().parse_args(["dashboard"])
+    assert args.port is None
+
+
+def test_parser_dashboard_default_host():
+    args = build_parser().parse_args(["dashboard"])
+    assert args.host is None
+
+
+def test_parser_dashboard_host_flag():
+    args = build_parser().parse_args(["dashboard", "--host", "0.0.0.0"])
+    assert args.host == "0.0.0.0"

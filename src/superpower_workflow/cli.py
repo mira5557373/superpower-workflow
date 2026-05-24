@@ -23,6 +23,14 @@ def build_parser() -> argparse.ArgumentParser:
     metrics_p = sub.add_parser("metrics", help="Show telemetry metrics")
     metrics_p.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON")
 
+    dash_p = sub.add_parser("dashboard", help="Start web dashboard")
+    dash_p.add_argument(
+        "--host", default=None, help="Bind host (default: from config or localhost)"
+    )
+    dash_p.add_argument(
+        "--port", type=int, default=None, help="Port (default: from config or 3000)"
+    )
+
     run_p = sub.add_parser("run", help="Execute milestones")
     run_p.add_argument("--milestone", help="Run a specific milestone")
     run_p.add_argument("--from", dest="from_ms", help="Start from milestone")
@@ -156,6 +164,46 @@ def _cmd_metrics(project_root: Path, json_output: bool = False) -> None:
             print(f"    {phase}: ${cost:.2f}")
 
 
+def _cmd_dashboard(project_root: Path, host: str | None = None, port: int | None = None) -> None:
+    import time
+
+    from superpower_workflow.dashboard.data import DashboardData
+    from superpower_workflow.dashboard.server import DashboardServer
+
+    config_path = project_root / ".claude" / "workflow.json"
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text())
+            dash_cfg = config.get("dashboard", {})
+            if host is None:
+                host = dash_cfg.get("host", "localhost")
+            if port is None:
+                port = dash_cfg.get("port", 3000)
+        except (json.JSONDecodeError, OSError):
+            pass
+    host = host or "localhost"
+    port = port or 3000
+
+    data = DashboardData(project_root)
+    server = DashboardServer(data, host=host, port=port)
+    try:
+        server.start()
+    except OSError as e:
+        print(f"  Error: {e}")
+        print(f"  Port {port} may be in use. Try: sw dashboard --port <other>")
+        sys.exit(1)
+    print(f"  Dashboard running at http://{host}:{server.port}/")
+    print("  Press Ctrl+C to stop")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.stop()
+        print("\n  Dashboard stopped")
+
+
 def _cmd_decompose(project_root: Path) -> None:
     from superpower_workflow.decomposer import decompose
     from superpower_workflow.state import load_config
@@ -261,6 +309,10 @@ def main() -> None:
             print(f"    x {m} (FAILED)")
         for m in state.skipped:
             print(f"    - {m} (skipped)")
+        return
+
+    if args.command == "dashboard":
+        _cmd_dashboard(project_root, host=args.host, port=args.port)
         return
 
     if args.command == "run":
