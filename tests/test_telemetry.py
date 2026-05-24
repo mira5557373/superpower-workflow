@@ -13,6 +13,7 @@ from superpower_workflow.telemetry import (
     RetryAttempt,
     RunCompleted,
     RunStarted,
+    TelemetryEmitter,
     TelemetryEvent,
 )
 
@@ -213,3 +214,63 @@ class TestQualityEvents:
         assert d["critical_gaps"] == 0
         assert d["total_gaps_found"] == 12
         assert d["converged"] is True
+
+
+class TestTelemetryEmitter:
+    def test_emit_creates_file(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        emitter = TelemetryEmitter(path, "r1")
+        emitter.emit(RunStarted(model="opus"))
+        emitter.close()
+        assert path.exists()
+
+    def test_emit_writes_valid_jsonl(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        emitter = TelemetryEmitter(path, "r1")
+        emitter.emit(RunStarted(model="opus"))
+        emitter.emit(RunCompleted(status="complete", total_cost_usd=10.0))
+        emitter.close()
+        lines = path.read_text().strip().split("\n")
+        assert len(lines) == 2
+        for line in lines:
+            parsed = json.loads(line)
+            assert parsed["run_id"] == "r1"
+
+    def test_emit_sets_run_id(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        emitter = TelemetryEmitter(path, "run-42")
+        emitter.emit(RunStarted(model="opus"))
+        emitter.close()
+        parsed = json.loads(path.read_text().strip())
+        assert parsed["run_id"] == "run-42"
+
+    def test_emit_appends_to_existing(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        path.write_text('{"type":"old","run_id":"r0"}\n')
+        emitter = TelemetryEmitter(path, "r1")
+        emitter.emit(RunStarted(model="opus"))
+        emitter.close()
+        lines = path.read_text().strip().split("\n")
+        assert len(lines) == 2
+        assert json.loads(lines[0])["run_id"] == "r0"
+        assert json.loads(lines[1])["run_id"] == "r1"
+
+    def test_disabled_emitter_writes_nothing(self, tmp_path):
+        emitter = TelemetryEmitter.disabled()
+        emitter.emit(RunStarted(model="opus"))
+        emitter.close()
+        assert not (tmp_path / "telemetry.jsonl").exists()
+
+    def test_creates_parent_directory(self, tmp_path):
+        path = tmp_path / "nested" / "dir" / "telemetry.jsonl"
+        emitter = TelemetryEmitter(path, "r1")
+        emitter.emit(RunStarted(model="opus"))
+        emitter.close()
+        assert path.exists()
+
+    def test_close_is_idempotent(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        emitter = TelemetryEmitter(path, "r1")
+        emitter.emit(RunStarted(model="opus"))
+        emitter.close()
+        emitter.close()

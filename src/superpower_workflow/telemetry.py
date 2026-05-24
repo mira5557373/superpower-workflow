@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import asdict, dataclass
-from typing import ClassVar
+from pathlib import Path
+from typing import IO, ClassVar
 
 
 @dataclass
@@ -137,3 +138,33 @@ class GapReport(TelemetryEvent):
     deferred_gaps: int = 0
     total_gaps_found: int = 0
     converged: bool = False
+
+
+class TelemetryEmitter:
+    def __init__(self, path: Path | None, run_id: str) -> None:
+        self._path = path
+        self._run_id = run_id
+        self._file: IO[str] | None = None
+        self._enabled = path is not None
+
+    def emit(self, event: TelemetryEvent) -> None:
+        if not self._enabled:
+            return
+        event.run_id = self._run_id
+        try:
+            if self._file is None:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                self._file = open(self._path, "a", encoding="utf-8")  # noqa: SIM115
+            self._file.write(event.to_json_line() + "\n")
+            self._file.flush()
+        except OSError:
+            pass
+
+    def close(self) -> None:
+        if self._file is not None:
+            self._file.close()
+            self._file = None
+
+    @classmethod
+    def disabled(cls) -> TelemetryEmitter:
+        return cls(path=None, run_id="")
