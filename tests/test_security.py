@@ -5,6 +5,8 @@ import subprocess as subprocess_mod
 from subprocess import CompletedProcess
 from unittest.mock import patch
 
+import pytest
+
 from superpower_workflow.security import (
     HAS_CRYPTO,
     SecretsHandler,
@@ -12,6 +14,8 @@ from superpower_workflow.security import (
     sign_artifact,
     verify_signature,
 )
+
+needs_crypto = pytest.mark.skipif(not HAS_CRYPTO, reason="cryptography not installed")
 
 
 class TestSecretsHandlerResolve:
@@ -201,10 +205,8 @@ class TestSignArtifact:
             sig = sign_artifact(tag="v1.0", cwd=str(tmp_path))
         assert sig is None
 
+    @needs_crypto
     def test_sign_and_verify_roundtrip(self, tmp_path):
-        if not HAS_CRYPTO:
-            return
-
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
         private_key = Ed25519PrivateKey.generate()
@@ -242,10 +244,8 @@ class TestSignArtifact:
 
         assert valid is True
 
+    @needs_crypto
     def test_verify_returns_false_on_bad_sig(self, tmp_path):
-        if not HAS_CRYPTO:
-            return
-
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
         pub_hex = Ed25519PrivateKey.generate().public_key().public_bytes_raw().hex()
@@ -263,10 +263,8 @@ class TestSignArtifact:
             valid = verify_signature(tag="v1.0", public_key_hex=pub_hex, cwd=str(tmp_path))
         assert valid is False
 
+    @needs_crypto
     def test_verify_returns_false_when_no_note(self, tmp_path):
-        if not HAS_CRYPTO:
-            return
-
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
         pub_hex = Ed25519PrivateKey.generate().public_key().public_bytes_raw().hex()

@@ -116,6 +116,8 @@ class AuditTrail:
     def verify(self) -> tuple[bool, int]:
         if not self._path.exists():
             return True, -1
+        if self._key is None:
+            return True, -1
         prev_hash = ""
         last_valid = -1
         for line in self._path.read_text(encoding="utf-8").splitlines():

@@ -4,6 +4,8 @@ import subprocess as subprocess_mod
 from subprocess import CompletedProcess
 from unittest.mock import patch
 
+import pytest
+
 from superpower_workflow.audit import AuditTrail, _hkdf_sha256
 from superpower_workflow.logger import WorkflowLogger
 from superpower_workflow.orchestrator import Orchestrator
@@ -1306,9 +1308,11 @@ class TestSbomAndSigningIntegration:
             orch.run()
         assert len(sbom_calls) >= 1
 
+    @pytest.mark.skipif(
+        not __import__("superpower_workflow.security", fromlist=["HAS_CRYPTO"]).HAS_CRYPTO,
+        reason="cryptography not installed",
+    )
     def test_signing_called_in_phase_d(self, tmp_path):
-        if not __import__("superpower_workflow.security", fromlist=["HAS_CRYPTO"]).HAS_CRYPTO:
-            return
         config = _config(tmp_path)
         config["security"] = {
             "audit_trail": False,

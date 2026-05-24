@@ -354,3 +354,12 @@ class TestAuditTrailVerify:
         valid, last_seq = trail.verify()
         assert valid is False
         assert last_seq == 0
+
+    def test_verify_without_key_returns_valid(self, tmp_path):
+        path = tmp_path / "audit-trail.jsonl"
+        trail = AuditTrail(path, key=self._key())
+        trail.append("A")
+        no_key_trail = AuditTrail(path, key=None)
+        valid, last_seq = no_key_trail.verify()
+        assert valid is True
+        assert last_seq == -1
