@@ -728,3 +728,89 @@ class TestTelemetryRunEvents:
             orch = Orchestrator(tmp_path)
             orch.run()
         assert not (tmp_path / ".claude" / "telemetry.jsonl").exists()
+
+
+class TestTelemetryMilestonePhaseEvents:
+    def test_milestone_started_and_completed(self, tmp_path):
+        _config(tmp_path)
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        events = _read_telemetry(tmp_path)
+        ms_started = [e for e in events if e["type"] == "milestone_started"]
+        ms_completed = [e for e in events if e["type"] == "milestone_completed"]
+        assert len(ms_started) == 1
+        assert ms_started[0]["milestone"] == "m1"
+        assert len(ms_completed) == 1
+        assert ms_completed[0]["milestone"] == "m1"
+        assert ms_completed[0]["cost_usd"] > 0
+
+    def test_all_four_phases_emitted(self, tmp_path):
+        _config(tmp_path)
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        events = _read_telemetry(tmp_path)
+        phase_started = [e for e in events if e["type"] == "phase_started"]
+        phase_completed = [e for e in events if e["type"] == "phase_completed"]
+        phases = [e["phase"] for e in phase_started]
+        assert "plan" in phases
+        assert "implement" in phases
+        assert "review" in phases
+        assert "push" in phases
+        assert len(phase_completed) == 4
+
+    def test_phase_completed_has_cost_and_session(self, tmp_path):
+        _config(tmp_path)
+        with (
+            patch(
+                "superpower_workflow.orchestrator.run_claude",
+                return_value=_ok_result(cost=5.0),
+            ),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        events = _read_telemetry(tmp_path)
+        plan_done = [e for e in events if e["type"] == "phase_completed" and e["phase"] == "plan"]
+        assert len(plan_done) == 1
+        assert plan_done[0]["cost_usd"] == 5.0
+        assert plan_done[0]["session_id"] == "s1"
+
+    def test_milestone_skipped_event(self, tmp_path):
+        _config(
+            tmp_path,
+            milestones=[
+                {"name": "m1", "spec_sections": "1", "depends_on": []},
+                {"name": "m2", "spec_sections": "2", "depends_on": ["m1"]},
+            ],
+        )
+        error_result = ClaudeResult(text="fail", is_error=True)
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=error_result),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+            patch("superpower_workflow.orchestrator.time.sleep"),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        events = _read_telemetry(tmp_path)
+        skipped = [e for e in events if e["type"] == "milestone_skipped"]
+        assert any(e["milestone"] == "m2" for e in skipped)

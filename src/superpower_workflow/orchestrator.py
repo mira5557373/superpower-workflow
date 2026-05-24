@@ -30,6 +30,11 @@ from superpower_workflow.state import (
     save_state,
 )
 from superpower_workflow.telemetry import (
+    MilestoneCompleted,
+    MilestoneSkipped,
+    MilestoneStarted,
+    PhaseCompleted,
+    PhaseStarted,
     RunCompleted,
     RunStarted,
     TelemetryEmitter,
@@ -132,6 +137,12 @@ class Orchestrator:
                         name=name,
                         reason=f"depends on failed: {deps_failed}",
                     )
+                    self._telemetry.emit(
+                        MilestoneSkipped(
+                            milestone=name,
+                            reason=f"depends on failed: {deps_failed}",
+                        )
+                    )
                     print(f"  SKIP: {name} (depends on failed: {deps_failed})")
                     continue
 
@@ -149,6 +160,8 @@ class Orchestrator:
                     break
 
                 logger.log("MILESTONE_START", name=name)
+                self._telemetry.emit(MilestoneStarted(milestone=name, index=i))
+                milestone_start = time.monotonic()
                 self.state.current_milestone_index = i
                 success = False
 
@@ -160,6 +173,13 @@ class Orchestrator:
                         self.state.current_step = None
                         save_state(self.claude_dir, self.state)
                         logger.log("MILESTONE_COMPLETE", name=name, total_cost=round(cost, 2))
+                        self._telemetry.emit(
+                            MilestoneCompleted(
+                                milestone=name,
+                                cost_usd=round(cost, 2),
+                                duration_seconds=round(time.monotonic() - milestone_start, 1),
+                            )
+                        )
                         success = True
                         consecutive_failures = 0
                         break
@@ -371,6 +391,7 @@ class Orchestrator:
             PhaseState(phase="ultrathink", max_iterations=convergence.get("max_iterations", 5)),
         )
         logger.log("PHASE_A_START")
+        self._telemetry.emit(PhaseStarted(milestone=name, phase="plan"))
         r = run_claude(
             phase_a_prompt(name, context, spec, sections),
             model=model,
@@ -383,6 +404,17 @@ class Orchestrator:
         cost += r.cost_usd
         clear_phase_state(self.claude_dir)
         self._check_phase_result(r, "Phase A")
+        self._telemetry.emit(
+            PhaseCompleted(
+                milestone=name,
+                phase="plan",
+                cost_usd=r.cost_usd,
+                duration_ms=r.duration_ms,
+                session_id=r.session_id,
+                input_tokens=r.raw.get("input_tokens", 0) if r.raw else 0,
+                output_tokens=r.raw.get("output_tokens", 0) if r.raw else 0,
+            )
+        )
         logger.log("PHASE_A_COMPLETE", cost=round(r.cost_usd, 2))
 
         sha_result = subprocess.run(
@@ -402,6 +434,7 @@ class Orchestrator:
         save_state(self.claude_dir, self.state)
         plan_path = self._find_plan_path(name)
         logger.log("PHASE_B_START")
+        self._telemetry.emit(PhaseStarted(milestone=name, phase="implement"))
         r = run_claude(
             phase_b_prompt(name, context, plan_path),
             model=model,
@@ -414,6 +447,17 @@ class Orchestrator:
         cost += r.cost_usd
         self.state.last_phase_session_id = r.session_id
         self._check_phase_result(r, "Phase B")
+        self._telemetry.emit(
+            PhaseCompleted(
+                milestone=name,
+                phase="implement",
+                cost_usd=r.cost_usd,
+                duration_ms=r.duration_ms,
+                session_id=r.session_id,
+                input_tokens=r.raw.get("input_tokens", 0) if r.raw else 0,
+                output_tokens=r.raw.get("output_tokens", 0) if r.raw else 0,
+            )
+        )
         logger.log("PHASE_B_COMPLETE", cost=round(r.cost_usd, 2))
 
         # Quality Gates Checkpoint #1
@@ -461,6 +505,7 @@ class Orchestrator:
             PhaseState(phase="review", max_iterations=convergence.get("max_iterations", 5)),
         )
         logger.log("PHASE_C_START")
+        self._telemetry.emit(PhaseStarted(milestone=name, phase="review"))
         r = run_claude(
             phase_c_prompt(
                 name,
@@ -480,6 +525,17 @@ class Orchestrator:
         cost += r.cost_usd
         clear_phase_state(self.claude_dir)
         self._check_phase_result(r, "Phase C")
+        self._telemetry.emit(
+            PhaseCompleted(
+                milestone=name,
+                phase="review",
+                cost_usd=r.cost_usd,
+                duration_ms=r.duration_ms,
+                session_id=r.session_id,
+                input_tokens=r.raw.get("input_tokens", 0) if r.raw else 0,
+                output_tokens=r.raw.get("output_tokens", 0) if r.raw else 0,
+            )
+        )
         logger.log("PHASE_C_COMPLETE", cost=round(r.cost_usd, 2))
 
         # Quality Gates Checkpoint #2
@@ -516,6 +572,7 @@ class Orchestrator:
         save_state(self.claude_dir, self.state)
         branch = "main" if self.config.get("git_strategy") == "main" else f"milestone/{name}"
         logger.log("PHASE_D_START")
+        self._telemetry.emit(PhaseStarted(milestone=name, phase="push"))
         r = run_claude(
             phase_d_prompt(name, branch),
             model=model,
@@ -526,6 +583,17 @@ class Orchestrator:
             fallback_model=fallback,
         )
         cost += r.cost_usd
+        self._telemetry.emit(
+            PhaseCompleted(
+                milestone=name,
+                phase="push",
+                cost_usd=r.cost_usd,
+                duration_ms=r.duration_ms,
+                session_id=r.session_id,
+                input_tokens=r.raw.get("input_tokens", 0) if r.raw else 0,
+                output_tokens=r.raw.get("output_tokens", 0) if r.raw else 0,
+            )
+        )
         logger.log("PHASE_D_COMPLETE", cost=round(r.cost_usd, 2))
         return cost
 
