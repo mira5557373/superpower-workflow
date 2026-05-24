@@ -5,7 +5,13 @@ import subprocess as subprocess_mod
 from subprocess import CompletedProcess
 from unittest.mock import patch
 
-from superpower_workflow.security import SecretsHandler, generate_sbom
+from superpower_workflow.security import (
+    HAS_CRYPTO,
+    SecretsHandler,
+    generate_sbom,
+    sign_artifact,
+    verify_signature,
+)
 
 
 class TestSecretsHandlerResolve:
@@ -179,3 +185,97 @@ class TestGenerateSbom:
         )
         assert ok is True
         assert path == ""
+
+
+class TestSignArtifact:
+    def test_skipped_when_no_key(self, tmp_path):
+        with patch.dict(os.environ, {}, clear=True):
+            sig = sign_artifact(tag="v1.0", cwd=str(tmp_path))
+        assert sig is None
+
+    def test_skipped_when_no_crypto(self, tmp_path):
+        with (
+            patch("superpower_workflow.security.HAS_CRYPTO", False),
+            patch.dict(os.environ, {"SW_SIGN_KEY": "a" * 64}),
+        ):
+            sig = sign_artifact(tag="v1.0", cwd=str(tmp_path))
+        assert sig is None
+
+    def test_sign_and_verify_roundtrip(self, tmp_path):
+        if not HAS_CRYPTO:
+            return
+
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        private_key = Ed25519PrivateKey.generate()
+        key_bytes = private_key.private_bytes_raw()
+        key_hex = key_bytes.hex()
+        pub_hex = private_key.public_key().public_bytes_raw().hex()
+
+        tree_hash = "abc123def456"
+        sign_result = [None]
+
+        def capture_run(cmd, **kwargs):
+            if isinstance(cmd, list) and "rev-parse" in cmd:
+                return CompletedProcess(args=cmd, returncode=0, stdout=f"{tree_hash}\n", stderr="")
+            if isinstance(cmd, list) and "notes" in cmd and "add" in cmd:
+                for arg in cmd:
+                    if arg.startswith("sig:"):
+                        sign_result[0] = arg.removeprefix("sig:")
+                return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+            if isinstance(cmd, list) and "notes" in cmd and "show" in cmd:
+                sig = sign_result[0]
+                return CompletedProcess(args=cmd, returncode=0, stdout=f"sig:{sig}\n", stderr="")
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch.dict(os.environ, {"SW_SIGN_KEY": key_hex}),
+            patch("superpower_workflow.security.subprocess.run", side_effect=capture_run),
+        ):
+            sig = sign_artifact(tag="v1.0", cwd=str(tmp_path))
+
+        assert sig is not None
+        assert sign_result[0] is not None
+
+        with patch("superpower_workflow.security.subprocess.run", side_effect=capture_run):
+            valid = verify_signature(tag="v1.0", public_key_hex=pub_hex, cwd=str(tmp_path))
+
+        assert valid is True
+
+    def test_verify_returns_false_on_bad_sig(self, tmp_path):
+        if not HAS_CRYPTO:
+            return
+
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        pub_hex = Ed25519PrivateKey.generate().public_key().public_bytes_raw().hex()
+
+        def mock_run(cmd, **kwargs):
+            if isinstance(cmd, list) and "rev-parse" in cmd:
+                return CompletedProcess(args=cmd, returncode=0, stdout="abc123\n", stderr="")
+            if isinstance(cmd, list) and "notes" in cmd and "show" in cmd:
+                return CompletedProcess(
+                    args=cmd, returncode=0, stdout="sig:" + "ff" * 64 + "\n", stderr=""
+                )
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with patch("superpower_workflow.security.subprocess.run", side_effect=mock_run):
+            valid = verify_signature(tag="v1.0", public_key_hex=pub_hex, cwd=str(tmp_path))
+        assert valid is False
+
+    def test_verify_returns_false_when_no_note(self, tmp_path):
+        if not HAS_CRYPTO:
+            return
+
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        pub_hex = Ed25519PrivateKey.generate().public_key().public_bytes_raw().hex()
+
+        def mock_run(cmd, **kwargs):
+            if isinstance(cmd, list) and "notes" in cmd:
+                return CompletedProcess(args=cmd, returncode=1, stdout="", stderr="")
+            return CompletedProcess(args=cmd, returncode=0, stdout="abc\n", stderr="")
+
+        with patch("superpower_workflow.security.subprocess.run", side_effect=mock_run):
+            valid = verify_signature(tag="v1.0", public_key_hex=pub_hex, cwd=str(tmp_path))
+        assert valid is False
