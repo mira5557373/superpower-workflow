@@ -528,3 +528,81 @@ class TestQualityGateCheckpointB:
         state = load_state(tmp_path / ".claude")
         assert 3.5 in costs
         assert state.total_cost_usd > 4.0
+
+
+class TestQualityGateCheckpointC:
+    def test_checkpoint_c_runs_after_phase_c(self, tmp_path):
+        """Checkpoint #2 runs quality gates after Phase C."""
+        _config_with_gates(tmp_path)
+        gate_calls = {"n": 0}
+
+        def mock_subprocess(cmd, **kwargs):
+            if isinstance(cmd, str) and "ruff" in cmd:
+                gate_calls["n"] += 1
+                return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            if isinstance(cmd, str):
+                return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            return _smart_subprocess(cmd, **kwargs)
+
+        with (
+            patch(
+                "superpower_workflow.orchestrator.run_claude",
+                return_value=_ok_result(),
+            ),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=mock_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        # Gates called at both checkpoints (after B and after C)
+        assert gate_calls["n"] >= 2
+
+    def test_coverage_check_runs_in_checkpoint(self, tmp_path):
+        """Coverage check integrated into quality gate checkpoint."""
+        _config_with_gates(
+            tmp_path,
+            gates={
+                "lint": None,
+                "coverage_command": "echo ok",
+                "coverage_threshold": 80,
+                "coverage_report_path": "coverage.json",
+            },
+        )
+        (tmp_path / "coverage.json").write_text(
+            json.dumps({"totals": {"percent_covered_display": "90"}})
+        )
+        success = CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        with (
+            patch(
+                "superpower_workflow.orchestrator.run_claude",
+                return_value=_ok_result(),
+            ),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                return_value=success,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        state = load_state(tmp_path / ".claude")
+        assert "m1" in state.completed
+
+    def test_backward_compatible_no_quality_gates(self, tmp_path):
+        """No quality_gates in config -> full run works as before."""
+        _config(tmp_path)
+        with (
+            patch(
+                "superpower_workflow.orchestrator.run_claude",
+                return_value=_ok_result(),
+            ),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        state = load_state(tmp_path / ".claude")
+        assert "m1" in state.completed
