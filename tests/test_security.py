@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import subprocess as subprocess_mod
+from subprocess import CompletedProcess
 from unittest.mock import patch
 
-from superpower_workflow.security import SecretsHandler
+from superpower_workflow.security import SecretsHandler, generate_sbom
 
 
 class TestSecretsHandlerResolve:
@@ -97,3 +99,83 @@ class TestSecretsHandlerRedact:
             handler = SecretsHandler(config)
             result = handler.redact("abc text")
         assert result == "abc text"
+
+
+class TestGenerateSbom:
+    def test_runs_configured_tool(self, tmp_path):
+        calls = []
+
+        def mock_run(cmd, **kwargs):
+            calls.append(cmd)
+            output = tmp_path / "sbom.json"
+            output.write_text('{"bomFormat": "CycloneDX"}')
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with patch("superpower_workflow.security.subprocess.run", side_effect=mock_run):
+            ok, path = generate_sbom(
+                tool_cmd="pip-audit --format=cyclonedx-json --output {output}",
+                output_path=str(tmp_path / "sbom.json"),
+                cwd=str(tmp_path),
+            )
+        assert ok is True
+        assert len(calls) == 1
+        assert "pip-audit" in calls[0]
+
+    def test_returns_false_on_failure(self, tmp_path):
+        fail = CompletedProcess(args=[], returncode=1, stdout="", stderr="err")
+        with patch("superpower_workflow.security.subprocess.run", return_value=fail):
+            ok, _ = generate_sbom(
+                tool_cmd="bad-tool",
+                output_path=str(tmp_path / "sbom.json"),
+                cwd=str(tmp_path),
+            )
+        assert ok is False
+
+    def test_returns_false_on_timeout(self, tmp_path):
+        def mock_run(cmd, **kwargs):
+            raise subprocess_mod.TimeoutExpired(cmd=cmd, timeout=300)
+
+        with patch("superpower_workflow.security.subprocess.run", side_effect=mock_run):
+            ok, _ = generate_sbom(
+                tool_cmd="slow-tool",
+                output_path=str(tmp_path / "sbom.json"),
+                cwd=str(tmp_path),
+            )
+        assert ok is False
+
+    def test_returns_false_on_missing_tool(self, tmp_path):
+        def mock_run(cmd, **kwargs):
+            raise FileNotFoundError("tool not found")
+
+        with patch("superpower_workflow.security.subprocess.run", side_effect=mock_run):
+            ok, _ = generate_sbom(
+                tool_cmd="nonexistent",
+                output_path=str(tmp_path / "sbom.json"),
+                cwd=str(tmp_path),
+            )
+        assert ok is False
+
+    def test_milestone_placeholder_in_output_path(self, tmp_path):
+        calls = []
+
+        def mock_run(cmd, **kwargs):
+            calls.append(cmd)
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with patch("superpower_workflow.security.subprocess.run", side_effect=mock_run):
+            ok, path = generate_sbom(
+                tool_cmd="pip-audit --format=cyclonedx-json --output {output}",
+                output_path=str(tmp_path / "sbom-{milestone}.json"),
+                cwd=str(tmp_path),
+                milestone="auth-module",
+            )
+        assert "auth-module" in path
+
+    def test_skipped_when_no_tool(self, tmp_path):
+        ok, path = generate_sbom(
+            tool_cmd="",
+            output_path="",
+            cwd=str(tmp_path),
+        )
+        assert ok is True
+        assert path == ""

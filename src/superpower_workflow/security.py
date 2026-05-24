@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import shlex
+import subprocess
 
 
 class SecretsHandler:
@@ -33,3 +35,26 @@ class SecretsHandler:
             if value:
                 text = text.replace(value, "[REDACTED]")
         return text
+
+
+def generate_sbom(
+    tool_cmd: str,
+    output_path: str,
+    cwd: str,
+    milestone: str = "",
+) -> tuple[bool, str]:
+    if not tool_cmd:
+        return True, ""
+    resolved_path = output_path.replace("{milestone}", milestone)
+    expanded = tool_cmd.replace("{output}", resolved_path)
+    try:
+        result = subprocess.run(
+            shlex.split(expanded),
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            timeout=300,
+        )
+        return result.returncode == 0, resolved_path
+    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+        return False, resolved_path
