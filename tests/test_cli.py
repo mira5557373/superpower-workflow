@@ -87,3 +87,104 @@ def test_init_skips_if_exists(tmp_path: Path):
     _cmd_init(tmp_path)
     config = json.loads((claude_dir / "workflow.json").read_text())
     assert config.get("existing") is True
+
+
+def test_metrics_subcommand_exists():
+    parser = build_parser()
+    args = parser.parse_args(["metrics"])
+    assert args.command == "metrics"
+
+
+def test_metrics_json_flag():
+    parser = build_parser()
+    args = parser.parse_args(["metrics", "--json"])
+    assert args.json_output is True
+
+
+def test_metrics_no_telemetry_file(tmp_path, capsys):
+    from superpower_workflow.cli import _cmd_metrics
+
+    _cmd_metrics(tmp_path)
+    captured = capsys.readouterr()
+    assert "No telemetry data" in captured.out
+
+
+def test_metrics_human_output(tmp_path, capsys):
+    from superpower_workflow.cli import _cmd_metrics
+
+    telemetry_path = tmp_path / ".claude" / "telemetry.jsonl"
+    telemetry_path.parent.mkdir(parents=True)
+    events = [
+        {"type": "run_started", "run_id": "r1", "model": "opus", "milestone_count": 2},
+        {
+            "type": "milestone_completed",
+            "run_id": "r1",
+            "milestone": "m1",
+            "cost_usd": 10.0,
+            "duration_seconds": 300.0,
+        },
+        {
+            "type": "milestone_completed",
+            "run_id": "r1",
+            "milestone": "m2",
+            "cost_usd": 15.0,
+            "duration_seconds": 400.0,
+        },
+        {
+            "type": "phase_completed",
+            "run_id": "r1",
+            "phase": "plan",
+            "cost_usd": 5.0,
+            "duration_ms": 60000,
+        },
+        {
+            "type": "phase_completed",
+            "run_id": "r1",
+            "phase": "implement",
+            "cost_usd": 20.0,
+            "duration_ms": 120000,
+        },
+        {
+            "type": "run_completed",
+            "run_id": "r1",
+            "status": "complete",
+            "total_cost_usd": 25.0,
+            "completed_count": 2,
+            "duration_seconds": 700.0,
+        },
+    ]
+    with open(telemetry_path, "w") as f:
+        for e in events:
+            f.write(json.dumps(e) + "\n")
+
+    _cmd_metrics(tmp_path)
+    captured = capsys.readouterr()
+    assert "$25.0" in captured.out or "25.0" in captured.out
+    assert "m1" in captured.out
+    assert "complete" in captured.out
+
+
+def test_metrics_json_output(tmp_path, capsys):
+    from superpower_workflow.cli import _cmd_metrics
+
+    telemetry_path = tmp_path / ".claude" / "telemetry.jsonl"
+    telemetry_path.parent.mkdir(parents=True)
+    events = [
+        {
+            "type": "run_completed",
+            "run_id": "r1",
+            "status": "complete",
+            "total_cost_usd": 25.0,
+            "completed_count": 2,
+            "duration_seconds": 700.0,
+        },
+    ]
+    with open(telemetry_path, "w") as f:
+        for e in events:
+            f.write(json.dumps(e) + "\n")
+
+    _cmd_metrics(tmp_path, json_output=True)
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert "total_cost" in data
+    assert "cost_per_task" in data

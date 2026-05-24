@@ -20,6 +20,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="Show progress")
     sub.add_parser("resume", help="Resume from failure point")
 
+    metrics_p = sub.add_parser("metrics", help="Show telemetry metrics")
+    metrics_p.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON")
+
     run_p = sub.add_parser("run", help="Execute milestones")
     run_p.add_argument("--milestone", help="Run a specific milestone")
     run_p.add_argument("--from", dest="from_ms", help="Start from milestone")
@@ -87,6 +90,56 @@ def _cmd_init(project_root: Path) -> None:
 
     print(f"  Created {config_path}")
     print("  Edit the spec path and verify_commands, then run: sw decompose")
+
+
+def _cmd_metrics(project_root: Path, json_output: bool = False) -> None:
+    from superpower_workflow.telemetry import TelemetryReader
+
+    path = project_root / ".claude" / "telemetry.jsonl"
+    reader = TelemetryReader(path)
+    events = reader.events()
+
+    if not events:
+        print("  No telemetry data. Run: sw run")
+        return
+
+    if json_output:
+        metrics = {
+            "total_cost": reader.total_cost(),
+            "cost_per_task": reader.cost_per_successful_task(),
+            "cost_by_milestone": reader.cost_by_milestone(),
+            "cost_by_phase": reader.cost_by_phase(),
+            "duration_by_milestone": reader.duration_by_milestone(),
+            "rework_rate": reader.rework_rate(),
+            "defect_density": reader.defect_density(),
+            "quality_trend": reader.quality_trend(),
+            "total_duration": reader.total_duration(),
+        }
+        print(json.dumps(metrics, indent=2))
+        return
+
+    run_id = reader.latest_run_id()
+    completed = reader.events_by_type("run_completed")
+    latest = completed[-1] if completed else {}
+
+    print(f"  Status: {latest.get('status', 'unknown')}")
+    print(f"  Total cost: ${reader.total_cost():.2f}")
+    print(f"  Cost per task: ${reader.cost_per_successful_task():.2f}")
+    print(f"  Total duration: {reader.total_duration():.0f}s")
+    print(f"  Rework rate: {reader.rework_rate():.1%}")
+    print(f"  Defect density: {reader.defect_density():.1%}")
+
+    cost_ms = reader.cost_by_milestone(run_id=run_id)
+    if cost_ms:
+        print("  Cost by milestone:")
+        for name, cost in cost_ms.items():
+            print(f"    {name}: ${cost:.2f}")
+
+    cost_ph = reader.cost_by_phase(run_id=run_id)
+    if cost_ph:
+        print("  Cost by phase:")
+        for phase, cost in cost_ph.items():
+            print(f"    {phase}: ${cost:.2f}")
 
 
 def _cmd_decompose(project_root: Path) -> None:
@@ -158,6 +211,10 @@ def main() -> None:
             status = "+" if r.ok else "x"
             print(f"  {status} {r.message}")
         sys.exit(0 if all(r.ok for r in results) else 1)
+
+    if args.command == "metrics":
+        _cmd_metrics(project_root, json_output=getattr(args, "json_output", False))
+        return
 
     if args.command == "decompose":
         _cmd_decompose(project_root)
