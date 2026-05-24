@@ -16,6 +16,9 @@ description: Use when reviewing a plan, spec, or implementation for gaps — per
 7. **Categorize + fix:** Fix in priority order: 🔴 first, then 🟡, then 🔵. Flag 🔴-architectural (don't auto-fix).
 8. **Write gap report:** .claude/.gap-report.json with gap_summaries tagged [ultrathink].
 9. **Verify:** (implementation mode) Run test + lint. Must be green.
+10. **Quality gates:** If the project has `quality_gates` configured in workflow.json,
+    the orchestrator will independently verify lint, SAST, coverage, and dep scan
+    after this phase. Ensure your fixes don't introduce new lint or security issues.
 
 For detailed heuristics, severity calibration, quality standards, and anti-patterns, read references/heuristics.md in this skill directory.
 
