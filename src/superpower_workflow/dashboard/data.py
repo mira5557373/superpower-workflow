@@ -63,6 +63,7 @@ class DashboardData:
     def __init__(self, project_root: Path) -> None:
         self._root = project_root
         self._claude_dir = project_root / ".claude"
+        self._last_mtimes: dict[str, float] = {}
 
     def _load_config(self) -> dict:
         path = self._claude_dir / "workflow.json"
@@ -76,6 +77,27 @@ class DashboardData:
     def _telemetry_path(self, config: dict) -> Path:
         rel = config.get("telemetry", {}).get("path", ".claude/telemetry.jsonl")
         return self._root / rel
+
+    def _get_watched_paths(self, config: dict | None = None) -> list[Path]:
+        if config is None:
+            config = self._load_config()
+        return [
+            self._claude_dir / "workflow-state.json",
+            self._telemetry_path(config),
+        ]
+
+    def _snapshot_mtimes(self) -> dict[str, float]:
+        mtimes: dict[str, float] = {}
+        for p in self._get_watched_paths():
+            try:
+                mtimes[str(p)] = p.stat().st_mtime
+            except OSError:
+                mtimes[str(p)] = 0.0
+        return mtimes
+
+    def has_changed(self) -> bool:
+        current = self._snapshot_mtimes()
+        return current != self._last_mtimes
 
     def load_snapshot(self) -> DashboardSnapshot:
         config = self._load_config()
@@ -113,6 +135,7 @@ class DashboardData:
 
         milestone_names = [m.get("name", "") for m in milestones]
 
+        self._last_mtimes = self._snapshot_mtimes()
         return DashboardSnapshot(
             run_id=run_id,
             status=status,

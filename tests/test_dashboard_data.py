@@ -243,3 +243,49 @@ class TestDashboardDataLoadSnapshot:
         data = DashboardData(tmp_path)
         snap = data.load_snapshot()
         assert snap.model == "opus"
+
+
+class TestDashboardDataHasChanged:
+    def test_detects_state_file_change(self, tmp_path):
+        _setup_project(
+            tmp_path,
+            milestones=[{"name": "m1"}],
+            state={"current_step": "plan", "completed": [], "failed": [], "skipped": []},
+        )
+        data = DashboardData(tmp_path)
+        data.load_snapshot()
+        assert data.has_changed() is False
+
+        state_path = tmp_path / ".claude" / "workflow-state.json"
+        state_path.write_text(json.dumps({"current_step": "implement", "completed": []}))
+        assert data.has_changed() is True
+
+    def test_detects_telemetry_file_change(self, tmp_path):
+        _setup_project(tmp_path, milestones=[{"name": "m1"}])
+        data = DashboardData(tmp_path)
+        data.load_snapshot()
+        assert data.has_changed() is False
+
+        tpath = tmp_path / ".claude" / "telemetry.jsonl"
+        tpath.write_text('{"type":"run_started","run_id":"r1"}\n')
+        assert data.has_changed() is True
+
+    def test_no_change_returns_false(self, tmp_path):
+        _setup_project(tmp_path, milestones=[])
+        data = DashboardData(tmp_path)
+        data.load_snapshot()
+        assert data.has_changed() is False
+        assert data.has_changed() is False
+
+    def test_missing_files_no_crash(self, tmp_path):
+        (tmp_path / ".claude").mkdir(parents=True, exist_ok=True)
+        data = DashboardData(tmp_path)
+        data.load_snapshot()
+        assert data.has_changed() is False
+
+    def test_new_file_creation_detected(self, tmp_path):
+        (tmp_path / ".claude").mkdir(parents=True, exist_ok=True)
+        data = DashboardData(tmp_path)
+        data.load_snapshot()
+        (tmp_path / ".claude" / "workflow-state.json").write_text("{}")
+        assert data.has_changed() is True
