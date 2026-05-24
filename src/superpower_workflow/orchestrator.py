@@ -531,6 +531,32 @@ class Orchestrator:
         except (json.JSONDecodeError, ValueError, KeyError):
             return 0.0
 
+    def _check_trailers(self, since_sha: str, logger: WorkflowLogger) -> None:
+        """Verify git trailers exist on commits since since_sha. Warn-only."""
+        gates = self.config.get("quality_gates", {})
+        if not gates.get("require_git_trailers"):
+            return
+        try:
+            result = subprocess.run(
+                ["git", "log", "--format=%H %b", f"{since_sha}..HEAD"],
+                capture_output=True,
+                text=True,
+                cwd=self.cwd,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                return
+            commits = result.stdout.strip().split("\n")
+            missing = [c[:8] for c in commits if c.strip() and "Generated-By:" not in c]
+            if missing:
+                logger.log(
+                    "TRAILER_MISSING",
+                    count=len(missing),
+                    commits=str(missing[:5]),
+                )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+
     def _find_plan_path(self, name: str) -> str:
         plans_dir = Path(self.cwd) / "docs" / "superpowers" / "plans"
         if plans_dir.exists():

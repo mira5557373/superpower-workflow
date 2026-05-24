@@ -356,3 +356,66 @@ class TestCheckCoverage:
             result = orch._check_coverage(logger)
             logger.close()
         assert result is False
+
+
+class TestCheckTrailers:
+    def test_warns_on_missing_trailers(self, tmp_path):
+        _config_with_gates(tmp_path, gates={"lint": None, "require_git_trailers": True})
+
+        def mock_subprocess(cmd, **kwargs):
+            if isinstance(cmd, list) and any("--format=%H %b" in c for c in cmd):
+                return CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="abc12345 no trailer here\n",
+                    stderr="",
+                )
+            return _smart_subprocess(cmd, **kwargs)
+
+        with patch(
+            "superpower_workflow.orchestrator.subprocess.run",
+            side_effect=mock_subprocess,
+        ):
+            orch = Orchestrator(tmp_path)
+            logger = WorkflowLogger(tmp_path / ".claude", "test")
+            orch._check_trailers("abc123", logger)
+            logger.close()
+        log_content = (tmp_path / ".claude" / "workflow-test.log").read_text()
+        assert "TRAILER_MISSING" in log_content
+
+    def test_skips_when_not_configured(self, tmp_path):
+        _config(tmp_path)
+        with patch(
+            "superpower_workflow.orchestrator.subprocess.run",
+            side_effect=_smart_subprocess,
+        ):
+            orch = Orchestrator(tmp_path)
+            logger = WorkflowLogger(tmp_path / ".claude", "test")
+            orch._check_trailers("abc123", logger)
+            logger.close()
+        log_content = (tmp_path / ".claude" / "workflow-test.log").read_text()
+        assert "TRAILER" not in log_content
+
+    def test_no_warning_when_trailers_present(self, tmp_path):
+        _config_with_gates(tmp_path, gates={"lint": None, "require_git_trailers": True})
+
+        def mock_subprocess(cmd, **kwargs):
+            if isinstance(cmd, list) and any("--format=%H %b" in c for c in cmd):
+                return CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="abc12345 Generated-By: claude\n",
+                    stderr="",
+                )
+            return _smart_subprocess(cmd, **kwargs)
+
+        with patch(
+            "superpower_workflow.orchestrator.subprocess.run",
+            side_effect=mock_subprocess,
+        ):
+            orch = Orchestrator(tmp_path)
+            logger = WorkflowLogger(tmp_path / ".claude", "test")
+            orch._check_trailers("abc123", logger)
+            logger.close()
+        log_content = (tmp_path / ".claude" / "workflow-test.log").read_text()
+        assert "TRAILER_MISSING" not in log_content
