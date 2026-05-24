@@ -227,3 +227,19 @@ def test_parser_dashboard_default_host():
 def test_parser_dashboard_host_flag():
     args = build_parser().parse_args(["dashboard", "--host", "0.0.0.0"])
     assert args.host == "0.0.0.0"
+
+
+def test_parser_watch_command():
+    parser = build_parser()
+    args = parser.parse_args(["watch"])
+    assert args.command == "watch"
+
+
+def test_parser_watch_interval_flag():
+    args = build_parser().parse_args(["watch", "--interval", "5"])
+    assert args.interval == 5.0
+
+
+def test_parser_watch_default_interval():
+    args = build_parser().parse_args(["watch"])
+    assert args.interval is None

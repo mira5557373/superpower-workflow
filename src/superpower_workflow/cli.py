@@ -31,6 +31,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--port", type=int, default=None, help="Port (default: from config or 3000)"
     )
 
+    watch_p = sub.add_parser("watch", help="Terminal watch mode (TUI)")
+    watch_p.add_argument(
+        "--interval",
+        type=float,
+        default=None,
+        help="Refresh interval in seconds (default: from config or 2)",
+    )
+
     run_p = sub.add_parser("run", help="Execute milestones")
     run_p.add_argument("--milestone", help="Run a specific milestone")
     run_p.add_argument("--from", dest="from_ms", help="Start from milestone")
@@ -204,6 +212,25 @@ def _cmd_dashboard(project_root: Path, host: str | None = None, port: int | None
         print("\n  Dashboard stopped")
 
 
+def _cmd_watch(project_root: Path, interval: float | None = None) -> None:
+    from superpower_workflow.dashboard.data import DashboardData
+    from superpower_workflow.dashboard.watch import TerminalWatch
+
+    if interval is None:
+        config_path = project_root / ".claude" / "workflow.json"
+        if config_path.exists():
+            try:
+                config = json.loads(config_path.read_text())
+                interval = config.get("dashboard", {}).get("watch_interval", 2.0)
+            except (json.JSONDecodeError, OSError):
+                pass
+    interval = interval or 2.0
+
+    data = DashboardData(project_root)
+    watch = TerminalWatch(data, interval=interval)
+    watch.start()
+
+
 def _cmd_decompose(project_root: Path) -> None:
     from superpower_workflow.decomposer import decompose
     from superpower_workflow.state import load_config
@@ -313,6 +340,10 @@ def main() -> None:
 
     if args.command == "dashboard":
         _cmd_dashboard(project_root, host=args.host, port=args.port)
+        return
+
+    if args.command == "watch":
+        _cmd_watch(project_root, interval=args.interval)
         return
 
     if args.command == "run":
