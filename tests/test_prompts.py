@@ -58,7 +58,7 @@ def test_phase_c_prompt_includes_verification():
     )
     assert "abc123" in p
     assert "pytest -q" in p
-    assert "critical-mechanical" in p
+    assert "production-readiness-review" in p
     assert ".gap-report.json" in p
     assert "post-impl-review" in p
 
@@ -69,3 +69,45 @@ def test_phase_d_prompt_includes_tag_and_branch():
     assert "main" in p
     assert "TAG_ONLY" in p
     assert "git push" in p
+
+
+def test_phase_a_prompt_includes_read_modules_instruction():
+    p = phase_a_prompt(name="m1", context_summary="", spec_path="s.md", sections="1")
+    assert "Read CLAUDE.md" in p
+    assert "Read the __init__.py" in p
+
+
+def test_phase_a_prompt_includes_gap_summaries_schema():
+    p = phase_a_prompt(name="m1", context_summary="", spec_path="s.md", sections="1")
+    assert "gap_summaries" in p
+
+
+def test_phase_b_prompt_includes_production_mindset():
+    p = phase_b_prompt(name="m1", context_summary="", plan_path="plan.md")
+    assert "production deployment" in p
+
+
+def test_phase_c_prompt_includes_production_review():
+    p = phase_c_prompt(
+        name="m1",
+        context_summary="",
+        plan_commit_sha="abc",
+        verify_test="t",
+        verify_lint="l",
+        verify_format="f",
+    )
+    assert "production-readiness-review" in p
+
+
+def test_phase_c_prompt_fix_order():
+    p = phase_c_prompt(
+        name="m1",
+        context_summary="",
+        plan_commit_sha="abc",
+        verify_test="t",
+        verify_lint="l",
+        verify_format="f",
+    )
+    post_impl_pos = p.index("post-impl")
+    production_pos = p.index("production issues")
+    assert post_impl_pos < production_pos
