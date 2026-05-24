@@ -1,7 +1,9 @@
 import json
+import subprocess as subprocess_mod
 from subprocess import CompletedProcess
 from unittest.mock import patch
 
+from superpower_workflow.logger import WorkflowLogger
 from superpower_workflow.orchestrator import Orchestrator
 from superpower_workflow.runner import ClaudeResult
 from superpower_workflow.state import WorkflowState, load_state, save_state
@@ -45,6 +47,18 @@ def _smart_subprocess(*args, **kwargs):
         if cmd[1] == "log":
             return CompletedProcess(args=cmd, returncode=0, stdout="abc123\n", stderr="")
     return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+
+def _config_with_gates(tmp_path, gates=None):
+    """Create config with quality_gates section."""
+    config = _config(tmp_path)
+    config["quality_gates"] = gates or {
+        "lint": "ruff check .",
+        "sast": None,
+        "dep_scan": None,
+    }
+    (tmp_path / ".claude" / "workflow.json").write_text(json.dumps(config))
+    return config
 
 
 def test_orchestrator_runs_all_four_phases(tmp_path):
@@ -181,3 +195,79 @@ def test_config_validation_passes_valid(tmp_path):
         }
     )
     assert errors == []
+
+
+class TestVerifyQualityGates:
+    def test_all_gates_pass(self, tmp_path):
+        _config_with_gates(tmp_path)
+        success = CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
+        with patch("superpower_workflow.orchestrator.subprocess.run", return_value=success):
+            orch = Orchestrator(tmp_path)
+            logger = WorkflowLogger(tmp_path / ".claude", "test")
+            passed, failures = orch._verify_quality_gates(logger)
+            logger.close()
+        assert passed is True
+        assert failures == []
+
+    def test_lint_failure_collected(self, tmp_path):
+        _config_with_gates(tmp_path)
+
+        def mock_run(cmd, **kwargs):
+            if isinstance(cmd, str) and "ruff" in cmd:
+                return CompletedProcess(
+                    args=[], returncode=1, stdout="E501 line too long", stderr=""
+                )
+            return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with patch("superpower_workflow.orchestrator.subprocess.run", side_effect=mock_run):
+            orch = Orchestrator(tmp_path)
+            logger = WorkflowLogger(tmp_path / ".claude", "test")
+            passed, failures = orch._verify_quality_gates(logger)
+            logger.close()
+        assert passed is False
+        assert any("lint" in f for f in failures)
+
+    def test_multiple_gates_fail(self, tmp_path):
+        _config_with_gates(
+            tmp_path,
+            gates={"lint": "ruff check .", "sast": "bandit -r src/", "dep_scan": None},
+        )
+        fail = CompletedProcess(args=[], returncode=1, stdout="fail", stderr="")
+        with patch("superpower_workflow.orchestrator.subprocess.run", return_value=fail):
+            orch = Orchestrator(tmp_path)
+            logger = WorkflowLogger(tmp_path / ".claude", "test")
+            passed, failures = orch._verify_quality_gates(logger)
+            logger.close()
+        assert passed is False
+        assert len(failures) == 2
+        assert any("lint" in f for f in failures)
+        assert any("sast" in f for f in failures)
+
+    def test_skip_when_not_configured(self, tmp_path):
+        _config(tmp_path)
+        with patch(
+            "superpower_workflow.orchestrator.subprocess.run",
+            side_effect=_smart_subprocess,
+        ):
+            orch = Orchestrator(tmp_path)
+            logger = WorkflowLogger(tmp_path / ".claude", "test")
+            passed, failures = orch._verify_quality_gates(logger)
+            logger.close()
+        assert passed is True
+        assert failures == []
+
+    def test_timeout_handled_gracefully(self, tmp_path):
+        _config_with_gates(tmp_path)
+
+        def mock_run(cmd, **kwargs):
+            if isinstance(cmd, str):
+                raise subprocess_mod.TimeoutExpired(cmd=cmd, timeout=300)
+            return _smart_subprocess(cmd, **kwargs)
+
+        with patch("superpower_workflow.orchestrator.subprocess.run", side_effect=mock_run):
+            orch = Orchestrator(tmp_path)
+            logger = WorkflowLogger(tmp_path / ".claude", "test")
+            passed, failures = orch._verify_quality_gates(logger)
+            logger.close()
+        assert passed is False
+        assert any("lint" in f for f in failures)

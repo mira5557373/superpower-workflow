@@ -449,6 +449,36 @@ class Orchestrator:
             return all_ms[start:end]
         return all_ms
 
+    def _verify_quality_gates(self, logger: WorkflowLogger) -> tuple[bool, list[str]]:
+        """Run all configured quality gates. Returns (all_passed, failure_details)."""
+        gates = self.config.get("quality_gates", {})
+        if not gates:
+            return True, []
+        failures: list[str] = []
+        for gate_name in ("lint", "sast", "secret_scan", "dep_scan"):
+            cmd = gates.get(gate_name)
+            if not cmd:
+                continue
+            try:
+                result = subprocess.run(
+                    cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    cwd=self.cwd,
+                    timeout=300,
+                )
+                if result.returncode != 0:
+                    detail = (result.stdout or result.stderr)[:500]
+                    failures.append(f"{gate_name}: {detail}")
+                    logger.log("QUALITY_GATE_FAILED", gate=gate_name)
+                else:
+                    logger.log("QUALITY_GATE_PASSED", gate=gate_name)
+            except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+                failures.append(f"{gate_name}: {e}")
+                logger.log("QUALITY_GATE_ERROR", gate=gate_name, error=str(e))
+        return len(failures) == 0, failures
+
     def _find_plan_path(self, name: str) -> str:
         plans_dir = Path(self.cwd) / "docs" / "superpowers" / "plans"
         if plans_dir.exists():
