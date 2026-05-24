@@ -419,3 +419,112 @@ class TestCheckTrailers:
             logger.close()
         log_content = (tmp_path / ".claude" / "workflow-test.log").read_text()
         assert "TRAILER_MISSING" not in log_content
+
+
+class TestQualityGateCheckpointB:
+    def test_gates_pass_no_fix_invocation(self, tmp_path):
+        """Quality gates pass after Phase B -> no fix prompt sent."""
+        _config_with_gates(tmp_path)
+        prompts = []
+
+        def mock_run_claude(prompt, **kwargs):
+            prompts.append(prompt)
+            return _ok_result()
+
+        def mock_subprocess(cmd, **kwargs):
+            if isinstance(cmd, str):
+                return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            return _smart_subprocess(cmd, **kwargs)
+
+        with (
+            patch(
+                "superpower_workflow.orchestrator.run_claude",
+                side_effect=mock_run_claude,
+            ),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=mock_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        fix_prompts = [p for p in prompts if "Quality gates failed" in p]
+        assert fix_prompts == []
+
+    def test_fix_invoked_when_gate_fails(self, tmp_path):
+        """Quality gates fail after Phase B -> fix prompt with failure details."""
+        _config_with_gates(tmp_path)
+        prompts = []
+
+        def mock_run_claude(prompt, **kwargs):
+            prompts.append(prompt)
+            return _ok_result()
+
+        gate_calls = {"n": 0}
+
+        def mock_subprocess(cmd, **kwargs):
+            if isinstance(cmd, str) and "ruff" in cmd:
+                gate_calls["n"] += 1
+                if gate_calls["n"] == 1:
+                    return CompletedProcess(
+                        args=[], returncode=1, stdout="E501 line too long", stderr=""
+                    )
+                return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            if isinstance(cmd, str):
+                return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            return _smart_subprocess(cmd, **kwargs)
+
+        with (
+            patch(
+                "superpower_workflow.orchestrator.run_claude",
+                side_effect=mock_run_claude,
+            ),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=mock_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        fix_prompts = [p for p in prompts if "Quality gates failed" in p]
+        assert len(fix_prompts) >= 1
+        assert "lint" in fix_prompts[0]
+        assert "E501" in fix_prompts[0]
+
+    def test_fix_cost_tracked_from_result(self, tmp_path):
+        """Fix invocation cost comes from ClaudeResult, not hardcoded."""
+        _config_with_gates(tmp_path)
+        costs = []
+
+        def mock_run_claude(prompt, **kwargs):
+            result = _ok_result(cost=3.5 if "Quality gates failed" in prompt else 1.0)
+            costs.append(result.cost_usd)
+            return result
+
+        gate_calls = {"n": 0}
+
+        def mock_subprocess(cmd, **kwargs):
+            if isinstance(cmd, str) and "ruff" in cmd:
+                gate_calls["n"] += 1
+                if gate_calls["n"] == 1:
+                    return CompletedProcess(args=[], returncode=1, stdout="fail", stderr="")
+                return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            if isinstance(cmd, str):
+                return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            return _smart_subprocess(cmd, **kwargs)
+
+        with (
+            patch(
+                "superpower_workflow.orchestrator.run_claude",
+                side_effect=mock_run_claude,
+            ),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=mock_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        state = load_state(tmp_path / ".claude")
+        assert 3.5 in costs
+        assert state.total_cost_usd > 4.0

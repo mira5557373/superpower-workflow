@@ -374,6 +374,30 @@ class Orchestrator:
         self._check_phase_result(r, "Phase B")
         logger.log("PHASE_B_COMPLETE", cost=round(r.cost_usd, 2))
 
+        # Quality Gates Checkpoint #1
+        self.state.current_step = "quality_check_b"
+        save_state(self.claude_dir, self.state)
+        passed, failures = self._verify_quality_gates(logger)
+        if not passed:
+            fix_prompt = (
+                f"Quality gates failed after Phase B for {name}:\n"
+                + "\n".join(f"- {f}" for f in failures)
+                + "\nFix ALL issues. Commit the fix."
+            )
+            r = run_claude(
+                fix_prompt,
+                model=model,
+                effort="high",
+                budget=10.0,
+                cwd=self.cwd,
+                system_prompt=self.sys_prompt,
+                fallback_model=fallback,
+            )
+            cost += r.cost_usd
+            passed, failures = self._verify_quality_gates(logger)
+            if not passed:
+                logger.log("QUALITY_GATES_STILL_FAILING", failures=str(failures))
+
         # Refresh context to include what Phase B built
         context = build_context_summary(
             self.state.completed,
