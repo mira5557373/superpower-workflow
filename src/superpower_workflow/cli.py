@@ -89,6 +89,15 @@ def _cmd_init(project_root: Path) -> None:
             "port": 3000,
             "watch_interval": 2,
         },
+        "security": {
+            "audit_trail": False,
+            "sign_artifacts": False,
+            "sbom_tool": "",
+            "sbom_output": ".claude/sbom-{milestone}.json",
+            "public_key": "",
+        },
+        "secrets": {},
+        "policies": {},
         "notification_webhook": None,
         "milestones": [],
     }
@@ -111,6 +120,7 @@ def _cmd_init(project_root: Path) -> None:
         ".claude/.workflow.lock",
         ".claude/workflow-*.log",
         ".claude/telemetry.jsonl",
+        ".claude/audit-trail.jsonl",
     ]
     existing = gitignore.read_text() if gitignore.exists() else ""
     new_entries = [e for e in entries if e not in existing]

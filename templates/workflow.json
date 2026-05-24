@@ -37,6 +37,15 @@
     "port": 3000,
     "watch_interval": 2
   },
+  "security": {
+    "audit_trail": false,
+    "sign_artifacts": false,
+    "sbom_tool": "",
+    "sbom_output": ".claude/sbom-{milestone}.json",
+    "public_key": ""
+  },
+  "secrets": {},
+  "policies": {},
   "notification_webhook": null,
   "milestones": []
 }

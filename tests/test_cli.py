@@ -337,3 +337,31 @@ def test_audit_verify_tampered_chain(tmp_path, capsys):
         _cmd_audit_verify(tmp_path)
     captured = capsys.readouterr()
     assert "INVALID" in captured.out or "tamper" in captured.out.lower()
+
+
+def test_init_config_has_security_section(tmp_path):
+    _cmd_init(tmp_path)
+    config = json.loads((tmp_path / ".claude" / "workflow.json").read_text())
+    assert "security" in config
+    assert config["security"]["audit_trail"] is False
+    assert config["security"]["sign_artifacts"] is False
+
+
+def test_init_config_has_policies_section(tmp_path):
+    _cmd_init(tmp_path)
+    config = json.loads((tmp_path / ".claude" / "workflow.json").read_text())
+    assert "policies" in config
+    assert config["policies"] == {}
+
+
+def test_init_config_has_secrets_section(tmp_path):
+    _cmd_init(tmp_path)
+    config = json.loads((tmp_path / ".claude" / "workflow.json").read_text())
+    assert "secrets" in config
+    assert config["secrets"] == {}
+
+
+def test_init_audit_trail_in_gitignore(tmp_path):
+    _cmd_init(tmp_path)
+    gitignore = (tmp_path / ".gitignore").read_text()
+    assert "audit-trail.jsonl" in gitignore
