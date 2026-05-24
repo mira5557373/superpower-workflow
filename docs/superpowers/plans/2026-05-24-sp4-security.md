@@ -440,15 +440,28 @@ class AuditTrail:
     def _load_last(self) -> None:
         if not self._path.exists():
             return
-        for line in self._path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                entry = json.loads(line)
-                self._seq = entry.get("seq", 0) + 1
-                self._prev_hash = entry.get("hash", "")
-            except json.JSONDecodeError:
-                continue
+        try:
+            with open(self._path, "rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                if size == 0:
+                    return
+                chunk = min(size, 4096)
+                f.seek(-chunk, 2)
+                tail = f.read().decode("utf-8")
+            for line in reversed(tail.splitlines()):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    self._seq = entry.get("seq", 0) + 1
+                    self._prev_hash = entry.get("hash", "")
+                    return
+                except json.JSONDecodeError:
+                    continue
+        except OSError:
+            return
 
     def append(
         self,
@@ -907,6 +920,52 @@ class TestBannedImports:
         engine = PolicyEngine({"banned_imports": ["os.system"]})
         passed, _ = engine.check(tmp_path, files=[tmp_path / "data.txt"])
         assert passed is True
+
+
+class TestChangedFilesDiscovery:
+    def test_changed_files_from_git_diff(self, tmp_path):
+        from subprocess import CompletedProcess
+        from unittest.mock import patch
+
+        diff_output = "src/foo.py\nsrc/bar.py\n"
+
+        def mock_run(cmd, **kwargs):
+            return CompletedProcess(args=cmd, returncode=0, stdout=diff_output, stderr="")
+
+        engine = PolicyEngine({"max_file_lines": 100})
+        with patch("superpower_workflow.policy.subprocess.run", side_effect=mock_run):
+            files = engine._changed_files(tmp_path, base_sha="abc123")
+        assert len(files) == 2
+        assert files[0] == tmp_path / "src/foo.py"
+
+    def test_changed_files_empty_when_no_base_sha(self, tmp_path):
+        engine = PolicyEngine({})
+        files = engine._changed_files(tmp_path, base_sha=None)
+        assert files == []
+
+    def test_changed_files_handles_git_failure(self, tmp_path):
+        from subprocess import CompletedProcess
+        from unittest.mock import patch
+
+        def mock_run(cmd, **kwargs):
+            return CompletedProcess(args=cmd, returncode=128, stdout="", stderr="fatal")
+
+        engine = PolicyEngine({})
+        with patch("superpower_workflow.policy.subprocess.run", side_effect=mock_run):
+            files = engine._changed_files(tmp_path, base_sha="abc123")
+        assert files == []
+
+    def test_changed_files_handles_timeout(self, tmp_path):
+        import subprocess as sp_mod
+        from unittest.mock import patch
+
+        def mock_run(cmd, **kwargs):
+            raise sp_mod.TimeoutExpired(cmd=cmd, timeout=10)
+
+        engine = PolicyEngine({})
+        with patch("superpower_workflow.policy.subprocess.run", side_effect=mock_run):
+            files = engine._changed_files(tmp_path, base_sha="abc123")
+        assert files == []
 ```
 
 - [ ] **Step 2: Run tests — expect FAIL** (module doesn't exist)
@@ -2088,6 +2147,12 @@ if not policy_passed:
         fallback_model=fallback,
     )
     cost += r.cost_usd
+    # Re-check after fix attempt
+    policy_passed, remaining = self._check_policies(
+        logger, milestone=name, checkpoint=f"quality_check_b_recheck"
+    )
+    if not policy_passed:
+        logger.log("POLICY_FIX_FAILED", violations=len(remaining))
 ```
 
 - [ ] **Step 4: Run tests — expect PASS**
@@ -2267,6 +2332,10 @@ git commit -m "feat: integrate SBOM generation and artifact signing into Phase D
 
 ```python
 # tests/test_cli.py — add imports and tests
+import json
+import os
+from unittest.mock import patch
+
 from superpower_workflow.cli import build_parser
 
 
@@ -2374,6 +2443,7 @@ def _cmd_audit_verify(project_root: Path) -> None:
         print(f"  Audit trail OK. {last_seq + 1} entries verified.")
     else:
         print(f"  INVALID: chain broken after seq {last_seq}. Possible tampering.")
+        sys.exit(1)
 
 
 def _cmd_audit_verify_sig(project_root: Path, tag: str, public_key: str | None) -> None:
@@ -2395,6 +2465,7 @@ def _cmd_audit_verify_sig(project_root: Path, tag: str, public_key: str | None) 
         print(f"  Signature valid for {tag}.")
     else:
         print(f"  Signature INVALID or missing for {tag}.")
+        sys.exit(1)
 ```
 
 Wire into `main()`:
