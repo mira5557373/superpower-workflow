@@ -14,6 +14,7 @@ HOME_CLAUDE = Path.home() / ".claude"
 COPIES = [
     ("skills/ultrathink-gap-analysis", "skills/ultrathink-gap-analysis"),
     ("skills/post-impl-review", "skills/post-impl-review"),
+    ("skills/production-readiness-review", "skills/production-readiness-review"),
     ("commands/ultrathink.md", "commands/ultrathink.md"),
 ]
 
