@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from superpower_workflow.hooks.convergence_gate import compute_exit_code
+from superpower_workflow.hooks.convergence_gate import _is_stuck, compute_exit_code
 
 
 def _write(claude_dir, phase=None, gap_report=None):
@@ -150,6 +150,46 @@ class TestIterationUpdates:
         updated_phase = json.loads((tmp_claude_dir / ".workflow-phase.json").read_text())
         assert updated_phase["iteration"] == 2
         assert updated_phase["previous_important_gaps"] == 4
+
+
+class TestIsStuck:
+    """Test _is_stuck loop detection function."""
+
+    def test_detects_repeated_gaps_with_different_line_numbers(self):
+        current = [
+            "[ultrathink] Store.put missing error at store.py:45",
+            "[ultrathink] No validation",
+        ]
+        previous = [
+            "[ultrathink] Store.put missing error at store.py:47",
+            "[ultrathink] No validation",
+        ]
+        assert _is_stuck(current, previous) is True
+
+    def test_allows_new_gaps(self):
+        current = ["[ultrathink] New gap A", "[ultrathink] New gap B"]
+        previous = ["[ultrathink] Old gap X", "[ultrathink] Old gap Y"]
+        assert _is_stuck(current, previous) is False
+
+    def test_handles_empty_current(self):
+        assert _is_stuck([], ["some gap"]) is False
+
+    def test_handles_empty_previous(self):
+        assert _is_stuck(["some gap"], []) is False
+
+    def test_handles_both_empty(self):
+        assert _is_stuck([], []) is False
+
+    def test_strips_path_prefixes(self):
+        current = ["[ultrathink] Missing handler in src/handlers/auth.py"]
+        previous = ["[ultrathink] Missing handler in handlers/auth.py"]
+        assert _is_stuck(current, previous) is True
+
+    def test_partial_overlap_below_threshold(self):
+        current = ["gap A", "gap B", "gap C", "gap D", "gap E"]
+        previous = ["gap A", "gap B", "gap C", "gap X", "gap Y"]
+        # 3/5 = 60% overlap, below 80% threshold
+        assert _is_stuck(current, previous) is False
 
 
 class TestMalformedGapReport:

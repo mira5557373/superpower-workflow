@@ -4,11 +4,30 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
 PHASE_FILE = ".workflow-phase.json"
 GAP_REPORT_FILE = ".gap-report.json"
+
+
+def _is_stuck(current_summaries: list[str], previous_summaries: list[str]) -> bool:
+    """Detect stuck convergence loops via fuzzy gap matching."""
+    if not previous_summaries or not current_summaries:
+        return False
+
+    def normalize(s: str) -> str:
+        s = re.sub(r":\d+", "", s)
+        s = re.sub(r"\S+/", "", s)
+        return s.strip().lower()
+
+    current_normalized = {normalize(s) for s in current_summaries}
+    previous_normalized = {normalize(s) for s in previous_summaries}
+    if len(current_normalized) == 0:
+        return False
+    overlap = current_normalized & previous_normalized
+    return len(overlap) / len(current_normalized) > 0.8
 
 
 def compute_exit_code(claude_dir: Path) -> int:
