@@ -23,3 +23,24 @@ class TelemetryEvent:
 
     def to_json_line(self) -> str:
         return json.dumps(self.to_dict())
+
+
+@dataclass
+class RunStarted(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "run_started"
+    spec_sha: str = ""
+    model: str = ""
+    milestone_count: int = 0
+    max_budget_usd: float = 0.0
+
+
+@dataclass
+class RunCompleted(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "run_completed"
+    status: str = ""
+    completed_count: int = 0
+    failed_count: int = 0
+    skipped_count: int = 0
+    total_cost_usd: float = 0.0
+    duration_seconds: float = 0.0
+    test_file_count: int = 0
