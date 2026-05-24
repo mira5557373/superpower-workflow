@@ -199,3 +199,34 @@ class TelemetryReader:
         if not started:
             return None
         return started[-1].get("run_id")
+
+    def cost_by_milestone(self, run_id: str | None = None) -> dict[str, float]:
+        source = self.events_for_run(run_id) if run_id else self.events()
+        costs: dict[str, float] = {}
+        for e in source:
+            if e.get("type") == "milestone_completed":
+                costs[e["milestone"]] = e.get("cost_usd", 0.0)
+        return costs
+
+    def cost_by_phase(self, run_id: str | None = None) -> dict[str, float]:
+        source = self.events_for_run(run_id) if run_id else self.events()
+        costs: dict[str, float] = {}
+        for e in source:
+            if e.get("type") == "phase_completed":
+                phase = e.get("phase", "unknown")
+                costs[phase] = costs.get(phase, 0.0) + e.get("cost_usd", 0.0)
+        return costs
+
+    def cost_per_successful_task(self, run_id: str | None = None) -> float:
+        source = self.events_for_run(run_id) if run_id else self.events()
+        total_cost = 0.0
+        total_completed = 0
+        for e in source:
+            if e.get("type") == "run_completed":
+                total_cost += e.get("total_cost_usd", 0.0)
+                total_completed += e.get("completed_count", 0)
+        return total_cost / total_completed if total_completed > 0 else 0.0
+
+    def total_cost(self, run_id: str | None = None) -> float:
+        source = self.events_for_run(run_id) if run_id else self.events()
+        return sum(e.get("total_cost_usd", 0.0) for e in source if e.get("type") == "run_completed")

@@ -361,3 +361,109 @@ class TestTelemetryReader:
         path = tmp_path / "nonexistent.jsonl"
         reader = TelemetryReader(path)
         assert reader.latest_run_id() is None
+
+
+class TestCostMetrics:
+    def test_cost_by_milestone(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        _write_events(
+            path,
+            [
+                {
+                    "type": "milestone_completed",
+                    "run_id": "r1",
+                    "milestone": "m1",
+                    "cost_usd": 15.0,
+                },
+                {
+                    "type": "milestone_completed",
+                    "run_id": "r1",
+                    "milestone": "m2",
+                    "cost_usd": 25.0,
+                },
+            ],
+        )
+        reader = TelemetryReader(path)
+        costs = reader.cost_by_milestone()
+        assert costs == {"m1": 15.0, "m2": 25.0}
+
+    def test_cost_by_phase(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        _write_events(
+            path,
+            [
+                {"type": "phase_completed", "run_id": "r1", "phase": "plan", "cost_usd": 5.0},
+                {"type": "phase_completed", "run_id": "r1", "phase": "implement", "cost_usd": 20.0},
+                {"type": "phase_completed", "run_id": "r1", "phase": "plan", "cost_usd": 3.0},
+            ],
+        )
+        reader = TelemetryReader(path)
+        costs = reader.cost_by_phase()
+        assert costs == {"plan": 8.0, "implement": 20.0}
+
+    def test_cost_per_successful_task(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        _write_events(
+            path,
+            [
+                {
+                    "type": "run_completed",
+                    "run_id": "r1",
+                    "total_cost_usd": 50.0,
+                    "completed_count": 5,
+                },
+            ],
+        )
+        reader = TelemetryReader(path)
+        assert reader.cost_per_successful_task() == 10.0
+
+    def test_cost_per_successful_task_no_completions(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        _write_events(
+            path,
+            [
+                {
+                    "type": "run_completed",
+                    "run_id": "r1",
+                    "total_cost_usd": 50.0,
+                    "completed_count": 0,
+                },
+            ],
+        )
+        reader = TelemetryReader(path)
+        assert reader.cost_per_successful_task() == 0.0
+
+    def test_total_cost(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        _write_events(
+            path,
+            [
+                {"type": "run_completed", "run_id": "r1", "total_cost_usd": 30.0},
+                {"type": "run_completed", "run_id": "r2", "total_cost_usd": 20.0},
+            ],
+        )
+        reader = TelemetryReader(path)
+        assert reader.total_cost() == 50.0
+
+    def test_cost_by_milestone_filtered_by_run(self, tmp_path):
+        path = tmp_path / "telemetry.jsonl"
+        _write_events(
+            path,
+            [
+                {
+                    "type": "milestone_completed",
+                    "run_id": "r1",
+                    "milestone": "m1",
+                    "cost_usd": 10.0,
+                },
+                {
+                    "type": "milestone_completed",
+                    "run_id": "r2",
+                    "milestone": "m1",
+                    "cost_usd": 15.0,
+                },
+            ],
+        )
+        reader = TelemetryReader(path)
+        costs = reader.cost_by_milestone(run_id="r2")
+        assert costs == {"m1": 15.0}
