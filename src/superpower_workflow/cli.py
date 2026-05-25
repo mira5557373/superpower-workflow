@@ -153,6 +153,28 @@ def _cmd_init(project_root: Path) -> None:
             "remote": None,
             "worktree_dir": ".worktrees",
         },
+        "docs": {
+            "readme": {
+                "enabled": False,
+                "template": None,
+                "sections": ["overview", "quickstart", "architecture", "contributing"],
+            },
+            "changelog": {
+                "enabled": True,
+            },
+            "api": {
+                "tool": "sphinx",
+                "output_dir": "docs/api",
+            },
+            "diagrams": {
+                "enabled": True,
+                "output": "docs/architecture.mmd",
+            },
+        },
+        "plugins": {
+            "enabled": True,
+            "blocked": [],
+        },
         "notification_webhook": None,
         "milestones": [],
     }
