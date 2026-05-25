@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from superpower_workflow.cli import _cmd_init
+from superpower_workflow.cli import _cmd_init, build_parser
 
 
 class TestParallelConfig:
@@ -46,3 +46,77 @@ class TestParallelConfig:
         _cmd_init(tmp_path)
         config = json.loads((tmp_path / ".claude" / "workflow.json").read_text())
         assert config["parallel"]["worktree_dir"] == ".worktrees"
+
+
+class TestParallelCLIFlags:
+    def test_parallel_flag_exists(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "--parallel"])
+        assert args.parallel is True
+
+    def test_parallel_defaults_false(self):
+        parser = build_parser()
+        args = parser.parse_args(["run"])
+        assert args.parallel is False
+
+    def test_workers_flag(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "--parallel", "--workers", "8"])
+        assert args.workers == 8
+
+    def test_workers_default(self):
+        parser = build_parser()
+        args = parser.parse_args(["run"])
+        assert args.workers == 4
+
+    def test_remote_flag(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "--remote", "ssh://user@host/path"])
+        assert args.remote == "ssh://user@host/path"
+
+    def test_remote_default_none(self):
+        parser = build_parser()
+        args = parser.parse_args(["run"])
+        assert args.remote is None
+
+    def test_best_of_n_flag(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "--best-of-n", "3"])
+        assert args.best_of_n == 3
+
+    def test_best_of_n_default(self):
+        parser = build_parser()
+        args = parser.parse_args(["run"])
+        assert args.best_of_n == 1
+
+    def test_model_override_flag(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "--model-override", "sonnet"])
+        assert args.model_override == "sonnet"
+
+    def test_model_override_default_none(self):
+        parser = build_parser()
+        args = parser.parse_args(["run"])
+        assert args.model_override is None
+
+    def test_all_parallel_flags_combined(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "run",
+                "--parallel",
+                "--workers",
+                "6",
+                "--best-of-n",
+                "2",
+                "--model-override",
+                "sonnet",
+                "--remote",
+                "ssh://host",
+            ]
+        )
+        assert args.parallel is True
+        assert args.workers == 6
+        assert args.best_of_n == 2
+        assert args.model_override == "sonnet"
+        assert args.remote == "ssh://host"

@@ -58,6 +58,20 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--from-ticket", dest="from_ticket", help="Tracker ticket ID (e.g. LIN-42, PROJ-123)"
     )
+    run_p.add_argument(
+        "--parallel", action="store_true", default=False, help="Enable parallel execution"
+    )
+    run_p.add_argument("--workers", type=int, default=4, help="Max parallel workers (default: 4)")
+    run_p.add_argument("--remote", default=None, help="Remote execution URL (ssh://...)")
+    run_p.add_argument(
+        "--best-of-n", dest="best_of_n", type=int, default=1, help="Run N copies, pick best"
+    )
+    run_p.add_argument(
+        "--model-override",
+        dest="model_override",
+        default=None,
+        help="Override model for all milestones",
+    )
 
     return parser
 
@@ -477,6 +491,11 @@ def main() -> None:
             phase_prefix=getattr(args, "phase", None),
             from_issue=getattr(args, "from_issue", None),
             from_ticket=getattr(args, "from_ticket", None),
+            parallel=getattr(args, "parallel", False),
+            max_workers=getattr(args, "workers", 4),
+            remote_url=getattr(args, "remote", None),
+            best_of_n=getattr(args, "best_of_n", 1),
+            model_override=getattr(args, "model_override", None),
         )
         return
 
