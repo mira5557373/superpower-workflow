@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import IO, ClassVar
 
@@ -138,6 +138,70 @@ class GapReport(TelemetryEvent):
     deferred_gaps: int = 0
     total_gaps_found: int = 0
     converged: bool = False
+
+
+@dataclass
+class ModelRouted(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "model_routed"
+    milestone: str = ""
+    model: str = ""
+    complexity_score: float = 0.0
+    reason: str = ""
+
+
+@dataclass
+class ParallelWaveStarted(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "parallel_wave_started"
+    wave_index: int = 0
+    milestones: list[str] = field(default_factory=list)
+    worker_count: int = 0
+
+
+@dataclass
+class ParallelWaveCompleted(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "parallel_wave_completed"
+    wave_index: int = 0
+    succeeded: list[str] = field(default_factory=list)
+    failed: list[str] = field(default_factory=list)
+    total_cost_usd: float = 0.0
+    duration_seconds: float = 0.0
+
+
+@dataclass
+class WorktreeCreated(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "worktree_created"
+    milestone: str = ""
+    branch: str = ""
+    worktree_path: str = ""
+
+
+@dataclass
+class WorktreeMerged(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "worktree_merged"
+    milestone: str = ""
+    branch: str = ""
+    success: bool = True
+    conflicts: int = 0
+
+
+@dataclass
+class BestOfNCompleted(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "best_of_n_completed"
+    milestone: str = ""
+    n: int = 0
+    winner_index: int = 0
+    winner_model: str = ""
+    winner_score: float = 0.0
+    total_cost_usd: float = 0.0
+
+
+@dataclass
+class RemoteExecution(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "remote_execution"
+    milestone: str = ""
+    host: str = ""
+    success: bool = True
+    cost_usd: float = 0.0
 
 
 class TelemetryEmitter:
