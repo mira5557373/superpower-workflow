@@ -64,9 +64,7 @@ class TestOrchestratorPluginHooks:
     def test_loads_plugins_on_init(self, tmp_path: Path):
         _config(tmp_path)
         with (
-            patch(
-                "superpower_workflow.orchestrator.load_plugins", return_value=[]
-            ) as mock_load,
+            patch("superpower_workflow.orchestrator.load_plugins", return_value=[]) as mock_load,
             patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
             patch(
                 "superpower_workflow.orchestrator.subprocess.run",
@@ -82,9 +80,7 @@ class TestOrchestratorPluginHooks:
         mock_plugin.name = "test"
         mock_plugin.version = "1.0"
         with (
-            patch(
-                "superpower_workflow.orchestrator.load_plugins", return_value=[mock_plugin]
-            ),
+            patch("superpower_workflow.orchestrator.load_plugins", return_value=[mock_plugin]),
             patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
             patch(
                 "superpower_workflow.orchestrator.subprocess.run",
@@ -105,9 +101,7 @@ class TestOrchestratorPluginHooks:
         mock_plugin.name = "test"
         mock_plugin.version = "1.0"
         with (
-            patch(
-                "superpower_workflow.orchestrator.load_plugins", return_value=[mock_plugin]
-            ),
+            patch("superpower_workflow.orchestrator.load_plugins", return_value=[mock_plugin]),
             patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
             patch(
                 "superpower_workflow.orchestrator.subprocess.run",
@@ -125,9 +119,7 @@ class TestOrchestratorPluginHooks:
         mock_plugin.version = "1.0"
         mock_plugin.pre_phase.side_effect = PluginVetoError("blocked")
         with (
-            patch(
-                "superpower_workflow.orchestrator.load_plugins", return_value=[mock_plugin]
-            ),
+            patch("superpower_workflow.orchestrator.load_plugins", return_value=[mock_plugin]),
             patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
             patch(
                 "superpower_workflow.orchestrator.subprocess.run",
@@ -156,9 +148,7 @@ class TestOrchestratorPluginHooks:
     def test_blocked_plugins_passed_to_loader(self, tmp_path: Path):
         _config(tmp_path, plugins={"enabled": True, "blocked": ["bad-plugin"]})
         with (
-            patch(
-                "superpower_workflow.orchestrator.load_plugins", return_value=[]
-            ) as mock_load,
+            patch("superpower_workflow.orchestrator.load_plugins", return_value=[]) as mock_load,
             patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
             patch(
                 "superpower_workflow.orchestrator.subprocess.run",
@@ -167,3 +157,138 @@ class TestOrchestratorPluginHooks:
         ):
             Orchestrator(tmp_path)
         mock_load.assert_called_once_with(blocked=["bad-plugin"])
+
+
+class TestOrchestratorDocsHooks:
+    def test_generates_changelog_when_enabled(self, tmp_path: Path):
+        _config(
+            tmp_path,
+            docs={
+                "readme": {"enabled": False, "template": None, "sections": []},
+                "changelog": {"enabled": True},
+                "api": {"tool": "sphinx", "output_dir": "docs/api"},
+                "diagrams": {"enabled": False, "output": "docs/architecture.mmd"},
+            },
+        )
+        with (
+            patch("superpower_workflow.orchestrator.load_plugins", return_value=[]),
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+            patch(
+                "superpower_workflow.orchestrator.generate_changelog",
+                return_value="# Changelog",
+            ) as mock_cl,
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        mock_cl.assert_called_once()
+
+    def test_generates_diagram_when_enabled(self, tmp_path: Path):
+        src = tmp_path / "src" / "mypackage"
+        src.mkdir(parents=True)
+        (src / "__init__.py").write_text("")
+        _config(
+            tmp_path,
+            docs={
+                "readme": {"enabled": False, "template": None, "sections": []},
+                "changelog": {"enabled": False},
+                "api": {"tool": "sphinx", "output_dir": "docs/api"},
+                "diagrams": {"enabled": True, "output": "docs/architecture.mmd"},
+            },
+        )
+        with (
+            patch("superpower_workflow.orchestrator.load_plugins", return_value=[]),
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+            patch(
+                "superpower_workflow.orchestrator.generate_mermaid",
+                return_value="graph TD",
+            ) as mock_mm,
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        mock_mm.assert_called_once()
+
+    def test_skips_docs_when_all_disabled(self, tmp_path: Path):
+        _config(
+            tmp_path,
+            docs={
+                "readme": {"enabled": False, "template": None, "sections": []},
+                "changelog": {"enabled": False},
+                "api": {"tool": "sphinx", "output_dir": "docs/api"},
+                "diagrams": {"enabled": False, "output": "docs/architecture.mmd"},
+            },
+        )
+        with (
+            patch("superpower_workflow.orchestrator.load_plugins", return_value=[]),
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+            patch("superpower_workflow.orchestrator.generate_changelog") as mock_cl,
+            patch("superpower_workflow.orchestrator.generate_mermaid") as mock_mm,
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        mock_cl.assert_not_called()
+        mock_mm.assert_not_called()
+
+    def test_generates_readme_when_enabled(self, tmp_path: Path):
+        _config(
+            tmp_path,
+            docs={
+                "readme": {"enabled": True, "template": None, "sections": ["overview"]},
+                "changelog": {"enabled": False},
+                "api": {"tool": "sphinx", "output_dir": "docs/api"},
+                "diagrams": {"enabled": False, "output": "docs/architecture.mmd"},
+            },
+        )
+        with (
+            patch("superpower_workflow.orchestrator.load_plugins", return_value=[]),
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+            patch(
+                "superpower_workflow.orchestrator.generate_readme",
+                return_value="# README",
+            ) as mock_rm,
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        mock_rm.assert_called_once()
+
+    def test_docs_failure_does_not_fail_milestone(self, tmp_path: Path):
+        _config(
+            tmp_path,
+            docs={
+                "readme": {"enabled": False, "template": None, "sections": []},
+                "changelog": {"enabled": True},
+                "api": {"tool": "sphinx", "output_dir": "docs/api"},
+                "diagrams": {"enabled": False, "output": "docs/architecture.mmd"},
+            },
+        )
+        with (
+            patch("superpower_workflow.orchestrator.load_plugins", return_value=[]),
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+            patch(
+                "superpower_workflow.orchestrator.generate_changelog",
+                side_effect=RuntimeError("git broke"),
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        state = load_state(tmp_path / ".claude")
+        assert "m1" in state.completed

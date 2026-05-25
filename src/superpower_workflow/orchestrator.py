@@ -9,6 +9,10 @@ from pathlib import Path
 
 from superpower_workflow.audit import AuditTrail, derive_key
 from superpower_workflow.context import build_context_summary
+from superpower_workflow.docs.api_docs import build_api_docs
+from superpower_workflow.docs.changelog import generate_changelog
+from superpower_workflow.docs.diagrams import generate_mermaid
+from superpower_workflow.docs.readme_gen import generate_readme
 from superpower_workflow.integrations.ci_fix import ci_fix_loop
 from superpower_workflow.integrations.github import (
     create_pr,
@@ -565,6 +569,92 @@ class Orchestrator:
         for plugin in self._plugins:
             plugin.post_milestone(milestone, cost)
 
+    def _generate_docs(self, ms: dict) -> None:
+        docs_config = self.config.get("docs", {})
+        generated: list[str] = []
+
+        if docs_config.get("changelog", {}).get("enabled", False):
+            try:
+                changelog = generate_changelog(cwd=self.cwd)
+                if changelog:
+                    cl_path = Path(self.cwd) / "CHANGELOG.md"
+                    cl_path.write_text(changelog)
+                    generated.append("CHANGELOG.md")
+            except Exception:
+                pass
+
+        if docs_config.get("diagrams", {}).get("enabled", False):
+            try:
+                src_dir = Path(self.cwd) / "src"
+                if src_dir.exists():
+                    mermaid = generate_mermaid(src_dir)
+                    output = docs_config["diagrams"].get("output", "docs/architecture.mmd")
+                    out_path = Path(self.cwd) / output
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    out_path.write_text(mermaid)
+                    generated.append(output)
+            except Exception:
+                pass
+
+        api_config = docs_config.get("api", {})
+        if api_config.get("tool"):
+            try:
+                src_dir = Path(self.cwd) / "src"
+                out_dir = Path(self.cwd) / api_config.get("output_dir", "docs/api")
+                if src_dir.exists():
+                    build_api_docs(src_dir, out_dir, tool=api_config["tool"], cwd=self.cwd)
+                    generated.append(api_config.get("output_dir", "docs/api"))
+            except Exception:
+                pass
+
+        readme_config = docs_config.get("readme", {})
+        if readme_config.get("enabled", False):
+            try:
+                content = generate_readme(
+                    Path(self.cwd),
+                    model=self.config["model"],
+                    effort=self.config.get("effort", {}).get("review", "high"),
+                    budget=self.config.get("budgets", {}).get("push", 3),
+                    template=readme_config.get("template"),
+                    sections=readme_config.get("sections"),
+                    cwd=self.cwd,
+                )
+                if content:
+                    (Path(self.cwd) / "README.md").write_text(content)
+                    generated.append("README.md")
+            except Exception:
+                pass
+
+        if generated:
+            self._commit_docs(generated)
+
+    def _commit_docs(self, files: list[str]) -> None:
+        try:
+            subprocess.run(
+                ["git", "add"] + files,
+                capture_output=True,
+                text=True,
+                cwd=self.cwd,
+                timeout=30,
+            )
+            model = self.config.get("model", "opus")
+            subprocess.run(
+                [
+                    "git",
+                    "commit",
+                    "-m",
+                    "docs: update generated documentation",
+                    "--trailer",
+                    f"Generated-By: {model}",
+                ],
+                capture_output=True,
+                text=True,
+                cwd=self.cwd,
+                timeout=30,
+            )
+        except Exception:
+            pass
+
     def _run_milestone(
         self,
         ms: dict,
@@ -1037,6 +1127,7 @@ class Orchestrator:
                 )
 
         self._call_post_milestone(ms, cost)
+        self._generate_docs(ms)
 
         return cost
 
