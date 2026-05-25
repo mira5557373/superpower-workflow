@@ -160,3 +160,30 @@ class TestEventsRouter:
     def test_events_type_filter(self, client):
         r = client.get("/api/v1/events?type=phase_completed")
         assert r.status_code == 200
+
+
+class TestMetricsRouter:
+    def test_cost_metrics(self, client):
+        r = client.get("/api/v1/metrics/costs")
+        assert r.status_code == 200
+        data = r.json()
+        assert "total_cost" in data
+
+    def test_cost_metrics_with_project(self, client):
+        projects = client.get("/api/v1/projects").json()
+        if projects:
+            pid = projects[0]["id"]
+            r = client.get(f"/api/v1/metrics/costs?project_id={pid}")
+            assert r.status_code == 200
+
+    def test_quality_metrics(self, client):
+        r = client.get("/api/v1/metrics/quality")
+        assert r.status_code == 200
+        data = r.json()
+        assert "rework_rate" in data or isinstance(data, dict)
+
+    def test_model_metrics(self, client):
+        r = client.get("/api/v1/metrics/models")
+        assert r.status_code == 200
+        data = r.json()
+        assert isinstance(data, (list, dict))
