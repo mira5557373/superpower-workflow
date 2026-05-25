@@ -276,6 +276,14 @@ def _cmd_init(project_root: Path) -> None:
     # Install skills, commands, and settings project-locally
     _install_project_local(claude_dir)
 
+    try:
+        from superpower_workflow.server.registry import ProjectRegistry
+
+        reg = ProjectRegistry()
+        reg.register(project_root.name, str(project_root))
+    except Exception:
+        pass
+
     print(f"  Created {config_path}")
     print("  Edit the spec path and verify_commands, then run: sw decompose")
 

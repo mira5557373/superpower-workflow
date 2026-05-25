@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -181,6 +182,25 @@ class Orchestrator:
             self._telemetry = TelemetryEmitter(telemetry_path, run_id)
         else:
             self._telemetry = TelemetryEmitter.disabled()
+
+        url_env_name = self.config.get("database", {}).get("url_env", "SW_DATABASE_URL")
+        db_url = os.environ.get(url_env_name, "")
+        if db_url:
+            try:
+                from superpower_workflow.db.engine import create_engine_from_url
+                from superpower_workflow.db.models import Base
+                from superpower_workflow.db.writer import TelemetryDbWriter
+
+                engine = create_engine_from_url(db_url)
+                Base.metadata.create_all(engine)
+                self._telemetry = TelemetryDbWriter(
+                    emitter=self._telemetry,
+                    engine=engine,
+                    project_name=self.root.name,
+                    project_path=str(self.root),
+                )
+            except ImportError:
+                pass
 
         self._telemetry.emit(
             RunStarted(

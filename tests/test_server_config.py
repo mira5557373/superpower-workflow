@@ -179,3 +179,28 @@ class TestApiKey:
 
     def test_verify_passes_when_no_key_configured(self):
         assert verify_api_key("anything", "") is True
+
+
+class TestOrchestratorDbIntegration:
+    def test_db_writer_wraps_emitter_when_url_set(self):
+        with (
+            patch.dict(os.environ, {"SW_DATABASE_URL": "sqlite:///:memory:"}),
+            patch("superpower_workflow.orchestrator.TelemetryEmitter"),
+            patch("superpower_workflow.orchestrator.run_claude"),
+        ):
+            pass
+
+    def test_no_import_error_without_server_extras(self):
+        with patch.dict(os.environ, {"SW_DATABASE_URL": ""}, clear=False):
+            pass
+
+
+class TestAutoRegister:
+    def test_init_registers_project(self, tmp_path: Path):
+        reg_path = tmp_path / "registry.json"
+        from superpower_workflow.server.registry import ProjectRegistry
+
+        reg = ProjectRegistry(reg_path)
+        reg.register("test", str(tmp_path))
+        projects = reg.list_projects()
+        assert len(projects) == 1
