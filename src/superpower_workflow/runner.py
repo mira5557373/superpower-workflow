@@ -34,6 +34,7 @@ def run_claude(
     system_prompt: str | None = None,
     fallback_model: str | None = None,
     resume_session: str | None = None,
+    num_agents: int | None = None,
 ) -> ClaudeResult:
     """Run claude -p command with retry logic, JSON parsing, and timeout handling.
 
@@ -60,6 +61,7 @@ def run_claude(
                 system_prompt,
                 fallback_model,
                 resume_session,
+                num_agents,
             )
 
             result = subprocess.run(
@@ -96,6 +98,7 @@ def _build_command(
     system_prompt: str | None = None,
     fallback_model: str | None = None,
     resume_session: str | None = None,
+    num_agents: int | None = None,
 ) -> list[str]:
     """Build the claude -p command with all flags."""
     cmd = [
@@ -122,6 +125,9 @@ def _build_command(
 
     if resume_session:
         cmd.extend(["--resume", resume_session])
+
+    if num_agents and num_agents > 0:
+        cmd.extend(["--num-agents", str(num_agents)])
 
     return cmd
 
