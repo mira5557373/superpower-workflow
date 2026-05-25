@@ -24,6 +24,8 @@ from superpower_workflow.parallel.executor import ParallelExecutor, ParallelResu
 from superpower_workflow.parallel.planner import ExecutionWave, ParallelPlanner
 from superpower_workflow.parallel.router import ModelRouter
 from superpower_workflow.parallel.worktree import WorktreeManager
+from superpower_workflow.plugins.interface import Plugin, PluginVetoError
+from superpower_workflow.plugins.loader import load_plugins
 from superpower_workflow.policy import PolicyEngine
 from superpower_workflow.prompts import (
     phase_a_prompt,
@@ -110,6 +112,13 @@ class Orchestrator:
         self._slack_config = self._integrations.get("slack", {})
         self._from_ticket: str | None = None
         self._tracker_adapter = None
+
+        plugins_config = self.config.get("plugins", {})
+        if plugins_config.get("enabled", True):
+            blocked = plugins_config.get("blocked", [])
+            self._plugins: list[Plugin] = load_plugins(blocked=blocked)
+        else:
+            self._plugins = []
 
     def run(
         self,
@@ -540,6 +549,22 @@ class Orchestrator:
         if r.is_error:
             raise _PhaseError(phase, r.text or "claude -p returned an error")
 
+    def _call_pre_phase(self, phase: str, milestone: dict) -> None:
+        for plugin in self._plugins:
+            plugin.pre_phase(phase, milestone)
+
+    def _call_post_phase(self, phase: str, milestone: dict, result: dict) -> None:
+        for plugin in self._plugins:
+            plugin.post_phase(phase, milestone, result)
+
+    def _call_pre_commit(self, milestone: dict, files: list[str]) -> None:
+        for plugin in self._plugins:
+            plugin.pre_commit(milestone, files)
+
+    def _call_post_milestone(self, milestone: dict, cost: float) -> None:
+        for plugin in self._plugins:
+            plugin.post_milestone(milestone, cost)
+
     def _run_milestone(
         self,
         ms: dict,
@@ -566,6 +591,10 @@ class Orchestrator:
         cost = 0.0
 
         # Phase A: Plan + Ultrathink
+        try:
+            self._call_pre_phase("plan", ms)
+        except PluginVetoError as e:
+            raise _PhaseError("plan", str(e)) from e
         self.state.current_step = "plan"
         save_state(self.claude_dir, self.state)
         save_phase_state(
@@ -605,6 +634,7 @@ class Orchestrator:
             milestone=name,
             data={"phase": "plan", "cost": round(r.cost_usd, 2)},
         )
+        self._call_post_phase("plan", ms, {"cost": r.cost_usd})
 
         sha_result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -619,6 +649,10 @@ class Orchestrator:
         subprocess.run(["git", "tag", f"pre-impl/{name}"], capture_output=True, cwd=self.cwd)
 
         # Phase B: Implement
+        try:
+            self._call_pre_phase("implement", ms)
+        except PluginVetoError as e:
+            raise _PhaseError("implement", str(e)) from e
         self.state.current_step = "implement"
         save_state(self.claude_dir, self.state)
         plan_path = self._find_plan_path(name)
@@ -654,6 +688,7 @@ class Orchestrator:
             milestone=name,
             data={"phase": "implement", "cost": round(r.cost_usd, 2)},
         )
+        self._call_post_phase("implement", ms, {"cost": r.cost_usd})
 
         # Quality Gates Checkpoint #1
         self.state.current_step = "quality_check_b"
@@ -722,6 +757,10 @@ class Orchestrator:
         )
 
         # Phase C: Review + Fix
+        try:
+            self._call_pre_phase("review", ms)
+        except PluginVetoError as e:
+            raise _PhaseError("review", str(e)) from e
         self.state.current_step = "review"
         save_state(self.claude_dir, self.state)
         save_phase_state(
@@ -768,6 +807,7 @@ class Orchestrator:
             milestone=name,
             data={"phase": "review", "cost": round(r.cost_usd, 2)},
         )
+        self._call_post_phase("review", ms, {"cost": r.cost_usd})
 
         # Quality Gates Checkpoint #2
         self.state.current_step = "quality_check_c"
@@ -828,6 +868,11 @@ class Orchestrator:
         self._check_trailers(plan_sha, logger)
 
         # Phase D: Push + Tag
+        try:
+            self._call_pre_phase("push", ms)
+        except PluginVetoError as e:
+            raise _PhaseError("push", str(e)) from e
+        self._call_pre_commit(ms, [])
         self.state.current_step = "push"
         save_state(self.claude_dir, self.state)
         branch = "main" if self.config.get("git_strategy") == "main" else f"milestone/{name}"
@@ -861,6 +906,7 @@ class Orchestrator:
             milestone=name,
             data={"phase": "push", "cost": round(r.cost_usd, 2)},
         )
+        self._call_post_phase("push", ms, {"cost": r.cost_usd})
 
         security = self.config.get("security", {})
         sbom_tool = security.get("sbom_tool", "")
@@ -989,6 +1035,8 @@ class Orchestrator:
                     milestone=name,
                     data={"url": pr_url},
                 )
+
+        self._call_post_milestone(ms, cost)
 
         return cost
 
