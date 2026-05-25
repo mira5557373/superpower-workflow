@@ -4,7 +4,13 @@ import json
 from subprocess import CompletedProcess
 from unittest.mock import patch
 
-from superpower_workflow.integrations.ci_fix import get_failure_logs, wait_for_ci
+from superpower_workflow.integrations.ci_fix import (
+    CIResult,
+    ci_fix_loop,
+    get_failure_logs,
+    wait_for_ci,
+)
+from superpower_workflow.runner import ClaudeResult
 
 
 class TestWaitForCi:
@@ -90,3 +96,160 @@ class TestGetFailureLogs:
             )
             result = get_failure_logs("999", ".")
         assert result == ""
+
+
+class TestCiFixLoop:
+    def _ci_config(self, **overrides):
+        cfg = {
+            "enabled": True,
+            "max_fix_attempts": 3,
+            "wait_timeout_seconds": 600,
+            "poll_interval_seconds": 1,
+        }
+        cfg.update(overrides)
+        return cfg
+
+    def test_returns_true_when_ci_passes_first_try(self):
+        def mock_wait(cwd, **kw):
+            return CIResult(status="passed", run_id="100")
+
+        with patch("superpower_workflow.integrations.ci_fix.wait_for_ci", side_effect=mock_wait):
+            success, cost = ci_fix_loop(
+                cwd=".",
+                ci_config=self._ci_config(),
+                run_claude_fn=lambda *a, **kw: ClaudeResult(),
+                model="opus",
+                system_prompt="",
+            )
+        assert success is True
+        assert cost == 0.0
+
+    def test_fixes_then_passes(self):
+        wait_results = [
+            CIResult(status="failed", run_id="101"),
+            CIResult(status="passed", run_id="102"),
+        ]
+        call_count = [0]
+
+        def mock_wait(cwd, **kw):
+            idx = min(call_count[0], len(wait_results) - 1)
+            call_count[0] += 1
+            return wait_results[idx]
+
+        def mock_claude(*a, **kw):
+            return ClaudeResult(cost_usd=2.0)
+
+        with (
+            patch("superpower_workflow.integrations.ci_fix.wait_for_ci", side_effect=mock_wait),
+            patch(
+                "superpower_workflow.integrations.ci_fix.get_failure_logs", return_value="error log"
+            ),
+            patch("superpower_workflow.integrations.ci_fix.subprocess.run") as mock_sub,
+        ):
+            mock_sub.return_value = CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            success, cost = ci_fix_loop(
+                cwd=".",
+                ci_config=self._ci_config(),
+                run_claude_fn=mock_claude,
+                model="opus",
+                system_prompt="",
+            )
+        assert success is True
+        assert cost == 2.0
+
+    def test_all_attempts_fail(self):
+        def mock_wait(cwd, **kw):
+            return CIResult(status="failed", run_id="200")
+
+        def mock_claude(*a, **kw):
+            return ClaudeResult(cost_usd=1.0)
+
+        with (
+            patch("superpower_workflow.integrations.ci_fix.wait_for_ci", side_effect=mock_wait),
+            patch("superpower_workflow.integrations.ci_fix.get_failure_logs", return_value="err"),
+            patch("superpower_workflow.integrations.ci_fix.subprocess.run") as mock_sub,
+        ):
+            mock_sub.return_value = CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            success, cost = ci_fix_loop(
+                cwd=".",
+                ci_config=self._ci_config(max_fix_attempts=2),
+                run_claude_fn=mock_claude,
+                model="opus",
+                system_prompt="",
+            )
+        assert success is False
+        assert cost == 2.0
+
+    def test_timeout_on_initial_wait(self):
+        def mock_wait(cwd, **kw):
+            return CIResult(status="timeout")
+
+        with patch("superpower_workflow.integrations.ci_fix.wait_for_ci", side_effect=mock_wait):
+            success, cost = ci_fix_loop(
+                cwd=".",
+                ci_config=self._ci_config(),
+                run_claude_fn=lambda *a, **kw: ClaudeResult(),
+                model="opus",
+                system_prompt="",
+            )
+        assert success is False
+        assert cost == 0.0
+
+    def test_on_attempt_callback_called(self):
+        wait_results = [
+            CIResult(status="failed", run_id="300"),
+            CIResult(status="passed", run_id="301"),
+        ]
+        call_count = [0]
+
+        def mock_wait(cwd, **kw):
+            idx = min(call_count[0], len(wait_results) - 1)
+            call_count[0] += 1
+            return wait_results[idx]
+
+        attempts = []
+
+        def on_attempt(attempt, max_attempts, status):
+            attempts.append((attempt, max_attempts, status))
+
+        with (
+            patch("superpower_workflow.integrations.ci_fix.wait_for_ci", side_effect=mock_wait),
+            patch("superpower_workflow.integrations.ci_fix.get_failure_logs", return_value="err"),
+            patch("superpower_workflow.integrations.ci_fix.subprocess.run") as mock_sub,
+        ):
+            mock_sub.return_value = CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            ci_fix_loop(
+                cwd=".",
+                ci_config=self._ci_config(),
+                run_claude_fn=lambda *a, **kw: ClaudeResult(cost_usd=1.0),
+                model="opus",
+                system_prompt="",
+                on_attempt=on_attempt,
+            )
+        assert len(attempts) >= 1
+        assert attempts[0][0] == 1
+
+    def test_uses_model_override_from_config(self):
+        def mock_wait(cwd, **kw):
+            return CIResult(status="failed", run_id="400")
+
+        models_used = []
+
+        def mock_claude(*a, **kw):
+            models_used.append(kw.get("model", ""))
+            return ClaudeResult(cost_usd=1.0)
+
+        with (
+            patch("superpower_workflow.integrations.ci_fix.wait_for_ci", side_effect=mock_wait),
+            patch("superpower_workflow.integrations.ci_fix.get_failure_logs", return_value="err"),
+            patch("superpower_workflow.integrations.ci_fix.subprocess.run") as mock_sub,
+        ):
+            mock_sub.return_value = CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            ci_fix_loop(
+                cwd=".",
+                ci_config=self._ci_config(max_fix_attempts=1, model="sonnet"),
+                run_claude_fn=mock_claude,
+                model="opus",
+                system_prompt="",
+            )
+        assert models_used[0] == "sonnet"
