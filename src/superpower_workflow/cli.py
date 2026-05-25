@@ -97,6 +97,21 @@ def build_parser() -> argparse.ArgumentParser:
     remove_p = plugin_sub.add_parser("remove", help="Remove a plugin")
     remove_p.add_argument("plugin_name", help="Plugin name (uninstalls sw-plugin-{name})")
 
+    server_p = sub.add_parser("server", help="Unified dashboard server")
+    server_sub = server_p.add_subparsers(dest="server_command")
+
+    start_p = server_sub.add_parser("start", help="Start the API server")
+    start_p.add_argument("--host", default=None, help="Bind host (default: 0.0.0.0)")
+    start_p.add_argument("--port", type=int, default=None, help="Port (default: 3001)")
+    start_p.add_argument("--database-url", dest="database_url", default=None, help="PostgreSQL URL")
+
+    server_sub.add_parser("stop", help="Stop the API server")
+    server_sub.add_parser("init-db", help="Initialize database schema")
+
+    sync_p = server_sub.add_parser("sync", help="Sync JSONL data to database")
+    sync_p.add_argument("--project", default=None, help="Project path to sync")
+    sync_p.add_argument("--all", dest="sync_all", action="store_true", help="Sync all projects")
+
     return parser
 
 
@@ -612,6 +627,140 @@ def _cmd_resume(project_root: Path) -> None:
     orch.run()
 
 
+def _cmd_server_start(project_root: Path, args) -> None:
+    import os
+
+    if args.database_url:
+        os.environ["SW_DATABASE_URL"] = args.database_url
+    if args.host:
+        os.environ["SW_SERVER_HOST"] = args.host
+    if args.port:
+        os.environ["SW_SERVER_PORT"] = str(args.port)
+
+    try:
+        from superpower_workflow.server.app import create_app
+        from superpower_workflow.server.config import load_server_config
+    except ImportError:
+        print("  Error: Install server extras: pip install superpower-workflow[server]")
+        sys.exit(1)
+
+    import contextlib
+
+    config_path = project_root / ".claude" / "workflow.json"
+    config = {}
+    if config_path.exists():
+        with contextlib.suppress(json.JSONDecodeError, OSError):
+            config = json.loads(config_path.read_text())
+
+    cfg = load_server_config(config)
+    app = create_app(cfg)
+
+    from fastapi.responses import HTMLResponse
+
+    from superpower_workflow.dashboard.unified_static import UNIFIED_DASHBOARD_HTML
+
+    @app.get("/")
+    def dashboard():
+        return HTMLResponse(UNIFIED_DASHBOARD_HTML)
+
+    import uvicorn
+
+    pid_file = Path.home() / ".claude" / "sw-server.pid"
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text(str(os.getpid()))
+    print(f"  Server starting at http://{cfg.host}:{cfg.port}/")
+    try:
+        uvicorn.run(app, host=cfg.host, port=cfg.port, log_level="info")
+    finally:
+        pid_file.unlink(missing_ok=True)
+
+
+def _cmd_server_stop() -> None:
+    pid_file = Path.home() / ".claude" / "sw-server.pid"
+    if not pid_file.exists():
+        print("  No server PID file found.")
+        return
+    try:
+        import signal
+
+        pid = int(pid_file.read_text().strip())
+        import os as _os
+
+        _os.kill(pid, signal.SIGTERM)
+        pid_file.unlink(missing_ok=True)
+        print(f"  Stopped server (PID {pid})")
+    except (ProcessLookupError, ValueError):
+        pid_file.unlink(missing_ok=True)
+        print("  Server not running.")
+
+
+def _cmd_server_init_db(args) -> None:
+    import os
+
+    db_url = getattr(args, "database_url", None) or os.environ.get("SW_DATABASE_URL", "")
+    if not db_url:
+        print("  Error: Set SW_DATABASE_URL or use --database-url")
+        return
+    try:
+        from superpower_workflow.db.engine import create_engine_from_url
+        from superpower_workflow.db.models import Base
+    except ImportError:
+        print("  Error: Install server extras: pip install superpower-workflow[server]")
+        return
+    engine = create_engine_from_url(db_url)
+    Base.metadata.create_all(engine)
+    print("  Database schema created.")
+
+
+def _cmd_server_sync(project_root: Path, args) -> None:
+    import os
+
+    db_url = os.environ.get("SW_DATABASE_URL", "")
+    if not db_url:
+        print("  Error: Set SW_DATABASE_URL")
+        return
+    try:
+        from superpower_workflow.db.engine import create_engine_from_url
+        from superpower_workflow.db.models import Base
+        from superpower_workflow.db.sync_adapter import DbSyncAdapter
+    except ImportError:
+        print("  Error: Install server extras: pip install superpower-workflow[server]")
+        return
+    engine = create_engine_from_url(db_url)
+    Base.metadata.create_all(engine)
+    adapter = DbSyncAdapter(engine)
+
+    if getattr(args, "sync_all", False):
+        from superpower_workflow.server.registry import ProjectRegistry
+
+        registry = ProjectRegistry()
+        for entry in registry.list_projects():
+            p = Path(entry.path)
+            jsonl = p / ".claude" / "telemetry.jsonl"
+            if jsonl.exists():
+                adapter.sync(entry.name, entry.path, jsonl)
+                print(f"  Synced: {entry.name}")
+    elif getattr(args, "project", None):
+        p = Path(args.project)
+        name = p.name
+        jsonl = p / ".claude" / "telemetry.jsonl"
+        adapter.sync(name, str(p), jsonl)
+        print(f"  Synced: {name}")
+    else:
+        name = project_root.name
+        config_path = project_root / ".claude" / "workflow.json"
+        telemetry_rel = ".claude/telemetry.jsonl"
+        if config_path.exists():
+            try:
+                cfg = json.loads(config_path.read_text())
+                telemetry_rel = cfg.get("telemetry", {}).get("path", telemetry_rel)
+            except (json.JSONDecodeError, OSError):
+                pass
+        jsonl = project_root / telemetry_rel
+        adapter.sync(name, str(project_root), jsonl)
+        print(f"  Synced: {name}")
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -778,4 +927,17 @@ def main() -> None:
             _cmd_plugin_add(args.plugin_name)
         elif args.plugin_command == "remove":
             _cmd_plugin_remove(args.plugin_name)
+        return
+
+    if args.command == "server":
+        if args.server_command == "start":
+            _cmd_server_start(project_root, args)
+        elif args.server_command == "stop":
+            _cmd_server_stop()
+        elif args.server_command == "init-db":
+            _cmd_server_init_db(args)
+        elif args.server_command == "sync":
+            _cmd_server_sync(project_root, args)
+        else:
+            parser.parse_args(["server", "--help"])
         return
