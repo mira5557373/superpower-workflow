@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "superpower-workflow"
-version = "0.1.0.dev0"
+version = "1.0.0"
 description = "Automated post-brainstorming development lifecycle for Claude Code"
 readme = "README.md"
 requires-python = ">=3.11"
