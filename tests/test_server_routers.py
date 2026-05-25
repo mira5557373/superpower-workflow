@@ -115,3 +115,48 @@ class TestRunsRouter:
             run_id = runs[0]["id"]
             r = client.get(f"/api/v1/runs/compare?ids={run_id}")
             assert r.status_code == 200
+
+
+class TestMilestonesRouter:
+    def test_list_milestones_for_run(self, client):
+        runs = client.get("/api/v1/runs").json()
+        if runs:
+            run_id = runs[0]["id"]
+            r = client.get(f"/api/v1/milestones?run_id={run_id}")
+            assert r.status_code == 200
+            data = r.json()
+            assert len(data) == 2
+
+    def test_get_milestone_by_id(self, client):
+        runs = client.get("/api/v1/runs").json()
+        if runs:
+            run_id = runs[0]["id"]
+            milestones = client.get(f"/api/v1/milestones?run_id={run_id}").json()
+            if milestones:
+                ms_id = milestones[0]["id"]
+                r = client.get(f"/api/v1/milestones/{ms_id}")
+                assert r.status_code == 200
+                assert "phases" in r.json()
+
+    def test_milestone_not_found(self, client):
+        fake_id = str(uuid.uuid4())
+        r = client.get(f"/api/v1/milestones/{fake_id}")
+        assert r.status_code == 404
+
+
+class TestEventsRouter:
+    def test_list_events_empty(self, client):
+        runs = client.get("/api/v1/runs").json()
+        if runs:
+            run_id = runs[0]["id"]
+            r = client.get(f"/api/v1/events?run_id={run_id}")
+            assert r.status_code == 200
+            assert isinstance(r.json(), list)
+
+    def test_events_pagination(self, client):
+        r = client.get("/api/v1/events?limit=10&offset=0")
+        assert r.status_code == 200
+
+    def test_events_type_filter(self, client):
+        r = client.get("/api/v1/events?type=phase_completed")
+        assert r.status_code == 200
