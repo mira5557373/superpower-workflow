@@ -145,6 +145,14 @@ class TestSendNotification:
         result = send_notification({}, "milestone_start", {"milestone": "m1"})
         assert result is False
 
+    def test_empty_events_list_skips_all(self):
+        config = {"webhook_url_env": "SLACK_WEBHOOK_URL", "events": []}
+        with patch.dict("os.environ", {"SLACK_WEBHOOK_URL": "https://hooks.example.com/abc"}):
+            with patch("superpower_workflow.integrations.notifier.urllib.request.urlopen") as mock_url:
+                result = send_notification(config, "milestone_start", {"milestone": "m1"})
+        assert result is False
+        mock_url.assert_not_called()
+
     def test_sends_with_timeout(self):
         config = {"webhook_url_env": "SLACK_WEBHOOK_URL", "events": ["milestone_start"]}
         with patch.dict("os.environ", {"SLACK_WEBHOOK_URL": "https://hooks.example.com/abc"}):
@@ -426,7 +434,12 @@ def fetch_issue(issue_ref: str, default_repo: str = "", cwd: str = ".") -> dict[
     ]
     if repo:
         cmd.extend(["--repo", repo])
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, timeout=30)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, timeout=30)
+    except FileNotFoundError:
+        raise RuntimeError(
+            "gh CLI not found. Install from https://cli.github.com/"
+        ) from None
     if result.returncode != 0:
         raise RuntimeError(f"Failed to fetch issue {issue_ref}: {result.stderr.strip()}")
     return json.loads(result.stdout)
@@ -877,11 +890,34 @@ class LinearAdapter:
             "status": issue.get("state", {}).get("name", ""),
         }
 
+    def _lookup_state_id(self, name: str) -> str | None:
+        token = self._get_token()
+        query = {
+            "query": "query($name: String!) { workflowStates(filter: {name: {eq: $name}}) { nodes { id } } }",
+            "variables": {"name": name},
+        }
+        req = urllib.request.Request(
+            self._api_url,
+            data=json.dumps(query).encode(),
+            method="POST",
+            headers={"Content-Type": "application/json", "Authorization": token},
+        )
+        try:
+            resp = urllib.request.urlopen(req, timeout=15)
+            data = json.loads(resp.read())
+            nodes = data.get("data", {}).get("workflowStates", {}).get("nodes", [])
+            return nodes[0]["id"] if nodes else None
+        except (OSError, IndexError, KeyError):
+            return None
+
     def update_status(self, ticket_id: str, status: str, comment: str = "") -> bool:
         token = self._get_token()
+        state_id = self._lookup_state_id(status) if not status.startswith("state-") else status
+        if not state_id:
+            return False
         mutation = {
             "query": "mutation($id: String!, $stateId: String!) { issueUpdate(id: $id, input: { stateId: $stateId }) { success } }",
-            "variables": {"id": ticket_id, "stateId": status},
+            "variables": {"id": ticket_id, "stateId": state_id},
         }
         req = urllib.request.Request(
             self._api_url,
@@ -940,6 +976,27 @@ class JiraAdapter:
 
     def update_status(self, ticket_id: str, status: str, comment: str = "") -> bool:
         auth = self._auth_header()
+        try:
+            trans_url = f"{self._api_url}/rest/api/3/issue/{ticket_id}/transitions"
+            req = urllib.request.Request(
+                trans_url,
+                headers={"Authorization": auth, "Accept": "application/json"},
+            )
+            resp = urllib.request.urlopen(req, timeout=15)
+            transitions = json.loads(resp.read()).get("transitions", [])
+            target = next(
+                (t for t in transitions if t.get("name", "").lower() == status.lower()),
+                None,
+            )
+            if target:
+                body = json.dumps({"transition": {"id": target["id"]}}).encode()
+                req = urllib.request.Request(
+                    trans_url, data=body, method="POST",
+                    headers={"Authorization": auth, "Content-Type": "application/json"},
+                )
+                urllib.request.urlopen(req, timeout=15)
+        except OSError:
+            pass
         if comment:
             url = f"{self._api_url}/rest/api/3/issue/{ticket_id}/comment"
             body = json.dumps({"body": {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [{"type": "text", "text": comment}]}]}}).encode()
@@ -1133,12 +1190,17 @@ def wait_for_ci(
     poll_interval_seconds: int = 30,
 ) -> CIResult:
     deadline = time.monotonic() + timeout_seconds
+    consecutive_errors = 0
     while True:
-        result = subprocess.run(
-            ["gh", "run", "list", "--limit", "1", "--json", "status,conclusion,databaseId"],
-            capture_output=True, text=True, cwd=cwd, timeout=30,
-        )
+        try:
+            result = subprocess.run(
+                ["gh", "run", "list", "--limit", "1", "--json", "status,conclusion,databaseId"],
+                capture_output=True, text=True, cwd=cwd, timeout=30,
+            )
+        except FileNotFoundError:
+            return CIResult(status="timeout", conclusion="gh CLI not found")
         if result.returncode == 0 and result.stdout.strip():
+            consecutive_errors = 0
             runs = json.loads(result.stdout)
             if runs:
                 run = runs[0]
@@ -1149,6 +1211,10 @@ def wait_for_ci(
                     if conclusion == "success":
                         return CIResult(status="passed", run_id=run_id, conclusion=conclusion)
                     return CIResult(status="failed", run_id=run_id, conclusion=conclusion)
+        elif result.returncode != 0:
+            consecutive_errors += 1
+            if consecutive_errors >= 3:
+                return CIResult(status="timeout", conclusion="gh CLI errors")
         if time.monotonic() >= deadline:
             return CIResult(status="timeout")
         time.sleep(poll_interval_seconds)
@@ -1297,6 +1363,65 @@ class TestCiFixLoop:
             )
         assert success is False
         assert cost == 0.0
+
+    def test_on_attempt_callback_called(self):
+        wait_results = [
+            CIResult(status="failed", run_id="300"),
+            CIResult(status="passed", run_id="301"),
+        ]
+        call_count = [0]
+
+        def mock_wait(cwd, **kw):
+            idx = min(call_count[0], len(wait_results) - 1)
+            call_count[0] += 1
+            return wait_results[idx]
+
+        attempts = []
+
+        def on_attempt(attempt, max_attempts, status):
+            attempts.append((attempt, max_attempts, status))
+
+        with (
+            patch("superpower_workflow.integrations.ci_fix.wait_for_ci", side_effect=mock_wait),
+            patch("superpower_workflow.integrations.ci_fix.get_failure_logs", return_value="err"),
+            patch("superpower_workflow.integrations.ci_fix.subprocess.run") as mock_sub,
+        ):
+            mock_sub.return_value = CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            ci_fix_loop(
+                cwd=".",
+                ci_config=self._ci_config(),
+                run_claude_fn=lambda *a, **kw: ClaudeResult(cost_usd=1.0),
+                model="opus",
+                system_prompt="",
+                on_attempt=on_attempt,
+            )
+        assert len(attempts) >= 1
+        assert attempts[0][0] == 1  # first attempt
+
+    def test_uses_model_override_from_config(self):
+        def mock_wait(cwd, **kw):
+            return CIResult(status="failed", run_id="400")
+
+        models_used = []
+
+        def mock_claude(*a, **kw):
+            models_used.append(kw.get("model", ""))
+            return ClaudeResult(cost_usd=1.0)
+
+        with (
+            patch("superpower_workflow.integrations.ci_fix.wait_for_ci", side_effect=mock_wait),
+            patch("superpower_workflow.integrations.ci_fix.get_failure_logs", return_value="err"),
+            patch("superpower_workflow.integrations.ci_fix.subprocess.run") as mock_sub,
+        ):
+            mock_sub.return_value = CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            ci_fix_loop(
+                cwd=".",
+                ci_config=self._ci_config(max_fix_attempts=1, model="sonnet"),
+                run_claude_fn=mock_claude,
+                model="opus",
+                system_prompt="",
+            )
+        assert models_used[0] == "sonnet"
 ```
 
 - [ ] **Step 2: Run tests -- expect FAIL**
@@ -1319,6 +1444,7 @@ def ci_fix_loop(
     model: str = "opus",
     system_prompt: str = "",
     fallback_model: str | None = None,
+    on_attempt: Callable[[int, int, str], None] | None = None,
 ) -> tuple[bool, float]:
     timeout = ci_config.get("wait_timeout_seconds", 600)
     poll = ci_config.get("poll_interval_seconds", 30)
@@ -1333,6 +1459,8 @@ def ci_fix_loop(
         return False, 0.0
 
     for attempt in range(max_attempts):
+        if on_attempt:
+            on_attempt(attempt + 1, max_attempts, "retrying")
         logs = get_failure_logs(result.run_id, cwd)
         prompt = (
             f"CI failed. Logs:\n{logs}\n"
@@ -1350,10 +1478,14 @@ def ci_fix_loop(
         total_cost += r.cost_usd
         push = subprocess.run(["git", "push"], capture_output=True, cwd=cwd, timeout=60)
         if push.returncode != 0:
+            if on_attempt:
+                on_attempt(attempt + 1, max_attempts, "push_failed")
             continue
 
         result = wait_for_ci(cwd, timeout_seconds=timeout, poll_interval_seconds=poll)
         if result.status == "passed":
+            if on_attempt:
+                on_attempt(attempt + 1, max_attempts, "passed")
             return True, total_cost
 
     return False, total_cost
@@ -1554,7 +1686,28 @@ Update `_cmd_init` in `cli.py` to add integrations section to `default_config`:
         },
 ```
 
-Update `templates/workflow.json` to add the same section (before `"notification_webhook"`).
+Update `templates/workflow.json` — add the following section before `"notification_webhook"`:
+
+```json
+  "integrations": {
+    "github": {
+      "default_repo": "",
+      "auto_pr": false,
+      "issue_label_map": {"bug": "fix", "feature": "feature", "refactor": "refactor"}
+    },
+    "slack": {
+      "webhook_url_env": "",
+      "events": ["milestone_start", "milestone_complete", "milestone_failed", "ci_fix"]
+    },
+    "ci": {
+      "enabled": false,
+      "max_fix_attempts": 3,
+      "wait_timeout_seconds": 600,
+      "poll_interval_seconds": 30
+    },
+    "tracker": {}
+  },
+```
 
 - [ ] **Step 4: Run tests -- expect PASS**
 
@@ -1776,6 +1929,7 @@ In `Orchestrator.__init__`, read integrations config:
 ```python
         self._integrations = self.config.get("integrations", {})
         self._slack_config = self._integrations.get("slack", {})
+        self._last_coverage_pct = 0.0
 ```
 
 Add `_notify` helper method:
@@ -1971,6 +2125,16 @@ In `_run_milestone`, after Phase D and SBOM/signing, add Phase E:
             self.state.current_step = "ci_fix"
             save_state(self.claude_dir, self.state)
 
+            def _on_ci_attempt(attempt: int, max_attempts: int, status: str) -> None:
+                self._notify("ci_fix", {
+                    "milestone": name, "attempt": attempt,
+                    "max_attempts": max_attempts, "status": status,
+                })
+                self._telemetry.emit(RetryAttempt(
+                    milestone=name, phase="ci_fix",
+                    attempt=attempt, reason=status, delay_seconds=0,
+                ))
+
             ci_success, ci_cost = ci_fix_loop(
                 cwd=self.cwd,
                 ci_config=ci_config,
@@ -1978,6 +2142,7 @@ In `_run_milestone`, after Phase D and SBOM/signing, add Phase E:
                 model=self.config["model"],
                 system_prompt=self.sys_prompt,
                 fallback_model=self.config.get("fallback_model"),
+                on_attempt=_on_ci_attempt,
             )
             cost += ci_cost
 
@@ -1987,12 +2152,6 @@ In `_run_milestone`, after Phase D and SBOM/signing, add Phase E:
                 self.state.current_step = "ci_fix_failed"
                 save_state(self.claude_dir, self.state)
                 logger.log("PHASE_E_COMPLETE", status="failed", cost=round(ci_cost, 2))
-                self._notify("ci_fix", {
-                    "milestone": name,
-                    "attempt": ci_config.get("max_fix_attempts", 3),
-                    "max_attempts": ci_config.get("max_fix_attempts", 3),
-                    "status": "all_failed",
-                })
 
             self._telemetry.emit(
                 PhaseCompleted(
@@ -2154,6 +2313,7 @@ In `_run_milestone`, after Phase E (or after Phase D if CI disabled), add PR cre
                 description=ms.get("description", ""),
                 changes=changes,
                 cost_usd=cost,
+                coverage_pct=self._last_coverage_pct,
             )
             pr_url = create_pr(
                 title=name,
@@ -2348,6 +2508,9 @@ Store the ticket reference for later status update:
 ```python
         self._from_ticket = from_ticket
         self._tracker_adapter = None
+
+        if from_issue and from_ticket:
+            raise ValueError("--from-issue and --from-ticket are mutually exclusive")
 ```
 
 Add ingestion logic at the top of `run()`, before `milestones = self._filter_milestones(...)`:
