@@ -12,6 +12,20 @@ PHASE_FILE = ".workflow-phase.json"
 GAP_REPORT_FILE = ".gap-report.json"
 LOCK_FILE = ".workflow.lock"
 
+VALID_STEPS = frozenset(
+    {
+        "plan",
+        "implement",
+        "review",
+        "push",
+        "quality_check_b",
+        "quality_check_c",
+        "ci_wait",
+        "ci_fix",
+        "ci_fix_failed",
+    }
+)
+
 
 @dataclass
 class WorkflowState:

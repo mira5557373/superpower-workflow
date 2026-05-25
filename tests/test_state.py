@@ -266,3 +266,38 @@ class TestGracefulHandling:
 
         assert not phase_file.exists()
         assert not gap_file.exists()
+
+
+def test_ci_wait_step_roundtrips(tmp_path):
+    state = WorkflowState(current_step="ci_wait")
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    save_state(claude_dir, state)
+    loaded = load_state(claude_dir)
+    assert loaded.current_step == "ci_wait"
+
+
+def test_ci_fix_step_roundtrips(tmp_path):
+    state = WorkflowState(current_step="ci_fix")
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    save_state(claude_dir, state)
+    loaded = load_state(claude_dir)
+    assert loaded.current_step == "ci_fix"
+
+
+def test_ci_fix_failed_step_roundtrips(tmp_path):
+    state = WorkflowState(current_step="ci_fix_failed")
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    save_state(claude_dir, state)
+    loaded = load_state(claude_dir)
+    assert loaded.current_step == "ci_fix_failed"
+
+
+def test_ci_step_values_documented():
+    from superpower_workflow.state import VALID_STEPS
+
+    assert "ci_wait" in VALID_STEPS
+    assert "ci_fix" in VALID_STEPS
+    assert "ci_fix_failed" in VALID_STEPS
