@@ -1493,3 +1493,74 @@ class TestSP4Integration:
         trail = _read_audit_trail(tmp_path)
         run_ids = {e["run_id"] for e in trail if e["run_id"]}
         assert len(run_ids) == 1
+
+
+def _config_with_integrations(tmp_path, integrations=None, milestones=None, **extra):
+    config = _config(tmp_path, milestones=milestones)
+    config["integrations"] = integrations or {
+        "github": {"default_repo": "", "auto_pr": False, "issue_label_map": {}},
+        "slack": {
+            "webhook_url_env": "SLACK_URL",
+            "events": ["milestone_start", "milestone_complete", "milestone_failed"],
+        },
+        "ci": {"enabled": False},
+        "tracker": {},
+    }
+    config.update(extra)
+    (tmp_path / ".claude" / "workflow.json").write_text(json.dumps(config))
+    return config
+
+
+def test_orchestrator_sends_notification_on_milestone_start(tmp_path):
+    _config_with_integrations(tmp_path)
+    notifications = []
+
+    with (
+        patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+        patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
+        patch("superpower_workflow.orchestrator.send_notification") as mock_notify,
+    ):
+        mock_notify.side_effect = lambda *a, **kw: notifications.append(a)
+        orch = Orchestrator(tmp_path)
+        orch.run()
+
+    events = [n[1] for n in notifications]
+    assert "milestone_start" in events
+
+
+def test_orchestrator_sends_notification_on_milestone_complete(tmp_path):
+    _config_with_integrations(tmp_path)
+    notifications = []
+
+    with (
+        patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+        patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
+        patch("superpower_workflow.orchestrator.send_notification") as mock_notify,
+    ):
+        mock_notify.side_effect = lambda *a, **kw: notifications.append(a)
+        orch = Orchestrator(tmp_path)
+        orch.run()
+
+    events = [n[1] for n in notifications]
+    assert "milestone_complete" in events
+
+
+def test_orchestrator_sends_notification_on_milestone_failed(tmp_path):
+    _config_with_integrations(tmp_path)
+    notifications = []
+
+    with (
+        patch(
+            "superpower_workflow.orchestrator.run_claude",
+            return_value=ClaudeResult(is_error=True, text="fail"),
+        ),
+        patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
+        patch("superpower_workflow.orchestrator.send_notification") as mock_notify,
+        patch("superpower_workflow.orchestrator.time.sleep"),
+    ):
+        mock_notify.side_effect = lambda *a, **kw: notifications.append(a)
+        orch = Orchestrator(tmp_path)
+        orch.run()
+
+    events = [n[1] for n in notifications]
+    assert "milestone_failed" in events

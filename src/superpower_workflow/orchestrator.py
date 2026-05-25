@@ -9,6 +9,7 @@ from pathlib import Path
 
 from superpower_workflow.audit import AuditTrail, derive_key
 from superpower_workflow.context import build_context_summary
+from superpower_workflow.integrations.notifier import send_notification
 from superpower_workflow.logger import WorkflowLogger
 from superpower_workflow.policy import PolicyEngine
 from superpower_workflow.prompts import (
@@ -92,6 +93,8 @@ class Orchestrator:
         self._telemetry: TelemetryEmitter | None = None
         self._audit = AuditTrail.disabled()
         self._run_start: float = 0.0
+        self._integrations = self.config.get("integrations", {})
+        self._slack_config = self._integrations.get("slack", {})
 
     def run(
         self,
@@ -204,6 +207,7 @@ class Orchestrator:
                 logger.log("MILESTONE_START", name=name)
                 self._telemetry.emit(MilestoneStarted(milestone=name, index=i))
                 self._audit.append("MILESTONE_START", run_id=run_id, milestone=name)
+                self._notify("milestone_start", {"milestone": name})
                 milestone_start = time.monotonic()
                 self.state.current_milestone_index = i
                 success = False
@@ -228,6 +232,10 @@ class Orchestrator:
                                 cost_usd=round(cost, 2),
                                 duration_seconds=round(time.monotonic() - milestone_start, 1),
                             )
+                        )
+                        self._notify(
+                            "milestone_complete",
+                            {"milestone": name, "cost_usd": round(cost, 2), "test_count": 0},
                         )
                         success = True
                         consecutive_failures = 0
@@ -267,6 +275,10 @@ class Orchestrator:
                                     attempts=max_retries + 1,
                                 )
                             )
+                            self._notify(
+                                "milestone_failed",
+                                {"milestone": name, "phase": e.phase, "reason": str(e)},
+                            )
                             logger.log(
                                 "MILESTONE_FAILED",
                                 name=name,
@@ -300,6 +312,10 @@ class Orchestrator:
             logger.close()
             if self._telemetry:
                 self._telemetry.close()
+
+    def _notify(self, event: str, payload: dict) -> None:
+        if self._slack_config:
+            send_notification(self._slack_config, event, payload)
 
     def _preflight_checks(self) -> bool:
         if not acquire_lock(self.claude_dir):
