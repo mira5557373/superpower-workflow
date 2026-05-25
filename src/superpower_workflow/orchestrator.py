@@ -9,6 +9,7 @@ from pathlib import Path
 
 from superpower_workflow.audit import AuditTrail, derive_key
 from superpower_workflow.context import build_context_summary
+from superpower_workflow.integrations.ci_fix import ci_fix_loop
 from superpower_workflow.integrations.notifier import send_notification
 from superpower_workflow.logger import WorkflowLogger
 from superpower_workflow.policy import PolicyEngine
@@ -805,6 +806,61 @@ class Orchestrator:
                 )
             else:
                 logger.log("SIGNING_SKIPPED", milestone=name)
+
+        ci_config = self._integrations.get("ci", {})
+        if ci_config.get("enabled", False):
+            self.state.current_step = "ci_wait"
+            save_state(self.claude_dir, self.state)
+            logger.log("PHASE_E_START")
+            self._telemetry.emit(PhaseStarted(milestone=name, phase="ci_fix"))
+
+            self.state.current_step = "ci_fix"
+            save_state(self.claude_dir, self.state)
+
+            def _on_ci_attempt(attempt: int, max_attempts: int, status: str) -> None:
+                self._notify(
+                    "ci_fix",
+                    {
+                        "milestone": name,
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                        "status": status,
+                    },
+                )
+
+            ci_success, ci_cost = ci_fix_loop(
+                cwd=self.cwd,
+                ci_config=ci_config,
+                run_claude_fn=run_claude,
+                model=self.config["model"],
+                system_prompt=self.sys_prompt,
+                fallback_model=self.config.get("fallback_model"),
+                on_attempt=_on_ci_attempt,
+            )
+            cost += ci_cost
+
+            if ci_success:
+                logger.log("PHASE_E_COMPLETE", status="passed", cost=round(ci_cost, 2))
+            else:
+                self.state.current_step = "ci_fix_failed"
+                save_state(self.claude_dir, self.state)
+                logger.log("PHASE_E_COMPLETE", status="failed", cost=round(ci_cost, 2))
+
+            self._telemetry.emit(
+                PhaseCompleted(
+                    milestone=name,
+                    phase="ci_fix",
+                    cost_usd=round(ci_cost, 2),
+                    duration_ms=0,
+                    session_id="",
+                )
+            )
+            self._audit.append(
+                "PHASE_COMPLETE",
+                run_id=self.state.run_id,
+                milestone=name,
+                data={"phase": "ci_fix", "cost": round(ci_cost, 2), "success": ci_success},
+            )
 
         return cost
 

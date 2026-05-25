@@ -1564,3 +1564,117 @@ def test_orchestrator_sends_notification_on_milestone_failed(tmp_path):
 
     events = [n[1] for n in notifications]
     assert "milestone_failed" in events
+
+
+def test_orchestrator_runs_phase_e_when_ci_enabled(tmp_path):
+    _config_with_integrations(
+        tmp_path,
+        integrations={
+            "github": {"default_repo": "", "auto_pr": False, "issue_label_map": {}},
+            "slack": {},
+            "ci": {
+                "enabled": True,
+                "max_fix_attempts": 3,
+                "wait_timeout_seconds": 5,
+                "poll_interval_seconds": 1,
+            },
+            "tracker": {},
+        },
+    )
+
+    with (
+        patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+        patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
+        patch("superpower_workflow.orchestrator.ci_fix_loop") as mock_ci,
+        patch("superpower_workflow.orchestrator.send_notification"),
+    ):
+        mock_ci.return_value = (True, 0.5)
+        orch = Orchestrator(tmp_path)
+        orch.run()
+
+    mock_ci.assert_called_once()
+    call_kw = mock_ci.call_args
+    assert call_kw[1]["ci_config"]["enabled"] is True
+
+
+def test_orchestrator_skips_phase_e_when_ci_disabled(tmp_path):
+    _config_with_integrations(
+        tmp_path,
+        integrations={
+            "github": {"default_repo": "", "auto_pr": False, "issue_label_map": {}},
+            "slack": {},
+            "ci": {"enabled": False},
+            "tracker": {},
+        },
+    )
+
+    with (
+        patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+        patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
+        patch("superpower_workflow.orchestrator.ci_fix_loop") as mock_ci,
+        patch("superpower_workflow.orchestrator.send_notification"),
+    ):
+        orch = Orchestrator(tmp_path)
+        orch.run()
+
+    mock_ci.assert_not_called()
+
+
+def test_orchestrator_phase_e_cost_added(tmp_path):
+    _config_with_integrations(
+        tmp_path,
+        integrations={
+            "github": {"default_repo": "", "auto_pr": False, "issue_label_map": {}},
+            "slack": {},
+            "ci": {
+                "enabled": True,
+                "max_fix_attempts": 2,
+                "wait_timeout_seconds": 5,
+                "poll_interval_seconds": 1,
+            },
+            "tracker": {},
+        },
+    )
+
+    with (
+        patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result(cost=1.0)),
+        patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
+        patch("superpower_workflow.orchestrator.ci_fix_loop") as mock_ci,
+        patch("superpower_workflow.orchestrator.send_notification"),
+    ):
+        mock_ci.return_value = (True, 3.0)
+        orch = Orchestrator(tmp_path)
+        orch.run()
+
+    state = load_state(tmp_path / ".claude")
+    assert state.total_cost_usd >= 7.0
+
+
+def test_orchestrator_phase_e_failure_does_not_fail_milestone(tmp_path):
+    _config_with_integrations(
+        tmp_path,
+        integrations={
+            "github": {"default_repo": "", "auto_pr": False, "issue_label_map": {}},
+            "slack": {},
+            "ci": {
+                "enabled": True,
+                "max_fix_attempts": 1,
+                "wait_timeout_seconds": 5,
+                "poll_interval_seconds": 1,
+            },
+            "tracker": {},
+        },
+    )
+
+    with (
+        patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+        patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
+        patch("superpower_workflow.orchestrator.ci_fix_loop") as mock_ci,
+        patch("superpower_workflow.orchestrator.send_notification"),
+    ):
+        mock_ci.return_value = (False, 2.0)
+        orch = Orchestrator(tmp_path)
+        orch.run()
+
+    state = load_state(tmp_path / ".claude")
+    assert "m1" in state.completed
