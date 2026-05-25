@@ -1678,3 +1678,77 @@ def test_orchestrator_phase_e_failure_does_not_fail_milestone(tmp_path):
 
     state = load_state(tmp_path / ".claude")
     assert "m1" in state.completed
+
+
+def test_orchestrator_creates_pr_when_enabled(tmp_path):
+    _config_with_integrations(
+        tmp_path,
+        integrations={
+            "github": {"default_repo": "owner/repo", "auto_pr": True, "issue_label_map": {}},
+            "slack": {},
+            "ci": {"enabled": False},
+            "tracker": {},
+        },
+        git_strategy="branch",
+    )
+
+    with (
+        patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+        patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
+        patch("superpower_workflow.orchestrator.send_notification"),
+        patch("superpower_workflow.orchestrator.create_pr") as mock_pr,
+    ):
+        mock_pr.return_value = "https://github.com/owner/repo/pull/1"
+        orch = Orchestrator(tmp_path)
+        orch.run()
+
+    mock_pr.assert_called_once()
+    call_kw = mock_pr.call_args
+    assert "m1" in call_kw[1].get("title", "") or "m1" in str(call_kw)
+
+
+def test_orchestrator_skips_pr_when_disabled(tmp_path):
+    _config_with_integrations(
+        tmp_path,
+        integrations={
+            "github": {"default_repo": "", "auto_pr": False, "issue_label_map": {}},
+            "slack": {},
+            "ci": {"enabled": False},
+            "tracker": {},
+        },
+    )
+
+    with (
+        patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+        patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
+        patch("superpower_workflow.orchestrator.send_notification"),
+        patch("superpower_workflow.orchestrator.create_pr") as mock_pr,
+    ):
+        orch = Orchestrator(tmp_path)
+        orch.run()
+
+    mock_pr.assert_not_called()
+
+
+def test_orchestrator_pr_on_main_strategy(tmp_path):
+    _config_with_integrations(
+        tmp_path,
+        integrations={
+            "github": {"default_repo": "owner/repo", "auto_pr": True, "issue_label_map": {}},
+            "slack": {},
+            "ci": {"enabled": False},
+            "tracker": {},
+        },
+        git_strategy="main",
+    )
+
+    with (
+        patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+        patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
+        patch("superpower_workflow.orchestrator.send_notification"),
+        patch("superpower_workflow.orchestrator.create_pr") as mock_pr,
+    ):
+        orch = Orchestrator(tmp_path)
+        orch.run()
+
+    mock_pr.assert_not_called()

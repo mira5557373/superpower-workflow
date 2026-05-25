@@ -10,6 +10,7 @@ from pathlib import Path
 from superpower_workflow.audit import AuditTrail, derive_key
 from superpower_workflow.context import build_context_summary
 from superpower_workflow.integrations.ci_fix import ci_fix_loop
+from superpower_workflow.integrations.github import create_pr, render_pr_body
 from superpower_workflow.integrations.notifier import send_notification
 from superpower_workflow.logger import WorkflowLogger
 from superpower_workflow.policy import PolicyEngine
@@ -861,6 +862,44 @@ class Orchestrator:
                 milestone=name,
                 data={"phase": "ci_fix", "cost": round(ci_cost, 2), "success": ci_success},
             )
+
+        gh_config = self._integrations.get("github", {})
+        if gh_config.get("auto_pr", False) and self.config.get("git_strategy") != "main":
+            branch = f"milestone/{name}"
+            base = "main"
+            changes = ""
+            plan_sha = self.state.plan_commit_sha or ""
+            if plan_sha:
+                log_result = subprocess.run(
+                    ["git", "log", "--oneline", f"{plan_sha}..HEAD"],
+                    capture_output=True,
+                    text=True,
+                    cwd=self.cwd,
+                    timeout=10,
+                )
+                changes = log_result.stdout.strip() if log_result.returncode == 0 else ""
+            body = render_pr_body(
+                milestone=name,
+                description=ms.get("description", ""),
+                changes=changes,
+                cost_usd=cost,
+            )
+            pr_url = create_pr(
+                title=name,
+                body=body,
+                branch=branch,
+                base=base,
+                cwd=self.cwd,
+                repo=gh_config.get("default_repo", ""),
+            )
+            if pr_url:
+                logger.log("PR_CREATED", milestone=name, url=pr_url)
+                self._audit.append(
+                    "PR_CREATED",
+                    run_id=self.state.run_id,
+                    milestone=name,
+                    data={"url": pr_url},
+                )
 
         return cost
 
