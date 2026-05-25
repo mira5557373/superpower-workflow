@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -85,6 +87,14 @@ def build_parser() -> argparse.ArgumentParser:
     upgrade_p.add_argument(
         "--dry-run", action="store_true", help="List outdated deps without upgrading"
     )
+
+    plugin_p = sub.add_parser("plugin", help="Manage plugins")
+    plugin_sub = plugin_p.add_subparsers(dest="plugin_command")
+    plugin_sub.add_parser("list", help="Show installed plugins")
+    add_p = plugin_sub.add_parser("add", help="Install a plugin")
+    add_p.add_argument("plugin_name", help="Plugin name (installs sw-plugin-{name})")
+    remove_p = plugin_sub.add_parser("remove", help="Remove a plugin")
+    remove_p.add_argument("plugin_name", help="Plugin name (uninstalls sw-plugin-{name})")
 
     return parser
 
@@ -415,6 +425,47 @@ def _cmd_decompose(project_root: Path) -> None:
         print(f"    - {ms['name']}: {ms.get('description', '')}")
 
 
+_PLUGIN_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+
+
+def _validate_plugin_name(name: str) -> bool:
+    return bool(_PLUGIN_NAME_RE.match(name)) and len(name) <= 64
+
+
+def _cmd_plugin_add(name: str) -> None:
+    if not _validate_plugin_name(name):
+        print(f"  Invalid plugin name: {name!r}. Must be alphanumeric with hyphens/underscores.")
+        return
+    package = f"sw-plugin-{name}"
+    result = subprocess.run(
+        ["pip", "install", package],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode == 0:
+        print(f"  Installed {package}")
+    else:
+        print(f"  Failed to install {package}: {result.stderr.strip()}")
+
+
+def _cmd_plugin_remove(name: str) -> None:
+    if not _validate_plugin_name(name):
+        print(f"  Invalid plugin name: {name!r}. Must be alphanumeric with hyphens/underscores.")
+        return
+    package = f"sw-plugin-{name}"
+    result = subprocess.run(
+        ["pip", "uninstall", "-y", package],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode == 0:
+        print(f"  Removed {package}")
+    else:
+        print(f"  Failed to remove {package}: {result.stderr.strip()}")
+
+
 def _cmd_resume(project_root: Path) -> None:
     from superpower_workflow.orchestrator import Orchestrator
     from superpower_workflow.state import load_state
@@ -569,4 +620,20 @@ def main() -> None:
                 print(f"    {dep.name}: {dep.current} -> {dep.latest}{flag}")
         if args.dry_run:
             return
+        return
+
+    if args.command == "plugin":
+        if args.plugin_command == "list":
+            from superpower_workflow.plugins.loader import load_plugins
+
+            plugins = load_plugins()
+            if not plugins:
+                print("  No plugins installed.")
+            else:
+                for p in plugins:
+                    print(f"  {p.name} v{p.version}")
+        elif args.plugin_command == "add":
+            _cmd_plugin_add(args.plugin_name)
+        elif args.plugin_command == "remove":
+            _cmd_plugin_remove(args.plugin_name)
         return
