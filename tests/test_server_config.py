@@ -4,6 +4,11 @@ import json
 from pathlib import Path
 
 from superpower_workflow.cli import _cmd_init
+from superpower_workflow.server.registry import (
+    ProjectEntry,
+    ProjectRegistry,
+    get_default_registry_path,
+)
 
 
 class TestDatabaseConfig:
@@ -37,3 +42,85 @@ class TestDatabaseConfig:
         db = config["database"]
         assert "url" not in db
         assert "password" not in db
+
+
+class TestProjectEntry:
+    def test_entry_has_required_fields(self):
+        e = ProjectEntry(name="myapp", path="/home/user/myapp")
+        assert e.name == "myapp"
+        assert e.path == "/home/user/myapp"
+        assert isinstance(e.added_at, str)
+
+    def test_entry_auto_generates_timestamp(self):
+        e = ProjectEntry(name="test", path="/tmp/test")
+        assert "T" in e.added_at
+        assert e.added_at.endswith("Z")
+
+    def test_entry_to_dict_roundtrip(self):
+        e = ProjectEntry(name="app", path="/p/app")
+        d = e.to_dict()
+        e2 = ProjectEntry.from_dict(d)
+        assert e2.name == e.name
+        assert e2.path == e.path
+
+
+class TestProjectRegistry:
+    def test_register_project(self, tmp_path: Path):
+        reg = ProjectRegistry(tmp_path / "projects.json")
+        reg.register("myapp", "/home/user/myapp")
+        projects = reg.list_projects()
+        assert len(projects) == 1
+        assert projects[0].name == "myapp"
+
+    def test_register_deduplicates_by_name(self, tmp_path: Path):
+        reg = ProjectRegistry(tmp_path / "projects.json")
+        reg.register("myapp", "/path/a")
+        reg.register("myapp", "/path/b")
+        projects = reg.list_projects()
+        assert len(projects) == 1
+        assert projects[0].path == "/path/b"
+
+    def test_get_project_by_name(self, tmp_path: Path):
+        reg = ProjectRegistry(tmp_path / "projects.json")
+        reg.register("app1", "/p/1")
+        reg.register("app2", "/p/2")
+        p = reg.get_project("app1")
+        assert p is not None
+        assert p.path == "/p/1"
+
+    def test_get_nonexistent_returns_none(self, tmp_path: Path):
+        reg = ProjectRegistry(tmp_path / "projects.json")
+        assert reg.get_project("nope") is None
+
+    def test_remove_project(self, tmp_path: Path):
+        reg = ProjectRegistry(tmp_path / "projects.json")
+        reg.register("app", "/p/app")
+        reg.remove("app")
+        assert reg.list_projects() == []
+
+    def test_persistence_across_instances(self, tmp_path: Path):
+        path = tmp_path / "projects.json"
+        reg1 = ProjectRegistry(path)
+        reg1.register("app", "/p/app")
+        reg2 = ProjectRegistry(path)
+        assert len(reg2.list_projects()) == 1
+
+    def test_empty_registry(self, tmp_path: Path):
+        reg = ProjectRegistry(tmp_path / "projects.json")
+        assert reg.list_projects() == []
+
+    def test_default_path_under_home(self):
+        p = get_default_registry_path()
+        assert "sw-projects.json" in str(p)
+
+
+class TestRegistryCorruption:
+    def test_handles_corrupt_json(self, tmp_path: Path):
+        path = tmp_path / "projects.json"
+        path.write_text("not json{{{")
+        reg = ProjectRegistry(path)
+        assert reg.list_projects() == []
+
+    def test_handles_missing_file(self, tmp_path: Path):
+        reg = ProjectRegistry(tmp_path / "nonexistent" / "projects.json")
+        assert reg.list_projects() == []
