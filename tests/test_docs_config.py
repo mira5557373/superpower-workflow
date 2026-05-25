@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from superpower_workflow.cli import _cmd_init
+
+
+def _load_json5(path: Path) -> dict:
+    text = path.read_text()
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+    return json.loads(text)
 
 
 class TestDocsConfig:
@@ -53,3 +60,15 @@ class TestDocsConfig:
         assert plugins["enabled"] is True
         assert isinstance(plugins["blocked"], list)
         assert plugins["blocked"] == []
+
+
+class TestTemplateWorkflowJson:
+    def test_template_has_docs_section(self):
+        template_path = Path(__file__).resolve().parent.parent / "templates" / "workflow.json"
+        config = _load_json5(template_path)
+        assert "docs" in config
+
+    def test_template_has_plugins_section(self):
+        template_path = Path(__file__).resolve().parent.parent / "templates" / "workflow.json"
+        config = _load_json5(template_path)
+        assert "plugins" in config

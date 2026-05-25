@@ -64,6 +64,28 @@
         "remote": null,
         "worktree_dir": ".worktrees",
     },
+    "docs": {
+        "readme": {
+            "enabled": false,
+            "template": null,
+            "sections": ["overview", "quickstart", "architecture", "contributing"],
+        },
+        "changelog": {
+            "enabled": true,
+        },
+        "api": {
+            "tool": "sphinx",
+            "output_dir": "docs/api",
+        },
+        "diagrams": {
+            "enabled": true,
+            "output": "docs/architecture.mmd",
+        },
+    },
+    "plugins": {
+        "enabled": true,
+        "blocked": [],
+    },
     "notification_webhook": null,
     "milestones": [],
 }
