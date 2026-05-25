@@ -7,9 +7,11 @@ from unittest.mock import patch
 import pytest
 
 from superpower_workflow.integrations.github import (
+    create_pr,
     fetch_issue,
     issue_to_milestone,
     parse_issue_ref,
+    render_pr_body,
 )
 
 
@@ -134,3 +136,75 @@ class TestIssueToMilestone:
         }
         ms = issue_to_milestone(issue)
         assert ms["name"] == "fix-login-sso-urgent"
+
+
+class TestRenderPrBody:
+    def test_includes_milestone_name(self):
+        body = render_pr_body("m1", description="First milestone", changes="abc123 feat: stuff")
+        assert "m1" in body
+
+    def test_includes_changes(self):
+        body = render_pr_body("m1", description="desc", changes="abc123 feat: add X\ndef456 fix: Y")
+        assert "abc123" in body
+        assert "def456" in body
+
+    def test_includes_cost_and_duration(self):
+        body = render_pr_body(
+            "m1",
+            description="desc",
+            cost_usd=15.50,
+            duration_seconds=300.0,
+            test_count=8,
+        )
+        assert "15.5" in body or "$15.50" in body
+        assert "8" in body
+
+    def test_includes_version(self):
+        body = render_pr_body("m1", description="desc")
+        assert "superpower-workflow" in body
+
+    def test_empty_changes_section(self):
+        body = render_pr_body("m1", description="desc", changes="")
+        assert "m1" in body
+
+
+class TestCreatePr:
+    def test_creates_pr_via_gh(self):
+        with patch("superpower_workflow.integrations.github.subprocess.run") as mock_run:
+            mock_run.return_value = CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout="https://github.com/owner/repo/pull/1\n",
+                stderr="",
+            )
+            url = create_pr(
+                title="m1",
+                body="## m1\nChanges here",
+                branch="milestone/m1",
+                base="main",
+            )
+        assert url == "https://github.com/owner/repo/pull/1"
+        cmd = mock_run.call_args[0][0]
+        assert "gh" in cmd
+        assert "pr" in cmd
+        assert "create" in cmd
+        assert "--title" in cmd
+        assert "--head" in cmd
+
+    def test_returns_empty_on_failure(self):
+        with patch("superpower_workflow.integrations.github.subprocess.run") as mock_run:
+            mock_run.return_value = CompletedProcess(
+                args=[], returncode=1, stdout="", stderr="already exists"
+            )
+            url = create_pr(title="m1", body="body", branch="b", base="main")
+        assert url == ""
+
+    def test_passes_repo_flag(self):
+        with patch("superpower_workflow.integrations.github.subprocess.run") as mock_run:
+            mock_run.return_value = CompletedProcess(
+                args=[], returncode=0, stdout="https://github.com/o/r/pull/1\n", stderr=""
+            )
+            create_pr(title="m1", body="body", branch="b", base="main", repo="o/r")
+        cmd = mock_run.call_args[0][0]
+        assert "--repo" in cmd
+        assert "o/r" in cmd
