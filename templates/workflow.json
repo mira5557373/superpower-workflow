@@ -46,6 +46,33 @@
   },
   "secrets": {},
   "policies": {},
+  "integrations": {
+    "github": {
+      "default_repo": "",
+      "auto_pr": false,
+      "issue_label_map": {
+        "bug": "fix",
+        "feature": "feature",
+        "refactor": "refactor"
+      }
+    },
+    "slack": {
+      "webhook_url_env": "",
+      "events": [
+        "milestone_start",
+        "milestone_complete",
+        "milestone_failed",
+        "ci_fix"
+      ]
+    },
+    "ci": {
+      "enabled": false,
+      "max_fix_attempts": 3,
+      "wait_timeout_seconds": 600,
+      "poll_interval_seconds": 30
+    },
+    "tracker": {}
+  },
   "notification_webhook": null,
   "milestones": []
 }

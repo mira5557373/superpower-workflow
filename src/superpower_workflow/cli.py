@@ -98,6 +98,24 @@ def _cmd_init(project_root: Path) -> None:
         },
         "secrets": {},
         "policies": {},
+        "integrations": {
+            "github": {
+                "default_repo": "",
+                "auto_pr": False,
+                "issue_label_map": {"bug": "fix", "feature": "feature", "refactor": "refactor"},
+            },
+            "slack": {
+                "webhook_url_env": "",
+                "events": ["milestone_start", "milestone_complete", "milestone_failed", "ci_fix"],
+            },
+            "ci": {
+                "enabled": False,
+                "max_fix_attempts": 3,
+                "wait_timeout_seconds": 600,
+                "poll_interval_seconds": 30,
+            },
+            "tracker": {},
+        },
         "notification_webhook": None,
         "milestones": [],
     }

@@ -365,3 +365,41 @@ def test_init_audit_trail_in_gitignore(tmp_path):
     _cmd_init(tmp_path)
     gitignore = (tmp_path / ".gitignore").read_text()
     assert "audit-trail.jsonl" in gitignore
+
+
+def test_init_config_has_integrations_section(tmp_path):
+    _cmd_init(tmp_path)
+    config = json.loads((tmp_path / ".claude" / "workflow.json").read_text())
+    assert "integrations" in config
+    assert "github" in config["integrations"]
+    assert "slack" in config["integrations"]
+    assert "ci" in config["integrations"]
+
+
+def test_init_integrations_github_defaults(tmp_path):
+    _cmd_init(tmp_path)
+    config = json.loads((tmp_path / ".claude" / "workflow.json").read_text())
+    gh = config["integrations"]["github"]
+    assert gh["default_repo"] == ""
+    assert gh["auto_pr"] is False
+    assert gh["issue_label_map"] == {"bug": "fix", "feature": "feature", "refactor": "refactor"}
+
+
+def test_init_integrations_ci_defaults(tmp_path):
+    _cmd_init(tmp_path)
+    config = json.loads((tmp_path / ".claude" / "workflow.json").read_text())
+    ci = config["integrations"]["ci"]
+    assert ci["enabled"] is False
+    assert ci["max_fix_attempts"] == 3
+    assert ci["wait_timeout_seconds"] == 600
+    assert ci["poll_interval_seconds"] == 30
+
+
+def test_init_integrations_slack_defaults(tmp_path):
+    _cmd_init(tmp_path)
+    config = json.loads((tmp_path / ".claude" / "workflow.json").read_text())
+    slack = config["integrations"]["slack"]
+    assert slack["webhook_url_env"] == ""
+    assert "milestone_start" in slack["events"]
+    assert "milestone_complete" in slack["events"]
+    assert "milestone_failed" in slack["events"]
