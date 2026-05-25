@@ -34,8 +34,17 @@ def wait_for_ci(
         except FileNotFoundError:
             return CIResult(status="timeout", conclusion="gh CLI not found")
         if result.returncode == 0 and result.stdout.strip():
+            try:
+                runs = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                consecutive_errors += 1
+                if consecutive_errors >= 3:
+                    return CIResult(status="timeout", conclusion="invalid response from gh CLI")
+                if time.monotonic() >= deadline:
+                    return CIResult(status="timeout")
+                time.sleep(poll_interval_seconds)
+                continue
             consecutive_errors = 0
-            runs = json.loads(result.stdout)
             if runs:
                 run = runs[0]
                 run_id = str(run.get("databaseId", ""))
@@ -55,13 +64,16 @@ def wait_for_ci(
 
 
 def get_failure_logs(run_id: str, cwd: str, max_lines: int = 200) -> str:
-    result = subprocess.run(
-        ["gh", "run", "view", run_id, "--log-failed"],
-        capture_output=True,
-        text=True,
-        cwd=cwd,
-        timeout=60,
-    )
+    try:
+        result = subprocess.run(
+            ["gh", "run", "view", run_id, "--log-failed"],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            timeout=60,
+        )
+    except FileNotFoundError:
+        return ""
     if result.returncode != 0:
         return ""
     lines = result.stdout.strip().split("\n")

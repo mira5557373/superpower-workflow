@@ -103,6 +103,8 @@ class Orchestrator:
         self._run_start: float = 0.0
         self._integrations = self.config.get("integrations", {})
         self._slack_config = self._integrations.get("slack", {})
+        self._from_ticket: str | None = None
+        self._tracker_adapter = None
 
     def run(
         self,

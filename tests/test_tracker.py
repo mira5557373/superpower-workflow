@@ -128,13 +128,30 @@ class TestJiraAdapter:
 
     def test_update_status(self):
         adapter = self._make_adapter()
+        transitions_resp = BytesIO(
+            json.dumps({"transitions": [{"id": "31", "name": "Done"}]}).encode()
+        )
+        transition_post_resp = BytesIO(b"")
         with (
             patch.dict("os.environ", {"JIRA_API_TOKEN": "tok-j", "JIRA_USER_EMAIL": "a@b.com"}),
             patch("superpower_workflow.integrations.tracker.urllib.request.urlopen") as mock_url,
         ):
-            mock_url.return_value = BytesIO(b"{}")
+            mock_url.side_effect = [transitions_resp, transition_post_resp]
             result = adapter.update_status("PROJ-123", "Done")
         assert result is True
+
+    def test_update_status_no_matching_transition(self):
+        adapter = self._make_adapter()
+        transitions_resp = BytesIO(
+            json.dumps({"transitions": [{"id": "10", "name": "In Progress"}]}).encode()
+        )
+        with (
+            patch.dict("os.environ", {"JIRA_API_TOKEN": "tok-j", "JIRA_USER_EMAIL": "a@b.com"}),
+            patch("superpower_workflow.integrations.tracker.urllib.request.urlopen") as mock_url,
+        ):
+            mock_url.return_value = transitions_resp
+            result = adapter.update_status("PROJ-123", "Done")
+        assert result is False
 
 
 class TestCreateTracker:

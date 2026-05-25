@@ -72,6 +72,22 @@ class TestWaitForCi:
             result = wait_for_ci(".", timeout_seconds=5, poll_interval_seconds=1)
         assert result.status == "timeout"
 
+    def test_handles_invalid_json_response(self):
+        with (
+            patch("superpower_workflow.integrations.ci_fix.subprocess.run") as mock_run,
+            patch("superpower_workflow.integrations.ci_fix.time.sleep"),
+            patch(
+                "superpower_workflow.integrations.ci_fix.time.monotonic",
+                side_effect=[0, 0, 0, 0, 0, 0, 700],
+            ),
+        ):
+            mock_run.return_value = CompletedProcess(
+                args=[], returncode=0, stdout="not json", stderr=""
+            )
+            result = wait_for_ci(".", timeout_seconds=600, poll_interval_seconds=1)
+        assert result.status == "timeout"
+        assert "invalid" in result.conclusion.lower()
+
 
 class TestGetFailureLogs:
     def test_returns_log_lines(self):
@@ -95,6 +111,14 @@ class TestGetFailureLogs:
                 args=[], returncode=1, stdout="", stderr="not found"
             )
             result = get_failure_logs("999", ".")
+        assert result == ""
+
+    def test_returns_empty_when_gh_not_found(self):
+        with patch(
+            "superpower_workflow.integrations.ci_fix.subprocess.run",
+            side_effect=FileNotFoundError("gh not found"),
+        ):
+            result = get_failure_logs("101", ".")
         assert result == ""
 
 

@@ -160,6 +160,7 @@ class JiraAdapter:
 
     def update_status(self, ticket_id: str, status: str, comment: str = "") -> bool:
         auth = self._auth_header()
+        transitioned = False
         try:
             trans_url = f"{self._api_url}/rest/api/3/issue/{ticket_id}/transitions"
             req = urllib.request.Request(
@@ -181,6 +182,7 @@ class JiraAdapter:
                     headers={"Authorization": auth, "Content-Type": "application/json"},
                 )
                 urllib.request.urlopen(req, timeout=15)
+                transitioned = True
         except OSError:
             pass
         if comment:
@@ -208,8 +210,8 @@ class JiraAdapter:
             try:
                 urllib.request.urlopen(req, timeout=15)
             except OSError:
-                return False
-        return True
+                return transitioned
+        return transitioned
 
     def ticket_to_milestone(self, ticket_data: dict[str, Any]) -> dict[str, Any]:
         return {
