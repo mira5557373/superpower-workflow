@@ -116,7 +116,19 @@ def main() -> None:
     claude_dir = Path(".claude")
     code = compute_exit_code(claude_dir)
     if code == 2:
-        print("Gaps remain. Continue analyzing and fixing.", file=sys.stderr)
+        iteration = 0
+        max_iterations = 5
+        phase_path = claude_dir / PHASE_FILE
+        try:
+            phase = json.loads(phase_path.read_text())
+            iteration = phase.get("iteration", 0)
+            max_iterations = phase.get("max_iterations", 5)
+        except (json.JSONDecodeError, OSError):
+            pass
+        print(
+            f"Pass {iteration}/{max_iterations}: Gaps remain. Continue analyzing and fixing.",
+            file=sys.stderr,
+        )
     sys.exit(code)
 
 

@@ -21,6 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("estimate", help="Cost and duration estimate")
     sub.add_parser("status", help="Show progress")
     sub.add_parser("resume", help="Resume from failure point")
+    sub.add_parser("clean", help="Remove runtime files")
 
     metrics_p = sub.add_parser("metrics", help="Show telemetry metrics")
     metrics_p.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON")
@@ -121,7 +122,7 @@ def _cmd_init(project_root: Path) -> None:
             "min_gaps_for_substantial": 20,
             "persistent_gap_downgrade_after": 3,
         },
-        "verify_commands": {"test": "python -m pytest -q", "lint": None, "format": None},
+        "verify_commands": {"test": None, "lint": None, "format": None},
         "git_strategy": "main",
         "telemetry": {
             "enabled": True,
@@ -178,7 +179,7 @@ def _cmd_init(project_root: Path) -> None:
         },
         "docs": {
             "readme": {
-                "enabled": False,
+                "enabled": True,
                 "template": None,
                 "sections": ["overview", "quickstart", "architecture", "contributing"],
             },
@@ -223,14 +224,29 @@ def _cmd_init(project_root: Path) -> None:
         ".claude/audit-trail.jsonl",
         ".worktrees/",
     ]
+    python_entries = [
+        ".venv/",
+        "__pycache__/",
+        "*.pyc",
+        "dist/",
+        "build/",
+        "*.egg-info/",
+    ]
     existing = gitignore.read_text() if gitignore.exists() else ""
-    new_entries = [e for e in entries if e not in existing]
-    if new_entries:
-        with open(gitignore, "a") as f:
+    sw_new = [e for e in entries if e not in existing]
+    py_new = [e for e in python_entries if e not in existing]
+    with open(gitignore, "a") as f:
+        if sw_new:
             f.write("\n# superpower-workflow runtime files\n")
-            for e in new_entries:
+            for e in sw_new:
                 f.write(f"{e}\n")
-        print(f"  Added {len(new_entries)} entries to .gitignore")
+        if py_new:
+            f.write("\n# Python standard ignores\n")
+            for e in py_new:
+                f.write(f"{e}\n")
+    added = len(sw_new) + len(py_new)
+    if added:
+        print(f"  Added {added} entries to .gitignore")
 
     # Install skills, commands, and settings project-locally
     _install_project_local(claude_dir)
@@ -458,6 +474,45 @@ def _cmd_audit_verify_sig(project_root: Path, tag: str, public_key: str | None) 
         sys.exit(1)
 
 
+def _cmd_clean(project_root: Path) -> None:
+    claude_dir = project_root / ".claude"
+    removed = 0
+    fixed_files = [
+        "workflow-state.json",
+        ".workflow-phase.json",
+        ".gap-report.json",
+        ".workflow.lock",
+        "workflow-complete.json",
+    ]
+    for name in fixed_files:
+        path = claude_dir / name
+        if path.exists():
+            path.unlink()
+            removed += 1
+            print(f"  Removed .claude/{name}")
+    for path in claude_dir.glob("workflow-*.log"):
+        path.unlink()
+        removed += 1
+        print(f"  Removed .claude/{path.name}")
+    telemetry_path = claude_dir / "telemetry.jsonl"
+    config_path = claude_dir / "workflow.json"
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text())
+            rel = config.get("telemetry", {}).get("path", ".claude/telemetry.jsonl")
+            telemetry_path = project_root / rel
+        except (json.JSONDecodeError, OSError):
+            pass
+    if telemetry_path.exists():
+        telemetry_path.unlink()
+        removed += 1
+        print(f"  Removed {telemetry_path.name}")
+    if removed == 0:
+        print("  Nothing to clean.")
+    else:
+        print(f"  Cleaned {removed} runtime file(s).")
+
+
 def _cmd_decompose(project_root: Path) -> None:
     from superpower_workflow.decomposer import decompose
     from superpower_workflow.state import load_config
@@ -560,6 +615,10 @@ def main() -> None:
         _cmd_init(project_root)
         return
 
+    if args.command == "clean":
+        _cmd_clean(project_root)
+        return
+
     if args.command == "audit":
         if args.audit_command == "verify":
             _cmd_audit_verify(project_root)
@@ -595,7 +654,7 @@ def main() -> None:
         from superpower_workflow.state import load_config
 
         config = load_config(project_root / ".claude")
-        est = estimate(config)
+        est = estimate(config, project_root=project_root)
         print(f"  Milestones: {est['milestone_count']}")
         print(f"  Cost: ${est['cost_optimistic']}-${est['cost_pessimistic']}")
         print(f"  Duration: {est['duration_optimistic_min']}-{est['duration_pessimistic_min']} min")

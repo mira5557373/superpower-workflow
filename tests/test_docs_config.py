@@ -28,7 +28,7 @@ class TestDocsConfig:
         _cmd_init(tmp_path)
         config = json.loads((tmp_path / ".claude" / "workflow.json").read_text())
         readme = config["docs"]["readme"]
-        assert readme["enabled"] is False
+        assert readme["enabled"] is True
         assert readme["template"] is None
         assert isinstance(readme["sections"], list)
         assert "overview" in readme["sections"]

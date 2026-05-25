@@ -14,11 +14,13 @@ Rules:
 - Group by dependency (foundations first)
 - Each milestone independently testable
 - Name format: {{phase}}-m{{N}}-{{short-name}}
-Output ONLY a JSON array of milestones, each with: name, spec_sections, description, depends_on."""
+Output ONLY a JSON array of milestones, each with: name, spec_sections, description, depends_on.
+Do not include any explanation or text outside the JSON array."""
 
 VALIDATE_PROMPT = """Review these proposed milestones against the spec at {spec_path}.
-Check: all spec sections covered? Dependencies correct? Sizes reasonable?
-Fix any issues. Output ONLY the corrected JSON array.
+Check: all spec sections covered? Dependencies correct? Sizes reasonable (10-25 tasks each)?
+Fix any issues. Output ONLY a JSON array of milestones.
+Do not include any explanation, markdown formatting, or text outside the JSON array.
 
 Proposed milestones:
 {milestones_json}"""
@@ -78,4 +80,13 @@ def _extract_json_array(text: str) -> list[dict]:
             return data
     except json.JSONDecodeError:
         pass
+    start = cleaned.find("[")
+    end = cleaned.rfind("]")
+    if start != -1 and end > start:
+        try:
+            data = json.loads(cleaned[start : end + 1])
+            if isinstance(data, list):
+                return data
+        except json.JSONDecodeError:
+            pass
     return []
