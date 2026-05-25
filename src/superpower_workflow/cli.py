@@ -199,6 +199,16 @@ def _cmd_init(project_root: Path) -> None:
             "enabled": True,
             "blocked": [],
         },
+        "database": {
+            "url_env": "SW_DATABASE_URL",
+            "retention_days": 90,
+            "auto_sync": True,
+        },
+        "server": {
+            "host": "0.0.0.0",
+            "port": 3001,
+            "cors_origins": ["http://localhost:3001"],
+        },
         "notification_webhook": None,
         "milestones": [],
     }

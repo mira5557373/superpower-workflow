@@ -23,6 +23,13 @@ dev = [
 security = [
     "cryptography>=42.0",
 ]
+server = [
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "fastapi>=0.100",
+    "uvicorn>=0.20",
+    "psycopg2-binary>=2.9",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/superpower_workflow"]
