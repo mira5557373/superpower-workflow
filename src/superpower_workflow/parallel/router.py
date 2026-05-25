@@ -74,7 +74,10 @@ def score_complexity(ms: dict) -> ComplexityScore:
         signals.append(f"medium_keywords:{','.join(sorted(med_matches))}")
 
     sections = ms.get("spec_sections", "")
-    section_count = len([s for s in sections.split(",") if s.strip()]) if sections else 0
+    if isinstance(sections, list):
+        section_count = len(sections)
+    else:
+        section_count = len([s for s in sections.split(",") if s.strip()]) if sections else 0
     if section_count > 5:
         value += 0.15
         signals.append(f"many_sections:{section_count}")
