@@ -204,6 +204,42 @@ class RemoteExecution(TelemetryEvent):
     cost_usd: float = 0.0
 
 
+@dataclass
+class DocsGenerated:
+    doc_type: str
+    output_path: str
+    type: str = "docs_generated"
+
+
+@dataclass
+class BootstrapCompleted:
+    project_type: str
+    files_created: int
+    type: str = "bootstrap_completed"
+
+
+@dataclass
+class PluginLoaded:
+    plugin_name: str
+    plugin_version: str
+    type: str = "plugin_loaded"
+
+
+@dataclass
+class PluginVetoed:
+    plugin_name: str
+    phase: str
+    reason: str
+    type: str = "plugin_vetoed"
+
+
+@dataclass
+class UpgradeChecked:
+    outdated_count: int
+    breaking_count: int
+    type: str = "upgrade_checked"
+
+
 class TelemetryEmitter:
     def __init__(self, path: Path | None, run_id: str) -> None:
         self._path = path
