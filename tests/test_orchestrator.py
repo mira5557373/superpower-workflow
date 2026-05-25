@@ -1872,3 +1872,98 @@ def test_orchestrator_updates_tracker_on_milestone_complete(tmp_path):
     mock_adapter.update_status.assert_called_once()
     call_args = mock_adapter.update_status.call_args
     assert "LIN-99" in call_args[0] or call_args[1].get("ticket_id") == "LIN-99"
+
+
+class TestModelRouting:
+    def test_routing_overrides_model_per_milestone(self, tmp_path):
+        config = _config(tmp_path)
+        config["milestones"] = [
+            {"name": "m1", "description": "fix typo", "depends_on": []},
+            {
+                "name": "m2",
+                "description": "refactor authentication architecture migration",
+                "depends_on": [],
+            },
+        ]
+        config["model_routing"] = {
+            "enabled": True,
+            "default_model": "opus",
+            "rules": [
+                {"threshold": 0.5, "model": "opus"},
+                {"threshold": 0.0, "model": "haiku"},
+            ],
+        }
+        (tmp_path / ".claude" / "workflow.json").write_text(json.dumps(config))
+
+        models_used = []
+
+        def mock_run_claude(prompt, model, **kwargs):
+            models_used.append(model)
+            return _ok_result()
+
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", side_effect=mock_run_claude),
+            patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        assert "haiku" in models_used
+        assert "opus" in models_used
+
+    def test_model_override_takes_precedence(self, tmp_path):
+        config = _config(tmp_path)
+        config["milestones"] = [{"name": "m1", "description": "anything", "depends_on": []}]
+        config["model_routing"] = {
+            "enabled": True,
+            "default_model": "opus",
+            "rules": [{"threshold": 0.0, "model": "haiku"}],
+        }
+        (tmp_path / ".claude" / "workflow.json").write_text(json.dumps(config))
+
+        models_used = []
+
+        def mock_run_claude(prompt, model, **kwargs):
+            models_used.append(model)
+            return _ok_result()
+
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", side_effect=mock_run_claude),
+            patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run(model_override="sonnet")
+        assert all(m == "sonnet" for m in models_used)
+
+
+class TestParallelMode:
+    def test_run_accepts_parallel_params(self, tmp_path):
+        config = _config(tmp_path)
+        config["milestones"] = [{"name": "m1", "depends_on": []}]
+        (tmp_path / ".claude" / "workflow.json").write_text(json.dumps(config))
+
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run(parallel=True, max_workers=2, best_of_n=1)
+        state = load_state(tmp_path / ".claude")
+        assert "m1" in state.completed
+
+    def test_parallel_two_milestones_completes(self, tmp_path):
+        config = _config(tmp_path)
+        config["milestones"] = [
+            {"name": "m1", "depends_on": []},
+            {"name": "m2", "depends_on": []},
+        ]
+        (tmp_path / ".claude" / "workflow.json").write_text(json.dumps(config))
+
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run(parallel=True, max_workers=1)
+        state = load_state(tmp_path / ".claude")
+        assert "m1" in state.completed
+        assert "m2" in state.completed

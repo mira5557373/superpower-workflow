@@ -19,6 +19,11 @@ from superpower_workflow.integrations.github import (
 from superpower_workflow.integrations.notifier import send_notification
 from superpower_workflow.integrations.tracker import create_tracker
 from superpower_workflow.logger import WorkflowLogger
+from superpower_workflow.parallel.budget import ThreadSafeBudget
+from superpower_workflow.parallel.executor import ParallelExecutor, ParallelResult
+from superpower_workflow.parallel.planner import ExecutionWave, ParallelPlanner
+from superpower_workflow.parallel.router import ModelRouter
+from superpower_workflow.parallel.worktree import WorktreeManager
 from superpower_workflow.policy import PolicyEngine
 from superpower_workflow.prompts import (
     phase_a_prompt,
@@ -115,6 +120,11 @@ class Orchestrator:
         phase_prefix: str | None = None,
         from_issue: str | None = None,
         from_ticket: str | None = None,
+        parallel: bool = False,
+        max_workers: int = 4,
+        remote_url: str | None = None,
+        best_of_n: int = 1,
+        model_override: str | None = None,
     ) -> None:
         self._from_ticket = from_ticket
         self._tracker_adapter = None
@@ -189,6 +199,31 @@ class Orchestrator:
             },
         )
 
+        parallel_config = self.config.get("parallel", {})
+        use_parallel = parallel or parallel_config.get("enabled", False)
+        workers = max_workers or parallel_config.get("max_workers", 4)
+        bon_count = best_of_n if best_of_n > 1 else parallel_config.get("best_of_n", 1)
+        router = ModelRouter.from_config(self.config)
+
+        if use_parallel and len(milestones) > 1:
+            try:
+                self._run_parallel(
+                    milestones,
+                    logger,
+                    router,
+                    workers,
+                    bon_count,
+                    model_override,
+                    remote_url,
+                )
+                self._completion_notification(logger)
+            finally:
+                release_lock(self.claude_dir)
+                logger.close()
+                if self._telemetry:
+                    self._telemetry.close()
+            return
+
         milestone_retry_delays = [120, 300, 600]
         max_retries = len(milestone_retry_delays)
         consecutive_failures = 0
@@ -244,9 +279,17 @@ class Orchestrator:
                 self.state.current_milestone_index = i
                 success = False
 
+                decision = router.route(ms)
+                if model_override:
+                    ms_model = model_override
+                elif self.config.get("model_routing", {}).get("enabled"):
+                    ms_model = decision.model
+                else:
+                    ms_model = None
+
                 for attempt in range(max_retries + 1):
                     try:
-                        cost = self._run_milestone(ms, logger)
+                        cost = self._run_milestone(ms, logger, model_override=ms_model)
                         self.state.completed.append(name)
                         self.state.total_cost_usd += cost
                         self.state.current_step = None
@@ -497,11 +540,18 @@ class Orchestrator:
         if r.is_error:
             raise _PhaseError(phase, r.text or "claude -p returned an error")
 
-    def _run_milestone(self, ms: dict, logger: WorkflowLogger) -> float:
+    def _run_milestone(
+        self,
+        ms: dict,
+        logger: WorkflowLogger,
+        cwd_override: str | None = None,
+        model_override: str | None = None,
+        num_agents: int | None = None,
+    ) -> float:
         name = ms["name"]
         sections = ms.get("spec_sections", "")
         spec = self.config["spec"]
-        model = self.config["model"]
+        model = model_override or self.config["model"]
         fallback = self.config.get("fallback_model")
         budgets = self.config["budgets"]
         effort = self.config.get("effort", {})
@@ -941,6 +991,114 @@ class Orchestrator:
                 )
 
         return cost
+
+    def _run_parallel(
+        self,
+        milestones: list[dict],
+        logger: WorkflowLogger,
+        router: ModelRouter,
+        max_workers: int,
+        best_of_n: int,
+        model_override: str | None,
+        remote_url: str | None = None,
+    ) -> None:
+        planner = ParallelPlanner(milestones, completed=set(self.state.completed))
+        waves = planner.plan_waves()
+        max_budget = self.config.get("max_total_budget_usd", float("inf"))
+        budget = ThreadSafeBudget(max_budget - self.state.total_cost_usd)
+        par_config = self.config.get("parallel", {})
+        wt_dir_name = par_config.get("worktree_dir", ".worktrees")
+        wt_mgr = WorktreeManager(self.root, worktree_dir=self.root / wt_dir_name)
+        executor = ParallelExecutor(budget=budget, max_workers=max_workers, worktree_mgr=wt_mgr)
+        failed_set = set(self.state.failed)
+
+        for wave in waves:
+            runnable = [
+                m
+                for m in wave.milestones
+                if not any(
+                    dep in failed_set
+                    for dep in next(
+                        (ms.get("depends_on", []) for ms in milestones if ms["name"] == m), []
+                    )
+                )
+            ]
+            skipped = [m for m in wave.milestones if m not in runnable]
+            for s in skipped:
+                self.state.skipped.append(s)
+                logger.log("MILESTONE_SKIP", milestone=s, reason="dependency_failed")
+
+            if not runnable:
+                continue
+
+            wave = ExecutionWave(index=wave.index, milestones=runnable)
+            self.state.current_step = "parallel_wait"
+            save_state(self.claude_dir, self.state)
+            logger.log("PARALLEL_WAVE_START", wave=wave.index, milestones=str(wave.milestones))
+
+            if self._telemetry:
+                from superpower_workflow.telemetry import ParallelWaveStarted
+
+                self._telemetry.emit(
+                    ParallelWaveStarted(
+                        wave_index=wave.index,
+                        milestones=wave.milestones,
+                        worker_count=max_workers,
+                    )
+                )
+
+            def run_fn(name: str, run_cwd: str) -> ParallelResult:
+                ms = next((m for m in milestones if m["name"] == name), None)
+                if ms is None:
+                    return ParallelResult(milestone=name, success=False, error="not found")
+                decision = router.route(ms)
+                if model_override:
+                    ms_model = model_override
+                elif self.config.get("model_routing", {}).get("enabled"):
+                    ms_model = decision.model
+                else:
+                    ms_model = None
+                try:
+                    cost = self._run_milestone(ms, logger, model_override=ms_model)
+                    return ParallelResult(
+                        milestone=name, success=True, cost_usd=cost, worktree=run_cwd
+                    )
+                except Exception as e:
+                    return ParallelResult(
+                        milestone=name, success=False, error=str(e), worktree=run_cwd
+                    )
+
+            try:
+                results = executor.execute_wave(wave, run_fn=run_fn, cwd=self.cwd)
+            except Exception:
+                wt_mgr.cleanup_all()
+                raise
+
+            self.state.current_step = "parallel_merge"
+            save_state(self.claude_dir, self.state)
+
+            for result in results:
+                if result.success:
+                    self.state.completed.append(result.milestone)
+                    self.state.total_cost_usd += result.cost_usd
+                else:
+                    self.state.failed.append(result.milestone)
+                    failed_set.add(result.milestone)
+            save_state(self.claude_dir, self.state)
+
+            if self._telemetry:
+                from superpower_workflow.telemetry import ParallelWaveCompleted
+
+                self._telemetry.emit(
+                    ParallelWaveCompleted(
+                        wave_index=wave.index,
+                        succeeded=[r.milestone for r in results if r.success],
+                        failed=[r.milestone for r in results if not r.success],
+                        total_cost_usd=sum(r.cost_usd for r in results),
+                    )
+                )
+
+            logger.log("PARALLEL_WAVE_COMPLETE", wave=wave.index)
 
     def _filter_milestones(
         self,
