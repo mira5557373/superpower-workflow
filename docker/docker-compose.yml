@@ -1,0 +1,32 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sw
+      POSTGRES_PASSWORD: ${SW_DB_PASSWORD:-changeme}
+      POSTGRES_DB: superpower_workflow
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sw"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.server
+    ports:
+      - "3001:3001"
+    environment:
+      SW_DATABASE_URL: postgresql://sw:${SW_DB_PASSWORD:-changeme}@postgres:5432/superpower_workflow
+      SW_API_KEY: ${SW_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
