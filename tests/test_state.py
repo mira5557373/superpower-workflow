@@ -9,10 +9,12 @@ from superpower_workflow.state import (
     LOCK_FILE,
     PHASE_FILE,
     STATE_FILE,
+    VALID_STEPS,
     PhaseState,
     WorkflowState,
     acquire_lock,
     clear_phase_state,
+    clone_state_to_worktree,
     load_config,
     load_phase_state,
     load_state,
@@ -296,8 +298,57 @@ def test_ci_fix_failed_step_roundtrips(tmp_path):
 
 
 def test_ci_step_values_documented():
-    from superpower_workflow.state import VALID_STEPS
-
     assert "ci_wait" in VALID_STEPS
     assert "ci_fix" in VALID_STEPS
     assert "ci_fix_failed" in VALID_STEPS
+
+
+class TestParallelStepValues:
+    def test_parallel_wait_is_valid(self):
+        assert "parallel_wait" in VALID_STEPS
+
+    def test_parallel_merge_is_valid(self):
+        assert "parallel_merge" in VALID_STEPS
+
+
+class TestCloneStateToWorktree:
+    def test_creates_claude_dir_in_worktree(self, tmp_path):
+        claude_dir = tmp_path / "main" / ".claude"
+        claude_dir.mkdir(parents=True)
+        (claude_dir / "workflow.json").write_text(
+            '{"model":"opus","milestones":[],"budgets":{"plan":1,"implement":1,"review":1,"push":1},"spec":"s"}'
+        )
+
+        wt_root = tmp_path / "worktree"
+        wt_root.mkdir()
+        clone_state_to_worktree(claude_dir, wt_root)
+
+        wt_claude = wt_root / ".claude"
+        assert wt_claude.exists()
+        assert (wt_claude / "workflow.json").exists()
+
+    def test_copies_config_not_state(self, tmp_path):
+        claude_dir = tmp_path / "main" / ".claude"
+        claude_dir.mkdir(parents=True)
+        (claude_dir / "workflow.json").write_text('{"model":"opus"}')
+        (claude_dir / "workflow-state.json").write_text('{"completed":["m0"]}')
+
+        wt_root = tmp_path / "worktree"
+        wt_root.mkdir()
+        clone_state_to_worktree(claude_dir, wt_root)
+
+        wt_claude = wt_root / ".claude"
+        assert (wt_claude / "workflow.json").exists()
+        assert not (wt_claude / "workflow-state.json").exists()
+
+    def test_does_not_copy_lock(self, tmp_path):
+        claude_dir = tmp_path / "main" / ".claude"
+        claude_dir.mkdir(parents=True)
+        (claude_dir / "workflow.json").write_text('{"model":"opus"}')
+        (claude_dir / ".workflow.lock").write_text("12345")
+
+        wt_root = tmp_path / "worktree"
+        wt_root.mkdir()
+        clone_state_to_worktree(claude_dir, wt_root)
+
+        assert not (wt_root / ".claude" / ".workflow.lock").exists()

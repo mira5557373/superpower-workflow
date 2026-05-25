@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -23,6 +24,8 @@ VALID_STEPS = frozenset(
         "ci_wait",
         "ci_fix",
         "ci_fix_failed",
+        "parallel_wait",
+        "parallel_merge",
     }
 )
 
@@ -113,3 +116,17 @@ def load_config(claude_dir: Path) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"workflow.json not found at {claude_dir}")
     return json.loads(path.read_text())
+
+
+CLONE_FILES = frozenset({"workflow.json"})
+SKIP_FILES = frozenset({STATE_FILE, PHASE_FILE, GAP_REPORT_FILE, LOCK_FILE})
+
+
+def clone_state_to_worktree(claude_dir: Path, worktree_root: Path) -> None:
+    wt_claude = worktree_root / ".claude"
+    wt_claude.mkdir(parents=True, exist_ok=True)
+    for src in claude_dir.iterdir():
+        if src.name in SKIP_FILES or src.name.startswith(".workflow"):
+            continue
+        if src.name in CLONE_FILES:
+            shutil.copy2(src, wt_claude / src.name)
