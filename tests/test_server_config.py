@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 from superpower_workflow.cli import _cmd_init
+from superpower_workflow.server.config import ServerConfig, load_server_config
+from superpower_workflow.server.deps import get_api_key, verify_api_key
 from superpower_workflow.server.registry import (
     ProjectEntry,
     ProjectRegistry,
@@ -124,3 +128,54 @@ class TestRegistryCorruption:
     def test_handles_missing_file(self, tmp_path: Path):
         reg = ProjectRegistry(tmp_path / "nonexistent" / "projects.json")
         assert reg.list_projects() == []
+
+
+class TestServerConfig:
+    def test_default_values(self):
+        cfg = ServerConfig()
+        assert cfg.host == "0.0.0.0"
+        assert cfg.port == 3001
+        assert cfg.database_url == ""
+        assert cfg.api_key == ""
+
+    def test_from_env(self):
+        with patch.dict(
+            os.environ,
+            {
+                "SW_DATABASE_URL": "postgresql://localhost/sw",
+                "SW_API_KEY": "test-key-123",
+                "SW_SERVER_HOST": "127.0.0.1",
+                "SW_SERVER_PORT": "8080",
+            },
+        ):
+            cfg = load_server_config()
+        assert cfg.database_url == "postgresql://localhost/sw"
+        assert cfg.api_key == "test-key-123"
+        assert cfg.host == "127.0.0.1"
+        assert cfg.port == 8080
+
+    def test_from_config_dict(self):
+        config = {"server": {"host": "0.0.0.0", "port": 4000, "cors_origins": ["*"]}}
+        with patch.dict(os.environ, {}, clear=True):
+            cfg = load_server_config(config)
+        assert cfg.port == 4000
+        assert cfg.cors_origins == ["*"]
+
+
+class TestApiKey:
+    def test_get_api_key_from_env(self):
+        with patch.dict(os.environ, {"SW_API_KEY": "secret"}):
+            assert get_api_key() == "secret"
+
+    def test_get_api_key_missing(self):
+        with patch.dict(os.environ, {}, clear=True):
+            assert get_api_key() == ""
+
+    def test_verify_passes_with_correct_key(self):
+        assert verify_api_key("secret", "secret") is True
+
+    def test_verify_fails_with_wrong_key(self):
+        assert verify_api_key("wrong", "secret") is False
+
+    def test_verify_passes_when_no_key_configured(self):
+        assert verify_api_key("anything", "") is True
