@@ -205,39 +205,39 @@ class RemoteExecution(TelemetryEvent):
 
 
 @dataclass
-class DocsGenerated:
-    doc_type: str
-    output_path: str
-    type: str = "docs_generated"
+class DocsGenerated(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "docs_generated"
+    doc_type: str = ""
+    output_path: str = ""
 
 
 @dataclass
-class BootstrapCompleted:
-    project_type: str
-    files_created: int
-    type: str = "bootstrap_completed"
+class BootstrapCompleted(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "bootstrap_completed"
+    project_type: str = ""
+    files_created: int = 0
 
 
 @dataclass
-class PluginLoaded:
-    plugin_name: str
-    plugin_version: str
-    type: str = "plugin_loaded"
+class PluginLoaded(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "plugin_loaded"
+    plugin_name: str = ""
+    plugin_version: str = ""
 
 
 @dataclass
-class PluginVetoed:
-    plugin_name: str
-    phase: str
-    reason: str
-    type: str = "plugin_vetoed"
+class PluginVetoed(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "plugin_vetoed"
+    plugin_name: str = ""
+    phase: str = ""
+    reason: str = ""
 
 
 @dataclass
-class UpgradeChecked:
-    outdated_count: int
-    breaking_count: int
-    type: str = "upgrade_checked"
+class UpgradeChecked(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "upgrade_checked"
+    outdated_count: int = 0
+    breaking_count: int = 0
 
 
 class TelemetryEmitter:

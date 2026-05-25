@@ -58,11 +58,16 @@ class TestPluginsExports:
 
 
 class TestTelemetryExports:
-    def test_sp7_events_importable(self):
-        from superpower_workflow.telemetry import (  # noqa: F401
+    def test_sp7_events_importable_and_are_telemetry_events(self):
+        from superpower_workflow.telemetry import (
             BootstrapCompleted,
             DocsGenerated,
             PluginLoaded,
             PluginVetoed,
+            TelemetryEvent,
             UpgradeChecked,
         )
+
+        for cls in (DocsGenerated, BootstrapCompleted, PluginLoaded, PluginVetoed, UpgradeChecked):
+            assert issubclass(cls, TelemetryEvent), f"{cls.__name__} must extend TelemetryEvent"
+            assert hasattr(cls, "EVENT_TYPE"), f"{cls.__name__} must have EVENT_TYPE"

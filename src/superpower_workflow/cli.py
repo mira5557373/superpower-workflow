@@ -603,7 +603,11 @@ def main() -> None:
         return
 
     if args.command == "upgrade":
-        from superpower_workflow.upgrade import detect_package_manager, list_outdated
+        from superpower_workflow.upgrade import (
+            detect_package_manager,
+            list_outdated,
+            perform_upgrade,
+        )
 
         cwd = Path.cwd()
         pm = detect_package_manager(cwd)
@@ -613,13 +617,20 @@ def main() -> None:
         outdated = list_outdated(pm, cwd=str(cwd))
         if not outdated:
             print("  All dependencies are up to date.")
-        else:
-            print(f"  Found {len(outdated)} outdated dependencies:")
-            for dep in outdated:
-                flag = " [BREAKING]" if dep.is_breaking else ""
-                print(f"    {dep.name}: {dep.current} -> {dep.latest}{flag}")
+            return
+        print(f"  Found {len(outdated)} outdated dependencies:")
+        for dep in outdated:
+            flag = " [BREAKING]" if dep.is_breaking else ""
+            print(f"    {dep.name}: {dep.current} -> {dep.latest}{flag}")
         if args.dry_run:
             return
+        for dep in outdated:
+            result = perform_upgrade(dep, cwd=str(cwd))
+            if result.upgraded:
+                branch_info = f" (branch: {result.branch})" if result.branch else ""
+                print(f"    Upgraded {dep.name} to {dep.latest}{branch_info}")
+            else:
+                print(f"    Failed to upgrade {dep.name}: {result.error}")
         return
 
     if args.command == "plugin":
