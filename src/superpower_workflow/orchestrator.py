@@ -10,8 +10,14 @@ from pathlib import Path
 from superpower_workflow.audit import AuditTrail, derive_key
 from superpower_workflow.context import build_context_summary
 from superpower_workflow.integrations.ci_fix import ci_fix_loop
-from superpower_workflow.integrations.github import create_pr, render_pr_body
+from superpower_workflow.integrations.github import (
+    create_pr,
+    fetch_issue,
+    issue_to_milestone,
+    render_pr_body,
+)
 from superpower_workflow.integrations.notifier import send_notification
+from superpower_workflow.integrations.tracker import create_tracker
 from superpower_workflow.logger import WorkflowLogger
 from superpower_workflow.policy import PolicyEngine
 from superpower_workflow.prompts import (
@@ -105,7 +111,29 @@ class Orchestrator:
         from_ms: str | None = None,
         to_ms: str | None = None,
         phase_prefix: str | None = None,
+        from_issue: str | None = None,
+        from_ticket: str | None = None,
     ) -> None:
+        self._from_ticket = from_ticket
+        self._tracker_adapter = None
+
+        if from_issue:
+            gh_config = self._integrations.get("github", {})
+            issue_data = fetch_issue(
+                from_issue,
+                default_repo=gh_config.get("default_repo", ""),
+                cwd=self.cwd,
+            )
+            ms = issue_to_milestone(issue_data, gh_config.get("issue_label_map"))
+            self.config.setdefault("milestones", []).append(ms)
+
+        if from_ticket:
+            self._tracker_adapter = create_tracker(self.config)
+            if self._tracker_adapter:
+                ticket_data = self._tracker_adapter.fetch_ticket(from_ticket)
+                ms = self._tracker_adapter.ticket_to_milestone(ticket_data)
+                self.config.setdefault("milestones", []).append(ms)
+
         milestones = self._filter_milestones(milestone_filter, from_ms, to_ms, phase_prefix)
 
         if dry_run:
@@ -239,6 +267,15 @@ class Orchestrator:
                             "milestone_complete",
                             {"milestone": name, "cost_usd": round(cost, 2), "test_count": 0},
                         )
+                        if self._from_ticket and self._tracker_adapter:
+                            try:
+                                self._tracker_adapter.update_status(
+                                    self._from_ticket,
+                                    "Done",
+                                    comment=f"Milestone {name} completed",
+                                )
+                            except (OSError, ValueError):
+                                logger.log("TRACKER_UPDATE_FAILED", ticket=self._from_ticket)
                         success = True
                         consecutive_failures = 0
                         break

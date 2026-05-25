@@ -457,6 +457,8 @@ def main() -> None:
             from_ms=args.from_ms,
             to_ms=args.to_ms,
             phase_prefix=getattr(args, "phase", None),
+            from_issue=getattr(args, "from_issue", None),
+            from_ticket=getattr(args, "from_ticket", None),
         )
         return
 

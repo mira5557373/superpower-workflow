@@ -2,7 +2,7 @@ import json
 import os as os_mod
 import subprocess as subprocess_mod
 from subprocess import CompletedProcess
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -1752,3 +1752,123 @@ def test_orchestrator_pr_on_main_strategy(tmp_path):
         orch.run()
 
     mock_pr.assert_not_called()
+
+
+def test_orchestrator_from_issue_creates_milestone(tmp_path):
+    _config_with_integrations(
+        tmp_path,
+        milestones=[],
+        integrations={
+            "github": {
+                "default_repo": "owner/repo",
+                "auto_pr": False,
+                "issue_label_map": {"bug": "fix"},
+            },
+            "slack": {},
+            "ci": {"enabled": False},
+            "tracker": {},
+        },
+    )
+
+    issue_data = {
+        "title": "Fix login",
+        "body": "Login is broken",
+        "labels": [{"name": "bug"}],
+        "assignees": [],
+    }
+
+    with (
+        patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+        patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
+        patch("superpower_workflow.orchestrator.send_notification"),
+        patch("superpower_workflow.orchestrator.fetch_issue", return_value=issue_data),
+    ):
+        orch = Orchestrator(tmp_path)
+        orch.run(from_issue="42")
+
+    state = load_state(tmp_path / ".claude")
+    assert "fix-login" in state.completed
+
+
+def test_orchestrator_from_ticket_creates_milestone(tmp_path):
+    _config_with_integrations(
+        tmp_path,
+        milestones=[],
+        integrations={
+            "github": {"default_repo": "", "auto_pr": False, "issue_label_map": {}},
+            "slack": {},
+            "ci": {"enabled": False},
+            "tracker": {
+                "type": "linear",
+                "api_url": "https://api.linear.app/graphql",
+                "token_env": "T",
+            },
+        },
+    )
+
+    ticket_data = {
+        "title": "Add dark mode",
+        "description": "Dark mode for settings page",
+        "priority": "High",
+    }
+
+    mock_adapter = MagicMock()
+    mock_adapter.fetch_ticket.return_value = ticket_data
+    mock_adapter.ticket_to_milestone.return_value = {
+        "name": "add-dark-mode",
+        "description": "Add dark mode",
+        "spec_sections": "Dark mode for settings page",
+        "depends_on": [],
+    }
+
+    with (
+        patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+        patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
+        patch("superpower_workflow.orchestrator.send_notification"),
+        patch("superpower_workflow.orchestrator.create_tracker", return_value=mock_adapter),
+    ):
+        orch = Orchestrator(tmp_path)
+        orch.run(from_ticket="LIN-42")
+
+    state = load_state(tmp_path / ".claude")
+    assert "add-dark-mode" in state.completed
+
+
+def test_orchestrator_updates_tracker_on_milestone_complete(tmp_path):
+    _config_with_integrations(
+        tmp_path,
+        milestones=[],
+        integrations={
+            "github": {"default_repo": "", "auto_pr": False, "issue_label_map": {}},
+            "slack": {},
+            "ci": {"enabled": False},
+            "tracker": {
+                "type": "linear",
+                "api_url": "https://api.linear.app/graphql",
+                "token_env": "T",
+            },
+        },
+    )
+
+    ticket_data = {"title": "Fix bug", "description": "Details", "priority": "High"}
+    mock_adapter = MagicMock()
+    mock_adapter.fetch_ticket.return_value = ticket_data
+    mock_adapter.ticket_to_milestone.return_value = {
+        "name": "fix-bug",
+        "description": "Fix bug",
+        "spec_sections": "Details",
+        "depends_on": [],
+    }
+
+    with (
+        patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+        patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
+        patch("superpower_workflow.orchestrator.send_notification"),
+        patch("superpower_workflow.orchestrator.create_tracker", return_value=mock_adapter),
+    ):
+        orch = Orchestrator(tmp_path)
+        orch.run(from_ticket="LIN-99")
+
+    mock_adapter.update_status.assert_called_once()
+    call_args = mock_adapter.update_status.call_args
+    assert "LIN-99" in call_args[0] or call_args[1].get("ticket_id") == "LIN-99"
