@@ -232,8 +232,70 @@ def _cmd_init(project_root: Path) -> None:
                 f.write(f"{e}\n")
         print(f"  Added {len(new_entries)} entries to .gitignore")
 
+    # Install skills, commands, and settings project-locally
+    _install_project_local(claude_dir)
+
     print(f"  Created {config_path}")
     print("  Edit the spec path and verify_commands, then run: sw decompose")
+
+
+def _install_project_local(claude_dir: Path) -> None:
+    import shutil
+
+    pkg_root = Path(__file__).resolve().parent.parent.parent
+
+    # Copy custom skills
+    skills_src = pkg_root / "skills"
+    skills_dst = claude_dir / "skills"
+    if skills_src.exists():
+        for skill_dir in skills_src.iterdir():
+            if skill_dir.is_dir():
+                dst = skills_dst / skill_dir.name
+                if dst.exists():
+                    shutil.rmtree(dst)
+                shutil.copytree(skill_dir, dst)
+                print(f"  Installed skill: {skill_dir.name}")
+
+    # Copy commands
+    cmds_src = pkg_root / "commands"
+    cmds_dst = claude_dir / "commands"
+    if cmds_src.exists():
+        cmds_dst.mkdir(parents=True, exist_ok=True)
+        for cmd_file in cmds_src.glob("*.md"):
+            shutil.copy2(cmd_file, cmds_dst / cmd_file.name)
+            print(f"  Installed command: {cmd_file.name}")
+
+    # Create project-local settings.local.json with plugins + hook
+    settings_path = claude_dir / "settings.local.json"
+    settings = {}
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text())
+        except json.JSONDecodeError:
+            settings = {}
+
+    # Enable superpowers plugin
+    plugins = settings.setdefault("enabledPlugins", {})
+    plugins["superpowers@claude-plugins-official"] = True
+
+    # Set bypass permissions for unattended runs
+    permissions = settings.setdefault("permissions", {})
+    permissions["defaultMode"] = "bypassPermissions"
+
+    # Register convergence hook project-locally
+    hooks = settings.setdefault("hooks", {})
+    stop_hooks = hooks.setdefault("Stop", [])
+    hook_cmd = "python -m superpower_workflow.hooks.convergence_gate"
+    if not any(hook_cmd in str(entry) for entry in stop_hooks):
+        stop_hooks.append(
+            {
+                "matcher": "",
+                "hooks": [{"type": "command", "command": hook_cmd, "timeout": 30}],
+            }
+        )
+
+    settings_path.write_text(json.dumps(settings, indent=2))
+    print("  Configured settings.local.json (superpowers + hook + permissions)")
 
 
 def _cmd_metrics(project_root: Path, json_output: bool = False) -> None:
