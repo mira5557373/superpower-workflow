@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from sqlalchemy import Engine
+    from sqlalchemy.orm import Session
 
     from superpower_workflow.telemetry import TelemetryEmitter, TelemetryEvent
 
@@ -92,7 +93,7 @@ class TelemetryDbWriter:
         except Exception:
             logger.warning("DB session creation failed", exc_info=True)
 
-    def _write_event(self, session: object, event: TelemetryEvent) -> None:
+    def _write_event(self, session: Session, event: TelemetryEvent) -> None:
         from superpower_workflow.db.models import SwEvent, SwMilestone, SwRun
         from superpower_workflow.db.queries import get_or_create_project
 

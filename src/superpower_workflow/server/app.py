@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hmac
 import importlib
+import logging
 import time
 from collections import defaultdict
 
@@ -9,6 +11,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from superpower_workflow.server.config import ServerConfig
+
+logger = logging.getLogger(__name__)
+
+_MAX_RATE_BUCKETS = 10_000
 
 
 def create_app(config: ServerConfig | None = None) -> FastAPI:
@@ -35,7 +41,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
             app.state.engine = create_engine_from_url(config.database_url)
             Base.metadata.create_all(app.state.engine)
         except Exception:
-            pass
+            logger.warning("Failed to initialize database", exc_info=True)
 
     app.add_middleware(
         CORSMiddleware,
@@ -53,11 +59,14 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
         if config.api_key:
             auth = request.headers.get("Authorization", "")
-            if not auth.startswith("Bearer ") or auth[7:] != config.api_key:
+            token = auth[7:] if auth.startswith("Bearer ") else ""
+            if not hmac.compare_digest(token, config.api_key):
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
 
         client_ip = request.client.host if request.client else "unknown"
         now = time.time()
+        if len(_rate_buckets) > _MAX_RATE_BUCKETS:
+            _rate_buckets.clear()
         bucket = _rate_buckets[client_ip]
         bucket[:] = [t for t in bucket if now - t < 60]
         if len(bucket) >= config.rate_limit_per_minute:
@@ -65,6 +74,10 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
         bucket.append(now)
 
         return await call_next(request)
+
+    @app.exception_handler(ValueError)
+    async def value_error_handler(request: Request, exc: ValueError):
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
 
     @app.get("/api/v1/health")
     def health():

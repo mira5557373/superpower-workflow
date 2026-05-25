@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import os
 
 
@@ -10,4 +11,4 @@ def get_api_key() -> str:
 def verify_api_key(provided: str, configured: str) -> bool:
     if not configured:
         return True
-    return provided == configured
+    return hmac.compare_digest(provided, configured)

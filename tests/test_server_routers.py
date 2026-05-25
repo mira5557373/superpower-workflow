@@ -73,9 +73,14 @@ class TestProjectsRouter:
         r = client.get(f"/api/v1/projects/{fake_id}")
         assert r.status_code == 404
 
+    def test_get_project_invalid_uuid_returns_422(self, client):
+        r = client.get("/api/v1/projects/not-a-uuid")
+        assert r.status_code == 422
+
     def test_trigger_sync(self, client):
         r = client.post("/api/v1/projects/sync", json={"path": "/p/app"})
-        assert r.status_code in (200, 202, 404)
+        assert r.status_code == 200
+        assert r.json()["status"] == "accepted"
 
 
 class TestRunsRouter:
@@ -180,7 +185,8 @@ class TestMetricsRouter:
         r = client.get("/api/v1/metrics/quality")
         assert r.status_code == 200
         data = r.json()
-        assert "rework_rate" in data or isinstance(data, dict)
+        assert "rework_rate" in data
+        assert "gap_reports" in data
 
     def test_model_metrics(self, client):
         r = client.get("/api/v1/metrics/models")

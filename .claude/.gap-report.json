@@ -1,0 +1,65 @@
+{
+  "milestone": "unified-dashboard-postgres",
+  "pass_num": 1,
+  "critical_gaps": 0,
+  "architectural_gaps": 0,
+  "important_gaps": 0,
+  "minor_gaps": 0,
+  "deferred_gaps": 0,
+  "total_gaps_found": 7,
+  "converged": true,
+  "tests_green": true,
+  "lint_clean": true,
+  "test_count": 932,
+  "gap_summaries": [
+    {
+      "tag": "[post-impl]",
+      "severity": "important",
+      "file": "src/superpower_workflow/server/deps.py:11",
+      "description": "verify_api_key used == for secret comparison (timing attack). Fixed: hmac.compare_digest.",
+      "status": "fixed"
+    },
+    {
+      "tag": "[post-impl]",
+      "severity": "important",
+      "file": "src/superpower_workflow/server/app.py:56",
+      "description": "Inline auth check used == for secret comparison. Fixed: hmac.compare_digest.",
+      "status": "fixed"
+    },
+    {
+      "tag": "[post-impl]",
+      "severity": "important",
+      "file": "src/superpower_workflow/server/app.py:37-38",
+      "description": "DB init exception silently swallowed. Fixed: added logger.warning with exc_info.",
+      "status": "fixed"
+    },
+    {
+      "tag": "[post-impl]",
+      "severity": "important",
+      "file": "src/superpower_workflow/server/app.py:47",
+      "description": "Rate limit _rate_buckets dict grew unbounded per unique IP. Fixed: clear when > 10K entries.",
+      "status": "fixed"
+    },
+    {
+      "tag": "[post-impl]",
+      "severity": "important",
+      "file": "src/superpower_workflow/db/writer.py:95",
+      "description": "_write_event typed session: object instead of Session. Fixed: proper TYPE_CHECKING import.",
+      "status": "fixed"
+    },
+    {
+      "tag": "[post-impl]",
+      "severity": "important",
+      "file": "tests/test_server_routers.py:183",
+      "description": "Weak assertion (isinstance(data, dict) always true). Fixed: assert specific keys.",
+      "status": "fixed"
+    },
+    {
+      "tag": "[production]",
+      "severity": "important",
+      "file": "src/superpower_workflow/server/app.py",
+      "description": "Invalid UUID in path/query params returned 500. Fixed: ValueError exception handler returns 422.",
+      "status": "fixed"
+    }
+  ]
+}
