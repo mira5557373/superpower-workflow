@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -63,7 +64,7 @@ class RemoteRunner:
         ssh_cmd.append(self._config.ssh_target)
 
         remote_path = self._config.path or "."
-        sw_cmd = f"cd {remote_path} && sw run --milestone {milestone}"
+        sw_cmd = f"cd {shlex.quote(remote_path)} && sw run --milestone {shlex.quote(milestone)}"
         ssh_cmd.append(sw_cmd)
 
         result = subprocess.run(

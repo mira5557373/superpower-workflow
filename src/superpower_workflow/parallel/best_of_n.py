@@ -53,17 +53,18 @@ class BestOfNRunner:
             wt = self._worktree_mgr.create(name)
             worktrees[name] = wt
 
-        candidates: list[CandidateResult] = []
+        candidates: list[tuple[CandidateResult, str]] = []
         with ThreadPoolExecutor(max_workers=self._n) as pool:
             futures = {
                 pool.submit(run_fn, milestone, str(worktrees[name].path)): name
                 for name in worktree_names
             }
             for future in as_completed(futures):
+                wt_name = futures[future]
                 try:
                     result = future.result()
                     result.quality_score = score_candidate(result)
-                    candidates.append(result)
+                    candidates.append((result, wt_name))
                 except Exception:
                     pass
 
@@ -72,8 +73,7 @@ class BestOfNRunner:
                 self._worktree_mgr.remove(name, prune_branch=True)
             raise RuntimeError(f"All {self._n} candidates failed for {milestone}")
 
-        winner = max(candidates, key=lambda c: c.quality_score)
-        winner_wt_name = worktree_names[winner.index]
+        winner, winner_wt_name = max(candidates, key=lambda c: c[0].quality_score)
         self._worktree_mgr.merge(winner_wt_name)
 
         for name in worktree_names:

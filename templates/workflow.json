@@ -25,7 +25,7 @@
         "sign_artifacts": false,
         "sbom_tool": "",
         "sbom_output": ".claude/sbom-{milestone}.json",
-        "public_key": "",
+        "public_key": ""
     },
     "secrets": {},
     "policies": {},
@@ -45,7 +45,7 @@
             "wait_timeout_seconds": 600,
             "poll_interval_seconds": 30,
         },
-        "tracker": {},
+        "tracker": {}
     },
     "model_routing": {
         "enabled": false,

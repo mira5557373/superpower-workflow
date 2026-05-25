@@ -1058,12 +1058,35 @@ class Orchestrator:
                     ms_model = decision.model
                 else:
                     ms_model = None
+
+                ms_index = next((i for i, m in enumerate(milestones) if m["name"] == name), 0)
+                if self._telemetry:
+                    self._telemetry.emit(MilestoneStarted(milestone=name, index=ms_index))
+                ms_start = time.monotonic()
+
                 try:
                     cost = self._run_milestone(ms, logger, model_override=ms_model)
+                    if self._telemetry:
+                        self._telemetry.emit(
+                            MilestoneCompleted(
+                                milestone=name,
+                                cost_usd=round(cost, 2),
+                                duration_seconds=round(time.monotonic() - ms_start, 1),
+                            )
+                        )
                     return ParallelResult(
                         milestone=name, success=True, cost_usd=cost, worktree=run_cwd
                     )
                 except Exception as e:
+                    if self._telemetry:
+                        self._telemetry.emit(
+                            MilestoneFailed(
+                                milestone=name,
+                                phase="parallel",
+                                reason=str(e),
+                                attempts=1,
+                            )
+                        )
                     return ParallelResult(
                         milestone=name, success=False, error=str(e), worktree=run_cwd
                     )
