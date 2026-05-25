@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "spec": "docs/superpowers/specs/roadmap.md",
+  "spec": "docs/superpowers/specs/2026-05-25-unified-dashboard-postgres.md",
   "model": "opus",
   "fallback_model": "claude-opus-4-6",
   "effort": {
@@ -93,6 +93,17 @@
         "sp6-parallel"
       ],
       "budget_override": null
+    },
+    {
+      "name": "unified-dashboard-postgres",
+      "spec_sections": "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13",
+      "description": "PostgreSQL + FastAPI + unified web dashboard + REST API + Docker. Hybrid: server optional. 8 DB tables, dual-write adapter, project registry, 15 REST endpoints, WebSocket, unified HTML.",
+      "depends_on": [
+        "sp7-docs-dx-plugins"
+      ],
+      "budget_override": {
+        "implement": 150
+      }
     }
   ]
 }
