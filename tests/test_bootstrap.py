@@ -89,3 +89,33 @@ class TestBootstrap:
         (tmp_path / "pyproject.toml").write_text("[build-system]")
         bootstrap(tmp_path)
         assert (tmp_path / ".github" / "workflows" / "ci.yml").exists()
+
+
+class TestBootstrapCLI:
+    def test_bootstrap_subcommand_exists(self):
+        from superpower_workflow.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["bootstrap"])
+        assert args.command == "bootstrap"
+
+    def test_bootstrap_type_flag(self):
+        from superpower_workflow.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["bootstrap", "--type", "typescript"])
+        assert args.project_type == "typescript"
+
+    def test_upgrade_subcommand_exists(self):
+        from superpower_workflow.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["upgrade"])
+        assert args.command == "upgrade"
+
+    def test_upgrade_dry_run_flag(self):
+        from superpower_workflow.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["upgrade", "--dry-run"])
+        assert args.dry_run is True

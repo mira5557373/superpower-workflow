@@ -73,6 +73,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override model for all milestones",
     )
 
+    bootstrap_p = sub.add_parser("bootstrap", help="One-command project setup")
+    bootstrap_p.add_argument(
+        "--type",
+        dest="project_type",
+        default=None,
+        help="Project type (python, typescript). Auto-detected if omitted.",
+    )
+
+    upgrade_p = sub.add_parser("upgrade", help="Detect and upgrade outdated dependencies")
+    upgrade_p.add_argument(
+        "--dry-run", action="store_true", help="List outdated deps without upgrading"
+    )
+
     return parser
 
 
@@ -523,4 +536,37 @@ def main() -> None:
 
     if args.command == "resume":
         _cmd_resume(project_root)
+        return
+
+    if args.command == "bootstrap":
+        from superpower_workflow.bootstrap import bootstrap
+
+        cwd = Path.cwd()
+        created = bootstrap(cwd, project_type=args.project_type)
+        if created:
+            print(f"  Created {len(created)} files:")
+            for f in created:
+                print(f"    {f}")
+        else:
+            print("  All files already exist. Nothing to do.")
+        return
+
+    if args.command == "upgrade":
+        from superpower_workflow.upgrade import detect_package_manager, list_outdated
+
+        cwd = Path.cwd()
+        pm = detect_package_manager(cwd)
+        if pm == "unknown":
+            print("  Could not detect package manager.")
+            sys.exit(1)
+        outdated = list_outdated(pm, cwd=str(cwd))
+        if not outdated:
+            print("  All dependencies are up to date.")
+        else:
+            print(f"  Found {len(outdated)} outdated dependencies:")
+            for dep in outdated:
+                flag = " [BREAKING]" if dep.is_breaking else ""
+                print(f"    {dep.name}: {dep.current} -> {dep.latest}{flag}")
+        if args.dry_run:
+            return
         return
