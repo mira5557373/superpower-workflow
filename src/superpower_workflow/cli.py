@@ -122,6 +122,23 @@ def _cmd_init(project_root: Path) -> None:
             },
             "tracker": {},
         },
+        "model_routing": {
+            "enabled": False,
+            "default_model": "opus",
+            "rules": [
+                {"threshold": 0.7, "model": "opus"},
+                {"threshold": 0.3, "model": "sonnet"},
+                {"threshold": 0.0, "model": "haiku"},
+            ],
+        },
+        "parallel": {
+            "enabled": False,
+            "max_workers": 4,
+            "best_of_n": 1,
+            "agent_teams_count": 0,
+            "remote": None,
+            "worktree_dir": ".worktrees",
+        },
         "notification_webhook": None,
         "milestones": [],
     }
@@ -145,6 +162,7 @@ def _cmd_init(project_root: Path) -> None:
         ".claude/workflow-*.log",
         ".claude/telemetry.jsonl",
         ".claude/audit-trail.jsonl",
+        ".worktrees/",
     ]
     existing = gitignore.read_text() if gitignore.exists() else ""
     new_entries = [e for e in entries if e not in existing]

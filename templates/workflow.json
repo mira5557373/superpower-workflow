@@ -1,78 +1,69 @@
 {
-  "schema_version": 1,
-  "spec": "docs/superpowers/specs/CHANGE-ME.md",
-  "model": "opus",
-  "fallback_model": "haiku",
-  "effort": {
-    "plan": "max",
-    "implement": "high",
-    "review": "max",
-    "push": "low"
-  },
-  "budgets": {
-    "plan": 25,
-    "implement": 100,
-    "review": 40,
-    "push": 3
-  },
-  "max_total_budget_usd": 500,
-  "delay_between_phases_seconds": 10,
-  "convergence": {
-    "max_iterations": 5,
-    "min_gaps_for_substantial": 20,
-    "persistent_gap_downgrade_after": 3
-  },
-  "verify_commands": {
-    "test": "python -m pytest -q",
-    "lint": "python -m ruff check .",
-    "format": "python -m ruff format --check ."
-  },
-  "git_strategy": "main",
-  "telemetry": {
-    "enabled": true,
-    "path": ".claude/telemetry.jsonl"
-  },
-  "dashboard": {
-    "host": "localhost",
-    "port": 3000,
-    "watch_interval": 2
-  },
-  "security": {
-    "audit_trail": false,
-    "sign_artifacts": false,
-    "sbom_tool": "",
-    "sbom_output": ".claude/sbom-{milestone}.json",
-    "public_key": ""
-  },
-  "secrets": {},
-  "policies": {},
-  "integrations": {
-    "github": {
-      "default_repo": "",
-      "auto_pr": false,
-      "issue_label_map": {
-        "bug": "fix",
-        "feature": "feature",
-        "refactor": "refactor"
-      }
+    "schema_version": 1,
+    "spec": "docs/superpowers/specs/CHANGE-ME.md",
+    "model": "opus",
+    "fallback_model": "haiku",
+    "effort": {"plan": "max", "implement": "high", "review": "max", "push": "low"},
+    "budgets": {"plan": 25, "implement": 100, "review": 40, "push": 3},
+    "max_total_budget_usd": 500,
+    "delay_between_phases_seconds": 10,
+    "convergence": {
+        "max_iterations": 5,
+        "min_gaps_for_substantial": 20,
+        "persistent_gap_downgrade_after": 3,
     },
-    "slack": {
-      "webhook_url_env": "",
-      "events": [
-        "milestone_start",
-        "milestone_complete",
-        "milestone_failed",
-        "ci_fix"
-      ]
+    "verify_commands": {
+        "test": "python -m pytest -q",
+        "lint": "python -m ruff check .",
+        "format": "python -m ruff format --check .",
     },
-    "ci": {
-      "enabled": false,
-      "max_fix_attempts": 3,
-      "wait_timeout_seconds": 600,
-      "poll_interval_seconds": 30
+    "git_strategy": "main",
+    "telemetry": {"enabled": true, "path": ".claude/telemetry.jsonl"},
+    "dashboard": {"host": "localhost", "port": 3000, "watch_interval": 2},
+    "security": {
+        "audit_trail": false,
+        "sign_artifacts": false,
+        "sbom_tool": "",
+        "sbom_output": ".claude/sbom-{milestone}.json",
+        "public_key": "",
     },
-    "tracker": {}
-  },
-  "notification_webhook": null,
-  "milestones": []
+    "secrets": {},
+    "policies": {},
+    "integrations": {
+        "github": {
+            "default_repo": "",
+            "auto_pr": false,
+            "issue_label_map": {"bug": "fix", "feature": "feature", "refactor": "refactor"},
+        },
+        "slack": {
+            "webhook_url_env": "",
+            "events": ["milestone_start", "milestone_complete", "milestone_failed", "ci_fix"],
+        },
+        "ci": {
+            "enabled": false,
+            "max_fix_attempts": 3,
+            "wait_timeout_seconds": 600,
+            "poll_interval_seconds": 30,
+        },
+        "tracker": {},
+    },
+    "model_routing": {
+        "enabled": false,
+        "default_model": "opus",
+        "rules": [
+            {"threshold": 0.7, "model": "opus"},
+            {"threshold": 0.3, "model": "sonnet"},
+            {"threshold": 0.0, "model": "haiku"},
+        ],
+    },
+    "parallel": {
+        "enabled": false,
+        "max_workers": 4,
+        "best_of_n": 1,
+        "agent_teams_count": 0,
+        "remote": null,
+        "worktree_dir": ".worktrees",
+    },
+    "notification_webhook": null,
+    "milestones": [],
 }
