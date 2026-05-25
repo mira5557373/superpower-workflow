@@ -52,6 +52,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--to", dest="to_ms", help="End at milestone")
     run_p.add_argument("--phase", help="Run milestones matching phase prefix")
     run_p.add_argument("--dry-run", action="store_true", help="Preview without executing")
+    run_p.add_argument(
+        "--from-issue", dest="from_issue", help="GitHub issue number or owner/repo#N"
+    )
+    run_p.add_argument(
+        "--from-ticket", dest="from_ticket", help="Tracker ticket ID (e.g. LIN-42, PROJ-123)"
+    )
 
     return parser
 

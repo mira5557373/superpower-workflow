@@ -403,3 +403,28 @@ def test_init_integrations_slack_defaults(tmp_path):
     assert "milestone_start" in slack["events"]
     assert "milestone_complete" in slack["events"]
     assert "milestone_failed" in slack["events"]
+
+
+def test_parser_run_from_issue_flag():
+    args = build_parser().parse_args(["run", "--from-issue", "42"])
+    assert args.from_issue == "42"
+
+
+def test_parser_run_from_issue_full_ref():
+    args = build_parser().parse_args(["run", "--from-issue", "owner/repo#42"])
+    assert args.from_issue == "owner/repo#42"
+
+
+def test_parser_run_from_ticket_flag():
+    args = build_parser().parse_args(["run", "--from-ticket", "LIN-42"])
+    assert args.from_ticket == "LIN-42"
+
+
+def test_parser_run_from_issue_default_none():
+    args = build_parser().parse_args(["run"])
+    assert args.from_issue is None
+
+
+def test_parser_run_from_ticket_default_none():
+    args = build_parser().parse_args(["run"])
+    assert args.from_ticket is None
