@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -28,6 +29,46 @@ def _is_stuck(current_summaries: list[str], previous_summaries: list[str]) -> bo
         return False
     overlap = current_normalized & previous_normalized
     return len(overlap) / len(current_normalized) > 0.8
+
+
+def _load_validation_config(claude_dir: Path) -> dict:
+    config_path = claude_dir / "workflow.json"
+    if not config_path.exists():
+        return {}
+    try:
+        config = json.loads(config_path.read_text())
+        return config.get("validation", {})
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _run_gap_validation(
+    claude_dir: Path,
+    gap_summaries: list[str],
+    validation_config: dict,
+) -> tuple[int, int]:
+    """Run gap validation, return (invalid_count, duplicate_count)."""
+    if not validation_config.get("gap_validator", False):
+        return 0, 0
+    try:
+        from superpower_workflow.validation.gap_validator import validate_gaps
+    except ImportError:
+        return 0, 0
+
+    project_root = claude_dir.parent
+    quality_results_path = claude_dir / ".quality-gate-results.json"
+    quality_results = {}
+    if quality_results_path.exists():
+        with contextlib.suppress(json.JSONDecodeError, OSError):
+            quality_results = json.loads(quality_results_path.read_text())
+
+    report = validate_gaps(
+        gap_summaries,
+        project_root,
+        quality_results=quality_results,
+        output_path=claude_dir / ".gap-validation.json",
+    )
+    return report.invalid_gaps, report.duplicate_gaps
 
 
 def compute_exit_code(claude_dir: Path) -> int:
@@ -70,6 +111,16 @@ def compute_exit_code(claude_dir: Path) -> int:
     lint_clean = gap_report.get("lint_clean", True)
     phase_type = phase.get("phase", "")
     previous_important_gaps = phase.get("previous_important_gaps")
+
+    validation_config = _load_validation_config(claude_dir)
+    invalid_count, dup_count = _run_gap_validation(claude_dir, current_summaries, validation_config)
+
+    mode = validation_config.get("gap_validation_mode", "lenient")
+    if mode == "strict" and (invalid_count > 0 or dup_count > 0):
+        total = len(current_summaries) if current_summaries else 1
+        invalid_ratio = min(1.0, (invalid_count + dup_count) / total)
+        critical_gaps = max(0, int(critical_gaps * (1 - invalid_ratio)))
+        important_gaps = max(0, int(important_gaps * (1 - invalid_ratio)))
 
     converged = False
 

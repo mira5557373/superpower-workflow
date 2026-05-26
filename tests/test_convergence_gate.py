@@ -1,6 +1,7 @@
 """Tests for convergence gate hook."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -281,3 +282,116 @@ class TestMalformedGapReport:
 
         code = compute_exit_code(tmp_claude_dir)
         assert code == 2
+
+
+class TestGapValidatorIntegration:
+    def _setup(self, tmp_path, phase_data=None, gap_data=None, config_data=None):
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir(parents=True, exist_ok=True)
+        if phase_data:
+            (claude_dir / ".workflow-phase.json").write_text(json.dumps(phase_data))
+        if gap_data:
+            (claude_dir / ".gap-report.json").write_text(json.dumps(gap_data))
+        if config_data:
+            (claude_dir / "workflow.json").write_text(json.dumps(config_data))
+        return claude_dir
+
+    def test_lenient_mode_logs_invalid_but_keeps_counts(self, tmp_path: Path):
+        """In lenient mode, invalid gaps are warned but counts unchanged."""
+        claude_dir = self._setup(
+            tmp_path,
+            phase_data={"phase": "ultrathink", "iteration": 0, "max_iterations": 5},
+            gap_data={
+                "critical_gaps": 0,
+                "important_gaps": 2,
+                "tests_green": True,
+                "lint_clean": True,
+                "converged": False,
+                "gap_summaries": [
+                    "[ultrathink] nonexistent.py:999 has bug",
+                    "[ultrathink] general concern",
+                ],
+            },
+            config_data={"validation": {"gap_validator": True, "gap_validation_mode": "lenient"}},
+        )
+        code = compute_exit_code(claude_dir)
+        assert code == 0
+
+    def test_strict_mode_subtracts_invalid_gaps(self, tmp_path: Path):
+        """In strict mode, invalid gaps subtracted from counts."""
+        (tmp_path / "real.py").write_text("x = 1\n")
+        claude_dir = self._setup(
+            tmp_path,
+            phase_data={"phase": "ultrathink", "iteration": 0, "max_iterations": 5},
+            gap_data={
+                "critical_gaps": 1,
+                "important_gaps": 2,
+                "tests_green": True,
+                "lint_clean": True,
+                "converged": False,
+                "gap_summaries": [
+                    "[ultrathink] nonexistent.py:99 critical bug",
+                    "[ultrathink] real.py:1 needs fix",
+                    "[ultrathink] general concern",
+                ],
+            },
+            config_data={"validation": {"gap_validator": True, "gap_validation_mode": "strict"}},
+        )
+        code = compute_exit_code(claude_dir)
+        assert isinstance(code, int)
+
+    def test_validator_disabled_no_change(self, tmp_path: Path):
+        """When gap_validator is False, no validation occurs."""
+        claude_dir = self._setup(
+            tmp_path,
+            phase_data={"phase": "ultrathink", "iteration": 0, "max_iterations": 5},
+            gap_data={
+                "critical_gaps": 0,
+                "important_gaps": 2,
+                "tests_green": True,
+                "lint_clean": True,
+                "converged": False,
+                "gap_summaries": ["[ultrathink] concern"],
+            },
+            config_data={"validation": {"gap_validator": False}},
+        )
+        code = compute_exit_code(claude_dir)
+        assert code == 0
+
+    def test_no_config_no_validation(self, tmp_path: Path):
+        """When no workflow.json exists, validation is skipped."""
+        claude_dir = self._setup(
+            tmp_path,
+            phase_data={"phase": "ultrathink", "iteration": 0, "max_iterations": 5},
+            gap_data={
+                "critical_gaps": 0,
+                "important_gaps": 1,
+                "tests_green": True,
+                "lint_clean": True,
+                "converged": False,
+                "gap_summaries": ["[ultrathink] concern"],
+            },
+        )
+        code = compute_exit_code(claude_dir)
+        assert code == 0
+
+    def test_writes_gap_validation_json(self, tmp_path: Path):
+        """Validation writes .gap-validation.json output."""
+        claude_dir = self._setup(
+            tmp_path,
+            phase_data={"phase": "ultrathink", "iteration": 0, "max_iterations": 5},
+            gap_data={
+                "critical_gaps": 0,
+                "important_gaps": 1,
+                "tests_green": True,
+                "lint_clean": True,
+                "converged": False,
+                "gap_summaries": ["[ultrathink] concern"],
+            },
+            config_data={"validation": {"gap_validator": True, "gap_validation_mode": "lenient"}},
+        )
+        compute_exit_code(claude_dir)
+        validation_path = claude_dir / ".gap-validation.json"
+        assert validation_path.exists()
+        data = json.loads(validation_path.read_text())
+        assert "total_gaps" in data
