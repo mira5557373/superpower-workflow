@@ -21,6 +21,8 @@ VALID_STEPS = frozenset(
         "push",
         "quality_check_b",
         "quality_check_c",
+        "spec_compliance",
+        "feature_verify",
         "ci_wait",
         "ci_fix",
         "ci_fix_failed",
@@ -93,8 +95,21 @@ def save_phase_state(claude_dir: Path, phase: PhaseState) -> None:
     _atomic_write(claude_dir / PHASE_FILE, asdict(phase))
 
 
+GAP_VALIDATION_FILE = ".gap-validation.json"
+SPEC_COMPLIANCE_FILE = ".spec-compliance.json"
+FEATURE_VERIFICATION_FILE = ".feature-verification.json"
+QUALITY_GATE_RESULTS_FILE = ".quality-gate-results.json"
+
+
 def clear_phase_state(claude_dir: Path) -> None:
-    for name in (PHASE_FILE, GAP_REPORT_FILE):
+    for name in (
+        PHASE_FILE,
+        GAP_REPORT_FILE,
+        GAP_VALIDATION_FILE,
+        SPEC_COMPLIANCE_FILE,
+        FEATURE_VERIFICATION_FILE,
+        QUALITY_GATE_RESULTS_FILE,
+    ):
         p = claude_dir / name
         p.unlink(missing_ok=True)
 
@@ -119,7 +134,18 @@ def load_config(claude_dir: Path) -> dict:
 
 
 CLONE_FILES = frozenset({"workflow.json"})
-SKIP_FILES = frozenset({STATE_FILE, PHASE_FILE, GAP_REPORT_FILE, LOCK_FILE})
+SKIP_FILES = frozenset(
+    {
+        STATE_FILE,
+        PHASE_FILE,
+        GAP_REPORT_FILE,
+        LOCK_FILE,
+        GAP_VALIDATION_FILE,
+        SPEC_COMPLIANCE_FILE,
+        FEATURE_VERIFICATION_FILE,
+        QUALITY_GATE_RESULTS_FILE,
+    }
+)
 
 
 def clone_state_to_worktree(claude_dir: Path, worktree_root: Path) -> None:

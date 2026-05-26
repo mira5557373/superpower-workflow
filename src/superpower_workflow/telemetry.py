@@ -240,6 +240,38 @@ class UpgradeChecked(TelemetryEvent):
     breaking_count: int = 0
 
 
+@dataclass
+class GapValidationEvent(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "gap_validation"
+    milestone: str = ""
+    total: int = 0
+    valid: int = 0
+    invalid: int = 0
+    unverifiable: int = 0
+    duplicate: int = 0
+
+
+@dataclass
+class SpecComplianceCompleted(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "spec_compliance_completed"
+    milestone: str = ""
+    total_requirements: int = 0
+    implemented: int = 0
+    missing: int = 0
+    cost_usd: float = 0.0
+
+
+@dataclass
+class FeatureVerificationCompleted(TelemetryEvent):
+    EVENT_TYPE: ClassVar[str] = "feature_verification_completed"
+    milestone: str = ""
+    total_features: int = 0
+    verified: int = 0
+    broken: int = 0
+    manual_review: int = 0
+    cost_usd: float = 0.0
+
+
 class TelemetryEmitter:
     def __init__(self, path: Path | None, run_id: str) -> None:
         self._path = path

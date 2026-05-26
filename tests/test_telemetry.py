@@ -4,7 +4,9 @@ import json
 
 from superpower_workflow.telemetry import (
     CoverageResult,
+    FeatureVerificationCompleted,
     GapReport,
+    GapValidationEvent,
     MilestoneCompleted,
     MilestoneFailed,
     MilestoneSkipped,
@@ -15,6 +17,7 @@ from superpower_workflow.telemetry import (
     RetryAttempt,
     RunCompleted,
     RunStarted,
+    SpecComplianceCompleted,
     TelemetryEmitter,
     TelemetryEvent,
     TelemetryReader,
@@ -613,3 +616,81 @@ class TestDurationMetrics:
         assert reader.duration_by_milestone() == {}
         assert reader.duration_by_phase() == {}
         assert reader.total_duration() == 0.0
+
+
+class TestGapValidationEvent:
+    def test_event_type(self):
+        e = GapValidationEvent(
+            milestone="ms1", total=10, valid=7, invalid=2, unverifiable=1, duplicate=1
+        )
+        assert e.EVENT_TYPE == "gap_validation"
+
+    def test_to_dict(self):
+        e = GapValidationEvent(
+            milestone="ms1", total=10, valid=7, invalid=2, unverifiable=1, duplicate=1
+        )
+        d = e.to_dict()
+        assert d["type"] == "gap_validation"
+        assert d["total"] == 10
+        assert d["valid"] == 7
+
+
+class TestSpecComplianceCompleted:
+    def test_event_type(self):
+        e = SpecComplianceCompleted(
+            milestone="ms1",
+            total_requirements=15,
+            implemented=13,
+            missing=2,
+            cost_usd=2.5,
+        )
+        assert e.EVENT_TYPE == "spec_compliance_completed"
+
+    def test_to_dict(self):
+        e = SpecComplianceCompleted(
+            milestone="ms1",
+            total_requirements=15,
+            implemented=13,
+            missing=2,
+            cost_usd=2.5,
+        )
+        d = e.to_dict()
+        assert d["implemented"] == 13
+        assert d["missing"] == 2
+
+
+class TestFeatureVerificationCompleted:
+    def test_event_type(self):
+        e = FeatureVerificationCompleted(
+            milestone="ms1",
+            total_features=10,
+            verified=8,
+            broken=1,
+            manual_review=1,
+            cost_usd=3.0,
+        )
+        assert e.EVENT_TYPE == "feature_verification_completed"
+
+    def test_to_dict(self):
+        e = FeatureVerificationCompleted(
+            milestone="ms1",
+            total_features=10,
+            verified=8,
+            broken=1,
+            manual_review=1,
+            cost_usd=3.0,
+        )
+        d = e.to_dict()
+        assert d["broken"] == 1
+
+
+class TestNewValidSteps:
+    def test_spec_compliance_is_valid_step(self):
+        from superpower_workflow.state import VALID_STEPS
+
+        assert "spec_compliance" in VALID_STEPS
+
+    def test_feature_verify_is_valid_step(self):
+        from superpower_workflow.state import VALID_STEPS
+
+        assert "feature_verify" in VALID_STEPS
