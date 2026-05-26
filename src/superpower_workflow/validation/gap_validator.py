@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json as _json
+import os
 import re
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
@@ -225,3 +227,131 @@ def check_tool_claims(gap_text: str, quality_results: dict) -> bool | None:
                 return not tool_passed
             return None
     return None
+
+
+def validate_gaps(  # noqa: C901
+    gap_summaries: list[str],
+    project_root: Path,
+    quality_results: dict | None = None,
+    output_path: Path | None = None,
+) -> GapValidationReport:
+    if not gap_summaries:
+        report = GapValidationReport()
+        if output_path:
+            _write_report(report, output_path)
+        return report
+
+    duplicates = find_duplicates(gap_summaries)
+    validations: list[GapValidationResult] = []
+
+    for i, gap in enumerate(gap_summaries):
+        if i in duplicates:
+            validations.append(
+                GapValidationResult(
+                    gap=gap,
+                    state=GapState.INVALID,
+                    confidence=0.1,
+                    reason="Duplicate gap",
+                )
+            )
+            continue
+
+        refs = extract_file_references(gap)
+        if not refs:
+            if quality_results:
+                tool_check = check_tool_claims(gap, quality_results)
+                if tool_check is False:
+                    validations.append(
+                        GapValidationResult(
+                            gap=gap,
+                            state=GapState.INVALID,
+                            confidence=0.2,
+                            reason="Tool claim contradicts cached results",
+                        )
+                    )
+                    continue
+            validations.append(
+                GapValidationResult(
+                    gap=gap,
+                    state=GapState.UNVERIFIABLE,
+                    confidence=0.5,
+                )
+            )
+            continue
+
+        checks = ValidationCheck()
+        reasons: list[str] = []
+        all_valid = True
+
+        for ref in refs:
+            file_ok = check_file_exists(ref.path, project_root)
+            if checks.file_exists is None or not file_ok:
+                checks.file_exists = file_ok
+            if not file_ok:
+                reasons.append(f"{ref.path} not found")
+                all_valid = False
+                continue
+
+            if ref.line is not None:
+                line_ok = check_line_in_range(ref.path, ref.line, project_root)
+                if checks.line_in_range is None or not line_ok:
+                    checks.line_in_range = line_ok
+                if not line_ok:
+                    reasons.append(f"{ref.path}:{ref.line} out of range")
+                    all_valid = False
+
+            if ref.symbol:
+                sym_ok = check_symbol_exists(ref.symbol, project_root)
+                if checks.symbol_found is None or not sym_ok:
+                    checks.symbol_found = sym_ok
+                if not sym_ok:
+                    reasons.append(f"{ref.symbol} not found in codebase")
+                    all_valid = False
+
+        if all_valid:
+            confidence = 0.8
+            if checks.file_exists:
+                confidence += 0.05
+            if checks.line_in_range:
+                confidence += 0.05
+            if checks.symbol_found:
+                confidence += 0.05
+            confidence = min(confidence, 1.0)
+            validations.append(
+                GapValidationResult(
+                    gap=gap,
+                    state=GapState.VALID,
+                    confidence=confidence,
+                    checks=checks,
+                )
+            )
+        else:
+            validations.append(
+                GapValidationResult(
+                    gap=gap,
+                    state=GapState.INVALID,
+                    confidence=0.1,
+                    checks=checks,
+                    reason="; ".join(reasons),
+                )
+            )
+
+    report = GapValidationReport(
+        total_gaps=len(gap_summaries),
+        valid_gaps=sum(1 for v in validations if v.state == GapState.VALID),
+        invalid_gaps=sum(1 for v in validations if v.state == GapState.INVALID),
+        unverifiable_gaps=sum(1 for v in validations if v.state == GapState.UNVERIFIABLE),
+        duplicate_gaps=len(duplicates),
+        validations=validations,
+    )
+
+    if output_path:
+        _write_report(report, output_path)
+
+    return report
+
+
+def _write_report(report: GapValidationReport, path: Path) -> None:
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(_json.dumps(report.to_dict(), indent=2))
+    os.replace(str(tmp), str(path))

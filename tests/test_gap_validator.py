@@ -7,6 +7,7 @@ from superpower_workflow.cli import _cmd_init
 from superpower_workflow.validation.gap_validator import (
     FileReference,
     GapState,
+    GapValidationReport,
     check_file_exists,
     check_line_in_range,
     check_symbol_exists,
@@ -15,6 +16,7 @@ from superpower_workflow.validation.gap_validator import (
     extract_file_references,
     find_duplicates,
     normalize_gap,
+    validate_gaps,
 )
 
 
@@ -240,3 +242,88 @@ class TestCheckToolClaims:
         results = {"coverage": {"passed": False, "coverage_pct": 45.0}}
         result = check_tool_claims("coverage is below threshold", results)
         assert result is True
+
+
+class TestValidateGaps:
+    def test_valid_gap_with_existing_file(self, tmp_path: Path):
+        (tmp_path / "store.py").write_text("class Store:\n    def put(self): pass\n")
+        gaps = ["[ultrathink] Store.put at store.py:1 missing validation"]
+        report = validate_gaps(gaps, tmp_path)
+        assert report.total_gaps == 1
+        assert report.valid_gaps == 1
+        assert report.invalid_gaps == 0
+        assert report.validations[0].state == GapState.VALID
+        assert report.validations[0].confidence >= 0.8
+
+    def test_invalid_gap_nonexistent_file(self, tmp_path: Path):
+        gaps = ["[ultrathink] check nonexistent.py:99 for bugs"]
+        report = validate_gaps(gaps, tmp_path)
+        assert report.invalid_gaps == 1
+        assert report.validations[0].state == GapState.INVALID
+        assert report.validations[0].confidence <= 0.3
+
+    def test_invalid_gap_line_out_of_range(self, tmp_path: Path):
+        (tmp_path / "small.py").write_text("x = 1\n")
+        gaps = ["[ultrathink] small.py:999 has a bug"]
+        report = validate_gaps(gaps, tmp_path)
+        assert report.invalid_gaps == 1
+
+    def test_unverifiable_gap_no_file_ref(self, tmp_path: Path):
+        gaps = ["[ultrathink] the architecture could be cleaner"]
+        report = validate_gaps(gaps, tmp_path)
+        assert report.unverifiable_gaps == 1
+        assert report.validations[0].state == GapState.UNVERIFIABLE
+        assert report.validations[0].confidence == 0.5
+
+    def test_duplicate_detection(self, tmp_path: Path):
+        gaps = [
+            "[ultrathink] the architecture could be cleaner",
+            "[ultrathink] the architecture could be much cleaner",
+        ]
+        report = validate_gaps(gaps, tmp_path)
+        assert report.duplicate_gaps >= 1
+
+    def test_mixed_gaps(self, tmp_path: Path):
+        (tmp_path / "real.py").write_text("def foo(): pass\n")
+        gaps = [
+            "[ultrathink] real.py:1 foo needs docstring",
+            "[ultrathink] fake.py:50 missing function",
+            "[ultrathink] general code quality concern",
+        ]
+        report = validate_gaps(gaps, tmp_path)
+        assert report.total_gaps == 3
+        assert report.valid_gaps == 1
+        assert report.invalid_gaps == 1
+        assert report.unverifiable_gaps == 1
+
+    def test_writes_json_output(self, tmp_path: Path):
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        gaps = ["[ultrathink] general concern"]
+        validate_gaps(gaps, tmp_path, output_path=claude_dir / ".gap-validation.json")
+        output = claude_dir / ".gap-validation.json"
+        assert output.exists()
+        data = json.loads(output.read_text())
+        assert "total_gaps" in data
+        assert "validations" in data
+
+    def test_tool_cross_check_integration(self, tmp_path: Path):
+        quality_results = {"lint": {"passed": True}}
+        gaps = ["[ultrathink] lint is failing everywhere"]
+        report = validate_gaps(gaps, tmp_path, quality_results=quality_results)
+        assert report.invalid_gaps == 1
+
+    def test_empty_gaps(self, tmp_path: Path):
+        report = validate_gaps([], tmp_path)
+        assert report.total_gaps == 0
+        assert report.valid_gaps == 0
+
+
+class TestGapValidationReportSerialization:
+    def test_to_dict(self):
+        report = GapValidationReport(
+            total_gaps=3, valid_gaps=1, invalid_gaps=1, unverifiable_gaps=1
+        )
+        d = report.to_dict()
+        assert d["total_gaps"] == 3
+        assert "validations" in d
