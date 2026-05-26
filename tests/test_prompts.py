@@ -123,3 +123,80 @@ def test_phase_c_prompt_fix_order():
     post_impl_pos = p.index("post-impl")
     production_pos = p.index("production issues")
     assert post_impl_pos < production_pos
+
+
+class TestPhaseCWithReports:
+    def test_includes_compliance_report(self):
+        prompt = phase_c_prompt(
+            "test-ms",
+            "context",
+            "abc123",
+            "pytest",
+            "ruff",
+            "ruff format --check .",
+            compliance_report={
+                "missing": 1,
+                "details": [
+                    {
+                        "requirement": "feat B",
+                        "status": "missing",
+                        "evidence": "not found",
+                    }
+                ],
+            },
+        )
+        assert "feat B" in prompt
+        assert "missing" in prompt.lower()
+
+    def test_includes_verification_report(self):
+        prompt = phase_c_prompt(
+            "test-ms",
+            "context",
+            "abc123",
+            "pytest",
+            "ruff",
+            "ruff format --check .",
+            verification_report={
+                "broken": 1,
+                "details": [
+                    {
+                        "feature": "CLI history",
+                        "status": "fail",
+                        "reason": "shows all",
+                    }
+                ],
+            },
+        )
+        assert "CLI history" in prompt
+        assert "shows all" in prompt
+
+    def test_no_reports_unchanged(self):
+        prompt = phase_c_prompt(
+            "test-ms",
+            "context",
+            "abc123",
+            "pytest",
+            "ruff",
+            "ruff format --check .",
+        )
+        assert "spec requirements" not in prompt.lower()
+
+    def test_both_reports_included(self):
+        prompt = phase_c_prompt(
+            "test-ms",
+            "context",
+            "abc123",
+            "pytest",
+            "ruff",
+            "ruff format --check .",
+            compliance_report={
+                "missing": 1,
+                "details": [{"requirement": "A", "status": "missing", "evidence": "n/a"}],
+            },
+            verification_report={
+                "broken": 1,
+                "details": [{"feature": "B", "status": "fail", "reason": "wrong"}],
+            },
+        )
+        assert "A" in prompt
+        assert "B" in prompt

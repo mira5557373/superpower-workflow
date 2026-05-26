@@ -64,11 +64,38 @@ def phase_c_prompt(
     verify_test: str,
     verify_lint: str,
     verify_format: str,
+    compliance_report: dict | None = None,
+    verification_report: dict | None = None,
 ) -> str:
-    return (
+    base = (
         f"You are executing Phase C (Review + Fix) for milestone {name}.\n\n"
         f"Context: {context_summary}\n\n"
-        f"1. Run post-impl-review on all files changed since {plan_commit_sha}.\n"
+    )
+
+    extras = ""
+    if compliance_report and compliance_report.get("missing", 0) > 0:
+        extras += "\nThese spec requirements are missing from the implementation:\n"
+        for d in compliance_report.get("details", []):
+            if d.get("status") == "missing":
+                extras += f"- {d.get('requirement', '?')} ({d.get('evidence', '')})\n"
+        extras += "Implement them during this review phase.\n"
+
+    if verification_report and verification_report.get("broken", 0) > 0:
+        extras += "\nThese features exist but don't work correctly:\n"
+        for d in verification_report.get("details", []):
+            if d.get("status") == "fail":
+                reason = d.get("reason", "")
+                test = d.get("test", "")
+                extras += f"- {d.get('feature', '?')}: FAIL"
+                if reason:
+                    extras += f" — {reason}"
+                if test:
+                    extras += f" ({test})"
+                extras += "\n"
+        extras += "Fix them during this review phase.\n"
+
+    return (
+        base + extras + f"1. Run post-impl-review on all files changed since {plan_commit_sha}.\n"
         f"2. Then run production-readiness-review on the same files.\n"
         f"3. Fix post-impl issues first (correctness), then production issues (hardening).\n"
         f"4. Re-run full test suite after all fixes.\n"
