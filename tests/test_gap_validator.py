@@ -10,6 +10,7 @@ from superpower_workflow.validation.gap_validator import (
     check_file_exists,
     check_line_in_range,
     check_symbol_exists,
+    check_tool_claims,
     compute_similarity,
     extract_file_references,
     find_duplicates,
@@ -208,3 +209,34 @@ class TestFindDuplicates:
         ]
         dupes = find_duplicates(gaps)
         assert len(dupes) >= 1
+
+
+class TestCheckToolClaims:
+    def test_gap_about_lint_passes_when_lint_passed(self):
+        results = {"lint": {"passed": True}}
+        result = check_tool_claims("lint failures in module", results)
+        assert result is False
+
+    def test_gap_about_lint_valid_when_lint_failed(self):
+        results = {"lint": {"passed": False}}
+        result = check_tool_claims("lint failures in module", results)
+        assert result is True
+
+    def test_gap_about_tests_passes_when_tests_passed(self):
+        results = {"test": {"passed": True}}
+        result = check_tool_claims("tests are failing", results)
+        assert result is False
+
+    def test_gap_not_about_tools(self):
+        results = {"lint": {"passed": True}}
+        result = check_tool_claims("architecture needs improvement", results)
+        assert result is None
+
+    def test_empty_results(self):
+        result = check_tool_claims("lint failing", {})
+        assert result is None
+
+    def test_coverage_claim(self):
+        results = {"coverage": {"passed": False, "coverage_pct": 45.0}}
+        result = check_tool_claims("coverage is below threshold", results)
+        assert result is True

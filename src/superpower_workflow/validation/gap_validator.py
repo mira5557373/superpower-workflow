@@ -203,3 +203,25 @@ def find_duplicates(gaps: list[str], threshold: float = 0.5) -> set[int]:
             if compute_similarity(normalized[i], normalized[j]) > threshold:
                 duplicates.add(j)
     return duplicates
+
+
+_TOOL_KEYWORDS = {
+    "lint": ["lint", "linting", "ruff", "flake8", "pylint"],
+    "test": ["test", "tests", "pytest", "failing test", "test fail"],
+    "coverage": ["coverage", "branch coverage", "uncovered"],
+    "sast": ["sast", "security scan", "bandit"],
+    "secret_scan": ["secret", "credential", "leak"],
+}
+
+
+def check_tool_claims(gap_text: str, quality_results: dict) -> bool | None:
+    if not quality_results:
+        return None
+    text_lower = gap_text.lower()
+    for tool_name, keywords in _TOOL_KEYWORDS.items():
+        if any(kw in text_lower for kw in keywords):
+            if tool_name in quality_results:
+                tool_passed = quality_results[tool_name].get("passed", True)
+                return not tool_passed
+            return None
+    return None
