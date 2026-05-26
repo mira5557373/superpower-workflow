@@ -327,3 +327,42 @@ class TestGapValidationReportSerialization:
         d = report.to_dict()
         assert d["total_gaps"] == 3
         assert "validations" in d
+
+
+class TestValidationExports:
+    def test_gap_validator_exports(self):
+        from superpower_workflow.validation import (
+            FileReference,
+            GapState,
+            GapValidationReport,
+            GapValidationResult,
+            ValidationCheck,
+            check_file_exists,
+            check_line_in_range,
+            check_symbol_exists,
+            check_tool_claims,
+            extract_file_references,
+            find_duplicates,
+            validate_gaps,
+        )
+
+        assert GapState is not None
+        assert validate_gaps is not None
+
+    def test_spec_compliance_exports(self):
+        from superpower_workflow.validation import (
+            build_compliance_prompt,
+            parse_compliance_output,
+            run_spec_compliance,
+        )
+
+        assert run_spec_compliance is not None
+
+    def test_feature_tester_exports(self):
+        from superpower_workflow.validation import (
+            build_verification_prompt,
+            parse_verification_output,
+            run_feature_verification,
+        )
+
+        assert run_feature_verification is not None
