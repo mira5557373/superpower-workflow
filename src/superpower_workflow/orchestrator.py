@@ -55,7 +55,9 @@ from superpower_workflow.state import (
 )
 from superpower_workflow.telemetry import (
     CoverageResult,
+    FeatureVerificationCompleted,
     GapReport,
+    GapValidationEvent,
     MilestoneCompleted,
     MilestoneFailed,
     MilestoneSkipped,
@@ -66,6 +68,7 @@ from superpower_workflow.telemetry import (
     RetryAttempt,
     RunCompleted,
     RunStarted,
+    SpecComplianceCompleted,
     TelemetryEmitter,
 )
 
@@ -724,6 +727,7 @@ class Orchestrator:
         )
         cost += r.cost_usd
         self._emit_gap_report(name, "plan")
+        self._emit_gap_validation(name)
         clear_phase_state(self.claude_dir)
         self._check_phase_result(r, "Phase A")
         self._telemetry.emit(
@@ -866,6 +870,14 @@ class Orchestrator:
             self.config.get("milestones", []),
         )
 
+        # Spec Compliance Check
+        compliance_report, compliance_cost = self._run_spec_compliance(name, ms)
+        cost += compliance_cost
+
+        # Feature Verification
+        verification_report, verify_cost = self._run_feature_verification(name)
+        cost += verify_cost
+
         # Phase C: Review + Fix
         try:
             self._call_pre_phase("review", ms)
@@ -887,6 +899,8 @@ class Orchestrator:
                 verify.get("test", "true"),
                 verify.get("lint", "true"),
                 verify.get("format", "true"),
+                compliance_report=compliance_report,
+                verification_report=verification_report,
             ),
             model=model,
             effort=effort.get("review", "max"),
@@ -897,6 +911,7 @@ class Orchestrator:
         )
         cost += r.cost_usd
         self._emit_gap_report(name, "review")
+        self._emit_gap_validation(name)
         clear_phase_state(self.claude_dir)
         self._check_phase_result(r, "Phase C")
         self._telemetry.emit(
@@ -1526,6 +1541,109 @@ class Orchestrator:
             )
         except (json.JSONDecodeError, OSError):
             pass
+
+    def _emit_gap_validation(self, milestone: str) -> None:
+        validation_path = self.claude_dir / ".gap-validation.json"
+        if not validation_path.exists():
+            return
+        try:
+            data = json.loads(validation_path.read_text())
+            self._telemetry.emit(
+                GapValidationEvent(
+                    milestone=milestone,
+                    total=data.get("total_gaps", 0),
+                    valid=data.get("valid_gaps", 0),
+                    invalid=data.get("invalid_gaps", 0),
+                    unverifiable=data.get("unverifiable_gaps", 0),
+                    duplicate=data.get("duplicate_gaps", 0),
+                )
+            )
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    def _run_spec_compliance(self, name: str, ms: dict) -> tuple[dict | None, float]:
+        validation = self.config.get("validation", {})
+        if not validation.get("spec_compliance", False):
+            return None, 0.0
+
+        self.state.current_step = "spec_compliance"
+        save_state(self.claude_dir, self.state)
+
+        from superpower_workflow.validation.spec_compliance import run_spec_compliance
+
+        spec_path = self.config["spec"]
+        sections = ms.get("spec_sections", "")
+        budget = validation.get("spec_compliance_budget", 3.0)
+
+        module_dirs = []
+        src_dir = Path(self.cwd) / "src"
+        if src_dir.exists():
+            module_dirs.append("src/")
+        else:
+            module_dirs.append(".")
+        report = run_spec_compliance(
+            spec_path=spec_path,
+            spec_sections=sections or "all",
+            module_dirs=module_dirs,
+            run_claude_fn=run_claude,
+            model=self.config["model"],
+            budget=budget,
+            cwd=self.cwd,
+            system_prompt=self.sys_prompt,
+            fallback_model=self.config.get("fallback_model"),
+            output_path=self.claude_dir / ".spec-compliance.json",
+        )
+
+        cost = report.get("cost_usd", 0.0)
+        self._telemetry.emit(
+            SpecComplianceCompleted(
+                milestone=name,
+                total_requirements=report.get("total_requirements", 0),
+                implemented=report.get("implemented", 0),
+                missing=report.get("missing", 0),
+                cost_usd=cost,
+            )
+        )
+
+        return report, cost
+
+    def _run_feature_verification(self, name: str) -> tuple[dict | None, float]:
+        validation = self.config.get("validation", {})
+        if not validation.get("feature_verification", False):
+            return None, 0.0
+
+        self.state.current_step = "feature_verify"
+        save_state(self.claude_dir, self.state)
+
+        from superpower_workflow.validation.feature_tester import run_feature_verification
+
+        budget = validation.get("feature_verification_budget", 5.0)
+        compliance_path = self.claude_dir / ".spec-compliance.json"
+
+        report = run_feature_verification(
+            compliance_path=compliance_path,
+            run_claude_fn=run_claude,
+            model=self.config["model"],
+            budget=budget,
+            cwd=self.cwd,
+            system_prompt=self.sys_prompt,
+            fallback_model=self.config.get("fallback_model"),
+            output_path=self.claude_dir / ".feature-verification.json",
+        )
+
+        cost = report.get("cost_usd", 0.0)
+        self._telemetry.emit(
+            FeatureVerificationCompleted(
+                milestone=name,
+                total_features=report.get("total_features", 0),
+                verified=report.get("verified_working", 0),
+                broken=report.get("broken", 0),
+                manual_review=report.get("manual_review", 0),
+                cost_usd=cost,
+            )
+        )
+
+        return report, cost
 
     def _find_plan_path(self, name: str) -> str:
         plans_dir = Path(self.cwd) / "docs" / "superpowers" / "plans"

@@ -1997,3 +1997,138 @@ class TestQualityGateResultsCaching:
         data = json.loads(results_path.read_text())
         assert "lint" in data
         assert data["lint"]["passed"] is True
+
+
+class TestSpecComplianceStep:
+    def _make_orchestrator(self, tmp_path, validation_config=None):
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir(exist_ok=True)
+        config = {
+            "spec": "docs/spec.md",
+            "model": "opus",
+            "budgets": {"plan": 1, "implement": 1, "review": 1, "push": 1},
+            "milestones": [{"name": "test-ms", "spec_sections": "1, 2"}],
+            "convergence": {"max_iterations": 5},
+        }
+        if validation_config:
+            config["validation"] = validation_config
+        (claude_dir / "workflow.json").write_text(json.dumps(config))
+
+        with patch("superpower_workflow.orchestrator.acquire_lock", return_value=True):
+            return Orchestrator(tmp_path)
+
+    @patch("superpower_workflow.orchestrator.run_claude")
+    def test_spec_compliance_runs_when_enabled(self, mock_run, tmp_path):
+        orch = self._make_orchestrator(
+            tmp_path,
+            validation_config={"spec_compliance": True, "spec_compliance_budget": 3.0},
+        )
+        mock_run.return_value = ClaudeResult(
+            text='{"total_requirements": 5, "implemented": 5, "missing": 0, "details": []}',
+            cost_usd=2.0,
+        )
+        orch._telemetry = MagicMock()
+        orch._audit = MagicMock()
+
+        report, cost = orch._run_spec_compliance(
+            "test-ms", {"name": "test-ms", "spec_sections": "1, 2"}
+        )
+        assert report["missing"] == 0
+        assert cost == 2.0
+
+    @patch("superpower_workflow.orchestrator.run_claude")
+    def test_spec_compliance_skipped_when_disabled(self, mock_run, tmp_path):
+        orch = self._make_orchestrator(
+            tmp_path,
+            validation_config={"spec_compliance": False},
+        )
+        orch._telemetry = MagicMock()
+        orch._audit = MagicMock()
+
+        report, cost = orch._run_spec_compliance("test-ms", {"name": "test-ms"})
+        assert report is None
+        assert cost == 0.0
+        mock_run.assert_not_called()
+
+
+class TestFeatureVerificationStep:
+    def _make_orchestrator(self, tmp_path, validation_config=None):
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir(exist_ok=True)
+        config = {
+            "spec": "docs/spec.md",
+            "model": "opus",
+            "budgets": {"plan": 1, "implement": 1, "review": 1, "push": 1},
+            "milestones": [{"name": "test-ms"}],
+            "convergence": {"max_iterations": 5},
+        }
+        if validation_config:
+            config["validation"] = validation_config
+        (claude_dir / "workflow.json").write_text(json.dumps(config))
+
+        with patch("superpower_workflow.orchestrator.acquire_lock", return_value=True):
+            return Orchestrator(tmp_path)
+
+    @patch("superpower_workflow.orchestrator.run_claude")
+    def test_feature_verification_runs_when_enabled(self, mock_run, tmp_path):
+        orch = self._make_orchestrator(
+            tmp_path,
+            validation_config={"feature_verification": True, "feature_verification_budget": 5.0},
+        )
+        claude_dir = tmp_path / ".claude"
+        (claude_dir / ".spec-compliance.json").write_text(
+            json.dumps(
+                {
+                    "total_requirements": 3,
+                    "implemented": 3,
+                    "details": [{"requirement": "A", "status": "implemented", "evidence": "x"}],
+                }
+            )
+        )
+
+        mock_run.return_value = ClaudeResult(
+            text='{"total_features": 3, "verified_working": 3, "broken": 0, "manual_review": 0, "details": []}',
+            cost_usd=3.0,
+        )
+        orch._telemetry = MagicMock()
+        orch._audit = MagicMock()
+
+        report, cost = orch._run_feature_verification("test-ms")
+        assert report["broken"] == 0
+        assert cost == 3.0
+
+    def test_feature_verification_skipped_when_disabled(self, tmp_path):
+        orch = self._make_orchestrator(
+            tmp_path,
+            validation_config={"feature_verification": False},
+        )
+        orch._telemetry = MagicMock()
+        orch._audit = MagicMock()
+
+        report, cost = orch._run_feature_verification("test-ms")
+        assert report is None
+        assert cost == 0.0
+
+
+class TestOrchestratorStateSteps:
+    def test_spec_compliance_state_set(self, tmp_path):
+        """Orchestrator sets current_step to spec_compliance."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir(exist_ok=True)
+        config = {
+            "spec": "spec.md",
+            "model": "opus",
+            "budgets": {"plan": 1, "implement": 1, "review": 1, "push": 1},
+            "milestones": [{"name": "test"}],
+            "validation": {"spec_compliance": True, "spec_compliance_budget": 3.0},
+        }
+        (claude_dir / "workflow.json").write_text(json.dumps(config))
+
+        with patch("superpower_workflow.orchestrator.acquire_lock", return_value=True):
+            orch = Orchestrator(tmp_path)
+
+        orch.state.current_step = "spec_compliance"
+        save_state(claude_dir, orch.state)
+
+        loaded = load_state(claude_dir)
+        assert loaded.current_step == "spec_compliance"
