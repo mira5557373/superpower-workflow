@@ -104,6 +104,15 @@
       "budget_override": {
         "implement": 150
       }
+    },
+    {
+      "name": "trust-but-verify",
+      "spec_sections": "1, 2, 3, 4, 5, 6, 7, 8",
+      "description": "Gap Validator (code-enforced file:line + symbol checks), Spec Compliance Checker (independent claude -p), Feature Verification Tester (runs code). Three layers of trust-but-verify.",
+      "depends_on": [
+        "unified-dashboard-postgres"
+      ],
+      "budget_override": null
     }
   ]
 }
