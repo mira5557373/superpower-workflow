@@ -7,6 +7,9 @@ from superpower_workflow.cli import _cmd_init
 from superpower_workflow.validation.gap_validator import (
     FileReference,
     GapState,
+    check_file_exists,
+    check_line_in_range,
+    check_symbol_exists,
     extract_file_references,
 )
 
@@ -93,3 +96,58 @@ class TestExtractFileReferences:
         refs = extract_file_references("[ultrathink] Store.put at store.py:45 lacks error handling")
         found_symbols = [r.symbol for r in refs if r.symbol]
         assert any("Store" in s for s in found_symbols) or len(refs) >= 1
+
+
+class TestCheckFileExists:
+    def test_existing_file(self, tmp_path: Path):
+        (tmp_path / "store.py").write_text("class Store:\n    pass\n")
+        assert check_file_exists("store.py", tmp_path) is True
+
+    def test_missing_file(self, tmp_path: Path):
+        assert check_file_exists("nonexistent.py", tmp_path) is False
+
+    def test_nested_path(self, tmp_path: Path):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "mod.py").write_text("x = 1\n")
+        assert check_file_exists("src/mod.py", tmp_path) is True
+
+    def test_rejects_absolute_path(self, tmp_path: Path):
+        assert check_file_exists("/etc/passwd", tmp_path) is False
+
+    def test_rejects_path_traversal(self, tmp_path: Path):
+        assert check_file_exists("../../etc/passwd", tmp_path) is False
+
+
+class TestCheckLineInRange:
+    def test_line_within_range(self, tmp_path: Path):
+        (tmp_path / "f.py").write_text("a\nb\nc\n")
+        assert check_line_in_range("f.py", 3, tmp_path) is True
+
+    def test_line_out_of_range(self, tmp_path: Path):
+        (tmp_path / "f.py").write_text("a\nb\n")
+        assert check_line_in_range("f.py", 10, tmp_path) is False
+
+    def test_line_zero(self, tmp_path: Path):
+        (tmp_path / "f.py").write_text("a\n")
+        assert check_line_in_range("f.py", 0, tmp_path) is False
+
+    def test_missing_file(self, tmp_path: Path):
+        assert check_line_in_range("missing.py", 1, tmp_path) is False
+
+
+class TestCheckSymbolExists:
+    def test_symbol_found(self, tmp_path: Path):
+        (tmp_path / "mod.py").write_text("class Store:\n    def put(self): pass\n")
+        assert check_symbol_exists("Store", tmp_path) is True
+
+    def test_symbol_not_found(self, tmp_path: Path):
+        (tmp_path / "mod.py").write_text("x = 1\n")
+        assert check_symbol_exists("FooBarBaz", tmp_path) is False
+
+    def test_dotted_symbol(self, tmp_path: Path):
+        (tmp_path / "mod.py").write_text("class Store:\n    def put(self): pass\n")
+        assert check_symbol_exists("Store.put", tmp_path) is True
+
+    def test_function_symbol(self, tmp_path: Path):
+        (tmp_path / "mod.py").write_text("def validate_gaps(): pass\n")
+        assert check_symbol_exists("validate_gaps", tmp_path) is True

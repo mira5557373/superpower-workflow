@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 
 
 class GapState(StrEnum):
@@ -112,3 +113,67 @@ def _extract_nearby_symbol(text: str, pos: int) -> str | None:
     window = text[window_start:pos]
     symbols = _SYMBOL_PATTERN.findall(window)
     return symbols[-1] if symbols else None
+
+
+def check_file_exists(file_path: str, project_root: Path) -> bool:
+    if file_path.startswith("/") or ".." in file_path:
+        return False
+    return (project_root / file_path).is_file()
+
+
+def check_line_in_range(file_path: str, line: int, project_root: Path) -> bool:
+    if line <= 0:
+        return False
+    full = project_root / file_path
+    if not full.is_file():
+        return False
+    try:
+        count = len(full.read_text(encoding="utf-8", errors="replace").splitlines())
+        return line <= count
+    except OSError:
+        return False
+
+
+_SKIP_DIRS = frozenset(
+    {
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".git",
+        ".worktrees",
+        "build",
+        "dist",
+        ".tox",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".egg-info",
+    }
+)
+
+
+def check_symbol_exists(symbol: str, project_root: Path) -> bool:
+    parts = symbol.split(".", 1)
+    primary = parts[0]
+    for py_file in _iter_source_files(project_root):
+        try:
+            content = py_file.read_text(encoding="utf-8", errors="replace")
+            if primary in content:
+                if len(parts) == 1:
+                    return True
+                if parts[1] in content:
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def _iter_source_files(root: Path):
+    """Yield .py files, skipping .venv/node_modules/etc for performance."""
+    for child in root.iterdir():
+        if child.name in _SKIP_DIRS:
+            continue
+        if child.is_file() and child.suffix == ".py":
+            yield child
+        elif child.is_dir():
+            yield from _iter_source_files(child)
