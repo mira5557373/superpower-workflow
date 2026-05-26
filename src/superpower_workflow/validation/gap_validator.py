@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from enum import StrEnum
 from pathlib import Path
 
@@ -177,3 +178,28 @@ def _iter_source_files(root: Path):
             yield child
         elif child.is_dir():
             yield from _iter_source_files(child)
+
+
+def normalize_gap(text: str) -> str:
+    text = re.sub(r"\[[\w-]+\]\s*", "", text)
+    text = re.sub(r":\d+", "", text)
+    text = re.sub(r"\S+/", "", text)
+    return text.strip().lower()
+
+
+def compute_similarity(a: str, b: str) -> float:
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def find_duplicates(gaps: list[str], threshold: float = 0.5) -> set[int]:
+    normalized = [normalize_gap(g) for g in gaps]
+    duplicates: set[int] = set()
+    for i in range(len(normalized)):
+        if i in duplicates:
+            continue
+        for j in range(i + 1, len(normalized)):
+            if j in duplicates:
+                continue
+            if compute_similarity(normalized[i], normalized[j]) > threshold:
+                duplicates.add(j)
+    return duplicates

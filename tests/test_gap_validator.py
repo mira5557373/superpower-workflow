@@ -10,7 +10,10 @@ from superpower_workflow.validation.gap_validator import (
     check_file_exists,
     check_line_in_range,
     check_symbol_exists,
+    compute_similarity,
     extract_file_references,
+    find_duplicates,
+    normalize_gap,
 )
 
 
@@ -151,3 +154,57 @@ class TestCheckSymbolExists:
     def test_function_symbol(self, tmp_path: Path):
         (tmp_path / "mod.py").write_text("def validate_gaps(): pass\n")
         assert check_symbol_exists("validate_gaps", tmp_path) is True
+
+
+class TestNormalizeGap:
+    def test_removes_line_numbers(self):
+        assert "store.py" in normalize_gap("[ultrathink] Store.put at store.py:45")
+        assert ":45" not in normalize_gap("[ultrathink] Store.put at store.py:45")
+
+    def test_lowercases(self):
+        result = normalize_gap("[ultrathink] Missing VALIDATION in Store")
+        assert result == result.lower()
+
+    def test_strips_prefix_tags(self):
+        result = normalize_gap("[ultrathink] something")
+        assert "[ultrathink]" not in result
+
+
+class TestComputeSimilarity:
+    def test_identical_strings(self):
+        assert compute_similarity("foo bar", "foo bar") == 1.0
+
+    def test_completely_different(self):
+        assert compute_similarity("abc", "xyz") < 0.5
+
+    def test_similar_strings(self):
+        a = "store.py put method missing error handling"
+        b = "store.py put method lacks error handling"
+        assert compute_similarity(a, b) > 0.5
+
+    def test_empty_strings(self):
+        assert compute_similarity("", "") == 1.0
+
+
+class TestFindDuplicates:
+    def test_no_duplicates(self):
+        gaps = ["missing tests for auth", "broken error handling in parser", "docs outdated"]
+        dupes = find_duplicates(gaps)
+        assert len(dupes) == 0
+
+    def test_detects_near_duplicate(self):
+        gaps = [
+            "[ultrathink] store.py:45 missing error handling in put method",
+            "[ultrathink] store.py:46 missing error handling in put method",
+            "[ultrathink] runner.py has no retry logic",
+        ]
+        dupes = find_duplicates(gaps)
+        assert len(dupes) >= 1
+
+    def test_threshold_at_50_percent(self):
+        gaps = [
+            "feature A is not tested",
+            "feature A is not tested at all",
+        ]
+        dupes = find_duplicates(gaps)
+        assert len(dupes) >= 1
