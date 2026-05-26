@@ -224,6 +224,14 @@ def _cmd_init(project_root: Path) -> None:
             "port": 3001,
             "cors_origins": ["http://localhost:3001"],
         },
+        "validation": {
+            "gap_validator": True,
+            "gap_validation_mode": "lenient",
+            "spec_compliance": True,
+            "feature_verification": True,
+            "spec_compliance_budget": 3.0,
+            "feature_verification_budget": 5.0,
+        },
         "notification_webhook": None,
         "milestones": [],
     }
@@ -248,6 +256,10 @@ def _cmd_init(project_root: Path) -> None:
         ".claude/telemetry.jsonl",
         ".claude/audit-trail.jsonl",
         ".worktrees/",
+        ".claude/.gap-validation.json",
+        ".claude/.spec-compliance.json",
+        ".claude/.feature-verification.json",
+        ".claude/.quality-gate-results.json",
     ]
     python_entries = [
         ".venv/",
