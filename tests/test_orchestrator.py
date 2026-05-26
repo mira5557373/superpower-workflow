@@ -1967,3 +1967,33 @@ class TestParallelMode:
         state = load_state(tmp_path / ".claude")
         assert "m1" in state.completed
         assert "m2" in state.completed
+
+
+class TestQualityGateResultsCaching:
+    def test_quality_gates_write_results_json(self, tmp_path):
+        """Quality gates should write .quality-gate-results.json for gap validator."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        config = {
+            "spec": "spec.md",
+            "model": "opus",
+            "budgets": {"plan": 1, "implement": 1, "review": 1, "push": 1},
+            "milestones": [],
+            "quality_gates": {"lint": "echo ok"},
+        }
+        (claude_dir / "workflow.json").write_text(json.dumps(config))
+
+        with patch("superpower_workflow.orchestrator.acquire_lock", return_value=True):
+            orch = Orchestrator(tmp_path)
+
+        logger = MagicMock()
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            orch._telemetry = MagicMock()
+            orch._verify_quality_gates(logger, milestone="test", checkpoint="quality_check_b")
+
+        results_path = claude_dir / ".quality-gate-results.json"
+        assert results_path.exists()
+        data = json.loads(results_path.read_text())
+        assert "lint" in data
+        assert data["lint"]["passed"] is True

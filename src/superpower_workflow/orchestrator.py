@@ -1313,6 +1313,7 @@ class Orchestrator:
         if not gates:
             return True, []
         failures: list[str] = []
+        results_cache: dict[str, dict] = {}
         for gate_name in ("lint", "sast", "secret_scan", "dep_scan"):
             cmd = gates.get(gate_name)
             if not cmd:
@@ -1326,24 +1327,27 @@ class Orchestrator:
                     cwd=self.cwd,
                     timeout=300,
                 )
-                if result.returncode != 0:
+                passed = result.returncode == 0
+                if not passed:
                     detail = (result.stdout or result.stderr)[:500]
                     failures.append(f"{gate_name}: {detail}")
                     logger.log("QUALITY_GATE_FAILED", gate=gate_name)
                 else:
                     detail = ""
                     logger.log("QUALITY_GATE_PASSED", gate=gate_name)
+                results_cache[gate_name] = {"passed": passed, "detail": detail}
                 if self._telemetry:
                     self._telemetry.emit(
                         QualityGateResult(
                             milestone=milestone,
                             checkpoint=checkpoint,
                             gate=gate_name,
-                            passed=result.returncode == 0,
-                            detail=detail if result.returncode != 0 else "",
+                            passed=passed,
+                            detail=detail if not passed else "",
                         )
                     )
             except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+                results_cache[gate_name] = {"passed": False, "detail": str(e)}
                 failures.append(f"{gate_name}: {e}")
                 logger.log("QUALITY_GATE_ERROR", gate=gate_name, error=str(e))
                 if self._telemetry:
@@ -1356,6 +1360,15 @@ class Orchestrator:
                             detail=str(e),
                         )
                     )
+
+        results_path = self.claude_dir / ".quality-gate-results.json"
+        try:
+            tmp = results_path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(results_cache, indent=2))
+            os.replace(str(tmp), str(results_path))
+        except OSError:
+            pass
+
         return len(failures) == 0, failures
 
     def _check_policies(
