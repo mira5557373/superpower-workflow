@@ -37,7 +37,10 @@ def _load_validation_config(claude_dir: Path) -> dict:
         return {}
     try:
         config = json.loads(config_path.read_text())
-        return config.get("validation", {})
+        validation = config.get("validation", {})
+        if not isinstance(validation, dict):
+            return {}
+        return validation
     except (json.JSONDecodeError, OSError):
         return {}
 
@@ -116,9 +119,10 @@ def compute_exit_code(claude_dir: Path) -> int:
     invalid_count, dup_count = _run_gap_validation(claude_dir, current_summaries, validation_config)
 
     mode = validation_config.get("gap_validation_mode", "lenient")
-    if mode == "strict" and (invalid_count > 0 or dup_count > 0):
+    if mode == "strict" and invalid_count > 0:
         total = len(current_summaries) if current_summaries else 1
-        invalid_ratio = min(1.0, (invalid_count + dup_count) / total)
+        # invalid_count already includes duplicates (they're marked INVALID)
+        invalid_ratio = min(1.0, invalid_count / total)
         critical_gaps = max(0, int(critical_gaps * (1 - invalid_ratio)))
         important_gaps = max(0, int(important_gaps * (1 - invalid_ratio)))
 
