@@ -1581,18 +1581,21 @@ class Orchestrator:
             module_dirs.append("src/")
         else:
             module_dirs.append(".")
-        report = run_spec_compliance(
-            spec_path=spec_path,
-            spec_sections=sections or "all",
-            module_dirs=module_dirs,
-            run_claude_fn=run_claude,
-            model=self.config["model"],
-            budget=budget,
-            cwd=self.cwd,
-            system_prompt=self.sys_prompt,
-            fallback_model=self.config.get("fallback_model"),
-            output_path=self.claude_dir / ".spec-compliance.json",
-        )
+        try:
+            report = run_spec_compliance(
+                spec_path=spec_path,
+                spec_sections=sections or "all",
+                module_dirs=module_dirs,
+                run_claude_fn=run_claude,
+                model=self.config["model"],
+                budget=budget,
+                cwd=self.cwd,
+                system_prompt=self.sys_prompt,
+                fallback_model=self.config.get("fallback_model"),
+                output_path=self.claude_dir / ".spec-compliance.json",
+            )
+        except Exception:
+            return None, 0.0
 
         cost = report.get("cost_usd", 0.0)
         self._telemetry.emit(
@@ -1620,16 +1623,19 @@ class Orchestrator:
         budget = validation.get("feature_verification_budget", 5.0)
         compliance_path = self.claude_dir / ".spec-compliance.json"
 
-        report = run_feature_verification(
-            compliance_path=compliance_path,
-            run_claude_fn=run_claude,
-            model=self.config["model"],
-            budget=budget,
-            cwd=self.cwd,
-            system_prompt=self.sys_prompt,
-            fallback_model=self.config.get("fallback_model"),
-            output_path=self.claude_dir / ".feature-verification.json",
-        )
+        try:
+            report = run_feature_verification(
+                compliance_path=compliance_path,
+                run_claude_fn=run_claude,
+                model=self.config["model"],
+                budget=budget,
+                cwd=self.cwd,
+                system_prompt=self.sys_prompt,
+                fallback_model=self.config.get("fallback_model"),
+                output_path=self.claude_dir / ".feature-verification.json",
+            )
+        except Exception:
+            return None, 0.0
 
         cost = report.get("cost_usd", 0.0)
         self._telemetry.emit(

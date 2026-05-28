@@ -116,7 +116,9 @@ def compute_exit_code(claude_dir: Path) -> int:
     previous_important_gaps = phase.get("previous_important_gaps")
 
     validation_config = _load_validation_config(claude_dir)
-    invalid_count, dup_count = _run_gap_validation(claude_dir, current_summaries, validation_config)
+    invalid_count, _dup_count = _run_gap_validation(
+        claude_dir, current_summaries, validation_config
+    )
 
     mode = validation_config.get("gap_validation_mode", "lenient")
     if mode == "strict" and invalid_count > 0:
@@ -163,7 +165,7 @@ def _increment_iteration(
     if current_summaries is not None:
         phase["previous_gap_summaries"] = current_summaries
     tmp = phase_path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(phase, indent=2))
+    tmp.write_text(json.dumps(phase, indent=2), encoding="utf-8")
     os.replace(str(tmp), str(phase_path))
 
 

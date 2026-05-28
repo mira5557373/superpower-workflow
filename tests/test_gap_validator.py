@@ -36,7 +36,7 @@ class TestValidationConfig:
     def test_validation_package_importable(self):
         import superpower_workflow.validation
 
-        assert hasattr(superpower_workflow.validation, "__all__")
+        assert len(superpower_workflow.validation.__all__) >= 10
 
 
 class TestGapState:
@@ -101,7 +101,7 @@ class TestExtractFileReferences:
     def test_extracts_symbol_near_reference(self):
         refs = extract_file_references("[ultrathink] Store.put at store.py:45 lacks error handling")
         found_symbols = [r.symbol for r in refs if r.symbol]
-        assert any("Store" in s for s in found_symbols) or len(refs) >= 1
+        assert any("Store" in s for s in found_symbols)
 
 
 class TestCheckFileExists:
@@ -336,19 +336,19 @@ class TestValidationExports:
             validate_gaps,
         )
 
-        assert GapState is not None
-        assert validate_gaps is not None
+        assert GapState.VALID == "valid"
+        assert callable(validate_gaps)
 
     def test_spec_compliance_exports(self):
         from superpower_workflow.validation import (
             run_spec_compliance,
         )
 
-        assert run_spec_compliance is not None
+        assert callable(run_spec_compliance)
 
     def test_feature_tester_exports(self):
         from superpower_workflow.validation import (
             run_feature_verification,
         )
 
-        assert run_feature_verification is not None
+        assert callable(run_feature_verification)

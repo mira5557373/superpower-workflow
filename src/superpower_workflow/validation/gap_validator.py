@@ -353,5 +353,5 @@ def validate_gaps(  # noqa: C901
 
 def _write_report(report: GapValidationReport, path: Path) -> None:
     tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(_json.dumps(report.to_dict(), indent=2))
+    tmp.write_text(_json.dumps(report.to_dict(), indent=2), encoding="utf-8")
     os.replace(str(tmp), str(path))

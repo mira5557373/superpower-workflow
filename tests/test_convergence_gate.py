@@ -318,7 +318,7 @@ class TestGapValidatorIntegration:
         assert code == 0
 
     def test_strict_mode_subtracts_invalid_gaps(self, tmp_path: Path):
-        """In strict mode, invalid gaps subtracted from counts."""
+        """In strict mode, invalid gaps reduce counts — convergence becomes easier."""
         (tmp_path / "real.py").write_text("x = 1\n")
         claude_dir = self._setup(
             tmp_path,
@@ -338,7 +338,7 @@ class TestGapValidatorIntegration:
             config_data={"validation": {"gap_validator": True, "gap_validation_mode": "strict"}},
         )
         code = compute_exit_code(claude_dir)
-        assert isinstance(code, int)
+        assert code == 0
 
     def test_validator_disabled_no_change(self, tmp_path: Path):
         """When gap_validator is False, no validation occurs."""

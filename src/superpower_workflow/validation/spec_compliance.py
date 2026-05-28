@@ -86,7 +86,7 @@ def run_spec_compliance(
 
     if output_path:
         tmp = output_path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(report, indent=2))
+        tmp.write_text(json.dumps(report, indent=2), encoding="utf-8")
         os.replace(str(tmp), str(output_path))
 
     return report
