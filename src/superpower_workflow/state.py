@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -114,10 +115,43 @@ def clear_phase_state(claude_dir: Path) -> None:
         p.unlink(missing_ok=True)
 
 
+def _is_pid_alive(pid: int) -> bool:
+    """Cross-platform check whether a process with the given PID is alive."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+
+        PROCESS_QUERY_INFORMATION = 0x0400
+        STILL_ACTIVE = 259
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong()
+            ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+            return exit_code.value == STILL_ACTIVE
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    else:
+        try:
+            os.kill(pid, 0)
+            return True
+        except (ProcessLookupError, PermissionError, OSError):
+            return False
+
+
 def acquire_lock(claude_dir: Path) -> bool:
     lock = claude_dir / LOCK_FILE
     if lock.exists():
-        return False
+        try:
+            pid = int(lock.read_text().strip())
+            if _is_pid_alive(pid):
+                return False
+            print(f"  Cleaned stale lockfile (PID {pid} no longer running)")
+        except (ValueError, OSError):
+            pass
+        lock.unlink(missing_ok=True)
     lock.write_text(str(os.getpid()))
     return True
 

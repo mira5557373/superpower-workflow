@@ -1,6 +1,7 @@
 """Tests for state management module."""
 
 import json
+import os
 
 import pytest
 
@@ -216,6 +217,51 @@ class TestLocking:
         release_lock(tmp_claude_dir)
         acquired_third = acquire_lock(tmp_claude_dir)
         assert acquired_third is True
+
+    def test_stale_lock_with_dead_pid_is_cleaned(self, tmp_claude_dir):
+        """If lockfile holds a dead PID, acquire_lock cleans it and acquires fresh."""
+        lock_file = tmp_claude_dir / LOCK_FILE
+        # PID 99999999 is virtually guaranteed not to exist
+        lock_file.write_text("99999999")
+        acquired = acquire_lock(tmp_claude_dir)
+        assert acquired is True
+        assert lock_file.exists()
+        # New lock contains current PID, not 99999999
+        assert lock_file.read_text().strip() == str(os.getpid())
+
+    def test_stale_lock_with_corrupt_pid_is_cleaned(self, tmp_claude_dir):
+        """If lockfile is corrupt (not a number), acquire_lock cleans it and acquires fresh."""
+        lock_file = tmp_claude_dir / LOCK_FILE
+        lock_file.write_text("not-a-pid-garbage")
+        acquired = acquire_lock(tmp_claude_dir)
+        assert acquired is True
+        assert lock_file.read_text().strip() == str(os.getpid())
+
+    def test_stale_lock_with_empty_file_is_cleaned(self, tmp_claude_dir):
+        """If lockfile is empty, acquire_lock cleans it and acquires fresh."""
+        lock_file = tmp_claude_dir / LOCK_FILE
+        lock_file.write_text("")
+        acquired = acquire_lock(tmp_claude_dir)
+        assert acquired is True
+
+    def test_is_pid_alive_current_process(self):
+        """Current process PID is always alive."""
+        from superpower_workflow.state import _is_pid_alive
+
+        assert _is_pid_alive(os.getpid()) is True
+
+    def test_is_pid_alive_dead_pid(self):
+        """A very high PID is not alive."""
+        from superpower_workflow.state import _is_pid_alive
+
+        assert _is_pid_alive(99999999) is False
+
+    def test_is_pid_alive_invalid_pid(self):
+        """Zero and negative PIDs are not alive."""
+        from superpower_workflow.state import _is_pid_alive
+
+        assert _is_pid_alive(0) is False
+        assert _is_pid_alive(-1) is False
 
 
 class TestConfig:
