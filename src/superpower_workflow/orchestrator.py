@@ -52,6 +52,7 @@ from superpower_workflow.state import (
     release_lock,
     save_phase_state,
     save_state,
+    update_lock_heartbeat,
 )
 from superpower_workflow.telemetry import (
     CoverageResult,
@@ -266,6 +267,7 @@ class Orchestrator:
 
         try:
             for i, ms in enumerate(milestones):
+                update_lock_heartbeat(self.claude_dir)
                 name = ms["name"]
                 if name in self.state.completed:
                     continue
@@ -440,6 +442,7 @@ class Orchestrator:
     def _preflight_checks(self) -> bool:
         if not acquire_lock(self.claude_dir):
             print("  FATAL: Another orchestration is running.")
+            print("  Run 'sw lock status' to inspect, or 'sw lock force-clean' to release.")
             return False
 
         git_status = subprocess.run(

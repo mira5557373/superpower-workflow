@@ -23,6 +23,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("resume", help="Resume from failure point")
     sub.add_parser("clean", help="Remove runtime files")
 
+    lock_p = sub.add_parser("lock", help="Inspect or force-clean the workflow lock")
+    lock_sub = lock_p.add_subparsers(dest="lock_command")
+    lock_sub.add_parser("status", help="Show lock holder details")
+    lock_sub.add_parser("force-clean", help="Force-remove lock (use only if you're sure)")
+
     metrics_p = sub.add_parser("metrics", help="Show telemetry metrics")
     metrics_p.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON")
 
@@ -519,6 +524,32 @@ def _cmd_audit_verify_sig(project_root: Path, tag: str, public_key: str | None) 
         sys.exit(1)
 
 
+def _cmd_lock(project_root: Path, args) -> None:
+    from superpower_workflow.state import get_lock_status, release_lock
+
+    claude_dir = project_root / ".claude"
+    sub = getattr(args, "lock_command", None)
+    if sub == "status" or sub is None:
+        status = get_lock_status(claude_dir)
+        if status is None:
+            print("  No active lock.")
+            return
+        print(f"  PID:       {status['pid']}")
+        print(f"  Hostname:  {status['hostname']}")
+        age = int(status.get("heartbeat_age_seconds", 0))
+        print(f"  Heartbeat: {age}s ago")
+        if status["stale"]:
+            print(f"  Status:    STALE ({status['reason']})")
+            print("  Hint:      sw lock force-clean   # to release")
+        else:
+            print("  Status:    ACTIVE")
+        return
+    if sub == "force-clean":
+        release_lock(claude_dir)
+        print("  Lock force-removed.")
+        return
+
+
 def _cmd_clean(project_root: Path) -> None:
     claude_dir = project_root / ".claude"
     removed = 0
@@ -796,6 +827,10 @@ def main() -> None:
 
     if args.command == "clean":
         _cmd_clean(project_root)
+        return
+
+    if args.command == "lock":
+        _cmd_lock(project_root, args)
         return
 
     if args.command == "audit":

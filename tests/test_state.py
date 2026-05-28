@@ -2,6 +2,8 @@
 
 import json
 import os
+import socket
+import time
 
 import pytest
 
@@ -219,49 +221,150 @@ class TestLocking:
         assert acquired_third is True
 
     def test_stale_lock_with_dead_pid_is_cleaned(self, tmp_claude_dir):
-        """If lockfile holds a dead PID, acquire_lock cleans it and acquires fresh."""
-        lock_file = tmp_claude_dir / LOCK_FILE
-        # PID 99999999 is virtually guaranteed not to exist
-        lock_file.write_text("99999999")
-        acquired = acquire_lock(tmp_claude_dir)
-        assert acquired is True
-        assert lock_file.exists()
-        # New lock contains current PID, not 99999999
-        assert lock_file.read_text().strip() == str(os.getpid())
+        """Lock with dead PID is cleaned and reacquired."""
+        import json as _json
 
-    def test_stale_lock_with_corrupt_pid_is_cleaned(self, tmp_claude_dir):
-        """If lockfile is corrupt (not a number), acquire_lock cleans it and acquires fresh."""
-        lock_file = tmp_claude_dir / LOCK_FILE
-        lock_file.write_text("not-a-pid-garbage")
-        acquired = acquire_lock(tmp_claude_dir)
-        assert acquired is True
-        assert lock_file.read_text().strip() == str(os.getpid())
+        from superpower_workflow.state import LOCK_META_FILE
 
-    def test_stale_lock_with_empty_file_is_cleaned(self, tmp_claude_dir):
-        """If lockfile is empty, acquire_lock cleans it and acquires fresh."""
-        lock_file = tmp_claude_dir / LOCK_FILE
-        lock_file.write_text("")
-        acquired = acquire_lock(tmp_claude_dir)
-        assert acquired is True
+        (tmp_claude_dir / LOCK_FILE).write_text("99999999")
+        (tmp_claude_dir / LOCK_META_FILE).write_text(
+            _json.dumps(
+                {
+                    "pid": 99999999,
+                    "start_time": 0.0,
+                    "hostname": socket.gethostname(),
+                    "heartbeat": 0,
+                }
+            )
+        )
+        assert acquire_lock(tmp_claude_dir) is True
+
+    def test_stale_lock_with_no_meta_is_cleaned(self, tmp_claude_dir):
+        """Lock without metadata file is treated as stale and replaced."""
+        (tmp_claude_dir / LOCK_FILE).write_text("99999999")
+        assert acquire_lock(tmp_claude_dir) is True
+
+    def test_pid_reuse_detected_via_start_time(self, tmp_claude_dir):
+        """If PID is reused (different start_time), lock is treated as stale."""
+        import json as _json
+
+        from superpower_workflow.state import LOCK_META_FILE
+
+        (tmp_claude_dir / LOCK_FILE).write_text(str(os.getpid()))
+        (tmp_claude_dir / LOCK_META_FILE).write_text(
+            _json.dumps(
+                {
+                    "pid": os.getpid(),
+                    "start_time": 1.0,  # bogus start_time — current process has different value
+                    "hostname": socket.gethostname(),
+                    "heartbeat": time.time(),
+                }
+            )
+        )
+        assert acquire_lock(tmp_claude_dir) is True
+
+    def test_hostname_mismatch_rejects_lock(self, tmp_claude_dir):
+        """Lock held by a different hostname is not stolen."""
+        import json as _json
+
+        from superpower_workflow.state import LOCK_META_FILE
+
+        (tmp_claude_dir / LOCK_FILE).write_text("99999999")
+        (tmp_claude_dir / LOCK_META_FILE).write_text(
+            _json.dumps(
+                {
+                    "pid": 99999999,
+                    "start_time": 0.0,
+                    "hostname": "different-host-xyz",
+                    "heartbeat": time.time(),
+                }
+            )
+        )
+        assert acquire_lock(tmp_claude_dir) is False
+
+    def test_stale_heartbeat_triggers_reclaim(self, tmp_claude_dir):
+        """If heartbeat is older than threshold, lock is treated as stale."""
+        import json as _json
+
+        from superpower_workflow.state import HEARTBEAT_STALE_SECONDS, LOCK_META_FILE
+
+        (tmp_claude_dir / LOCK_FILE).write_text("99999999")
+        (tmp_claude_dir / LOCK_META_FILE).write_text(
+            _json.dumps(
+                {
+                    "pid": 99999999,
+                    "start_time": 0.0,
+                    "hostname": socket.gethostname(),
+                    "heartbeat": time.time() - HEARTBEAT_STALE_SECONDS - 100,
+                }
+            )
+        )
+        assert acquire_lock(tmp_claude_dir) is True
+
+    def test_force_acquire_bypasses_stale_check(self, tmp_claude_dir):
+        """force=True acquires regardless of lock state."""
+        import json as _json
+
+        from superpower_workflow.state import LOCK_META_FILE
+
+        (tmp_claude_dir / LOCK_FILE).write_text("99999999")
+        (tmp_claude_dir / LOCK_META_FILE).write_text(
+            _json.dumps(
+                {
+                    "pid": 99999999,
+                    "start_time": 0.0,
+                    "hostname": "different-host",
+                    "heartbeat": time.time(),
+                }
+            )
+        )
+        assert acquire_lock(tmp_claude_dir, force=True) is True
 
     def test_is_pid_alive_current_process(self):
-        """Current process PID is always alive."""
-        from superpower_workflow.state import _is_pid_alive
+        from superpower_workflow.state import is_pid_alive
 
-        assert _is_pid_alive(os.getpid()) is True
+        assert is_pid_alive(os.getpid()) is True
 
     def test_is_pid_alive_dead_pid(self):
-        """A very high PID is not alive."""
-        from superpower_workflow.state import _is_pid_alive
+        from superpower_workflow.state import is_pid_alive
 
-        assert _is_pid_alive(99999999) is False
+        assert is_pid_alive(99999999) is False
 
     def test_is_pid_alive_invalid_pid(self):
-        """Zero and negative PIDs are not alive."""
-        from superpower_workflow.state import _is_pid_alive
+        from superpower_workflow.state import is_pid_alive
 
-        assert _is_pid_alive(0) is False
-        assert _is_pid_alive(-1) is False
+        assert is_pid_alive(0) is False
+        assert is_pid_alive(-1) is False
+
+    def test_is_pid_alive_start_time_mismatch(self):
+        """If PID is alive but start_time doesn't match, return False (PID reuse)."""
+        from superpower_workflow.state import is_pid_alive
+
+        assert is_pid_alive(os.getpid(), expected_start_time=1.0) is False
+
+    def test_update_heartbeat(self, tmp_claude_dir):
+        from superpower_workflow.state import get_lock_status, update_lock_heartbeat
+
+        acquire_lock(tmp_claude_dir)
+        status_before = get_lock_status(tmp_claude_dir)
+        time.sleep(0.1)
+        update_lock_heartbeat(tmp_claude_dir)
+        status_after = get_lock_status(tmp_claude_dir)
+        assert status_after["heartbeat"] > status_before["heartbeat"]
+
+    def test_get_lock_status_returns_none_when_no_lock(self, tmp_claude_dir):
+        from superpower_workflow.state import get_lock_status
+
+        assert get_lock_status(tmp_claude_dir) is None
+
+    def test_get_lock_status_active(self, tmp_claude_dir):
+        from superpower_workflow.state import get_lock_status
+
+        acquire_lock(tmp_claude_dir)
+        status = get_lock_status(tmp_claude_dir)
+        assert status["pid"] == os.getpid()
+        assert status["stale"] is False
+        assert status["hostname"] == socket.gethostname()
 
 
 class TestConfig:
