@@ -17,6 +17,7 @@ from filelock import FileLock, Timeout
 STATE_FILE = "workflow-state.json"
 PHASE_FILE = ".workflow-phase.json"
 GAP_REPORT_FILE = ".gap-report.json"
+GAP_REPORT_RAW_FILE = ".gap-report.raw.json"
 LOCK_FILE = ".workflow.lock"
 
 VALID_STEPS = frozenset(
@@ -108,6 +109,7 @@ QUALITY_GATE_RESULTS_FILE = ".quality-gate-results.json"
 
 REPORT_FILES = (
     GAP_REPORT_FILE,
+    GAP_REPORT_RAW_FILE,
     GAP_VALIDATION_FILE,
     SPEC_COMPLIANCE_FILE,
     FEATURE_VERIFICATION_FILE,

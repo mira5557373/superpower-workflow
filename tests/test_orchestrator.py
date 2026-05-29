@@ -2167,6 +2167,147 @@ class TestOrchestratorStateSteps:
         assert loaded.current_step == "spec_compliance"
 
 
+class TestGapCuratorIntegration:
+    """Direction B2: gap curator integration in orchestrator pipeline."""
+
+    def _curator_config(self, tmp_path, **overrides):
+        config = _config(tmp_path)
+        config["validation"] = {
+            "gap_curator": True,
+            "curator_budget": 1.0,
+            "curator_min_gaps": 1,  # so tests trigger easily
+            **overrides,
+        }
+        (tmp_path / ".claude" / "workflow.json").write_text(json.dumps(config))
+        return config
+
+    def test_curator_disabled_by_default(self, tmp_path):
+        """Without gap_curator=true, no curation event is emitted."""
+        _config(tmp_path)
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        events = _read_telemetry(tmp_path)
+        assert "gap_curation_completed" not in [e["type"] for e in events]
+
+    def test_curator_skipped_when_raw_count_below_min(self, tmp_path):
+        """Skip curator when raw_count < curator_min_gaps."""
+        self._curator_config(tmp_path, curator_min_gaps=10)
+
+        def mock_run(prompt, **kwargs):
+            (tmp_path / ".claude" / ".gap-report.json").write_text(
+                json.dumps({"total_gaps_found": 3, "converged": True})
+            )
+            return _ok_result()
+
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", side_effect=mock_run),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+
+        events = _read_telemetry(tmp_path)
+        assert "gap_curation_completed" not in [e["type"] for e in events]
+
+    def test_curator_emits_event_and_replaces_report(self, tmp_path):
+        """When curator runs and succeeds, gap_curation_completed event is emitted with
+        attrition stats."""
+        self._curator_config(tmp_path)
+
+        def mock_run(prompt, **kwargs):
+            # Write large raw gap report; orchestrator will read this before curator
+            (tmp_path / ".claude" / ".gap-report.json").write_text(
+                json.dumps(
+                    {
+                        "total_gaps_found": 10,
+                        "important_gaps": 3,
+                        "minor_gaps": 7,
+                        "converged": False,
+                    }
+                )
+            )
+            # If the prompt is the curator prompt (contains its schema keywords),
+            # return a curated payload
+            if "curated_gaps" in (prompt or "") or "CONSERVATIVE BIAS" in (prompt or ""):
+                payload = {
+                    "curated_gaps": [
+                        {"summary": "a", "file": "x.py", "line": 1, "severity": "important"},
+                        {"summary": "b", "file": "x.py", "line": 2, "severity": "important"},
+                        {"summary": "c", "file": "x.py", "line": 3, "severity": "minor"},
+                    ],
+                    "dropped_count": 7,
+                    "dropped_reasons": {
+                        "unanchored": 5,
+                        "spec_duplicate": 0,
+                        "trivial": 2,
+                        "speculative": 0,
+                    },
+                    "critical_gaps": 0,
+                    "architectural_gaps": 0,
+                    "important_gaps": 2,
+                    "minor_gaps": 1,
+                    "deferred_gaps": 0,
+                    "total_gaps_found": 3,
+                    "converged": False,
+                    "curated": True,
+                }
+                return ClaudeResult(text=json.dumps(payload), cost_usd=0.4, is_error=False)
+            return _ok_result()
+
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", side_effect=mock_run),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+
+        events = _read_telemetry(tmp_path)
+        curation = [e for e in events if e["type"] == "gap_curation_completed"]
+        assert len(curation) >= 1, "expected at least one curation event"
+        evt = curation[0]
+        assert evt["raw_total"] == 10
+        assert evt["curated_total"] == 3
+        assert evt["attrition_pct"] == 70.0
+        assert evt["dropped_unanchored"] == 5
+        assert evt["dropped_trivial"] == 2
+
+    def test_curator_failure_falls_back_to_raw(self, tmp_path):
+        """Unparseable curator output → no curation event, raw report untouched."""
+        self._curator_config(tmp_path)
+
+        def mock_run(prompt, **kwargs):
+            (tmp_path / ".claude" / ".gap-report.json").write_text(
+                json.dumps({"total_gaps_found": 8, "converged": False})
+            )
+            return ClaudeResult(text="not json", cost_usd=0.1, is_error=False)
+
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", side_effect=mock_run),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+
+        events = _read_telemetry(tmp_path)
+        assert "gap_curation_completed" not in [e["type"] for e in events]
+
+
 class TestStrictModeTrustButVerify:
     """Path B: validation.strict_mode loops Phase C on residual missing/broken findings."""
 

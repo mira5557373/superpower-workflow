@@ -3,6 +3,40 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.5] — 2026-05-29
+
+### Added — gap curator (opt-in)
+- `validation.gap_curator = true` enables a post-process `claude -p` pass that runs after Phase A and Phase C produce `.gap-report.json`. The curator reads raw gaps + spec + focused diff (only files referenced by raw gaps) + (review-phase) spec compliance findings, then drops noise:
+  - DROP unanchored gaps (must reference file:line:symbol; plan-phase allows plan markdown anchors, review-phase requires diff anchors)
+  - DROP gaps already covered by spec compliance (avoid duplication with trust-but-verify)
+  - DROP style preferences, "consider extracting X" refactor suggestions, vague concerns
+  - DROP speculative claims with no measurable failure prediction
+  - KEEP gaps that predict a concrete defect with a 1-line fix recommendation
+- Conservative bias: when uncertain, the curator keeps the gap (false negatives cost more than false positives).
+- Output is wire-compatible with the original gap report schema (same critical/architectural/important/minor/deferred counts + total_gaps_found + converged) so downstream consumers (convergence gate, telemetry, validator, archive) need no awareness. Raw report is preserved at `.gap-report.raw.json` and archived under `.claude/reports/<milestone>/<phase>/`.
+- Cost-bounded: skip when raw count < `curator_min_gaps` (default 5); fixed `curator_budget` per call (default $1.00); fallback to raw on any failure (timeout, parse error, IO error). The orchestrator never fails over a curator failure.
+
+### New telemetry event
+- `GapCurationCompleted{milestone, phase, raw_total, curated_total, dropped_unanchored, dropped_spec_duplicate, dropped_trivial, dropped_speculative, attrition_pct, cost_usd}`.
+
+### Config keys (defaults in `sw init`)
+```json
+"validation": {
+  "gap_curator": false,        // off by default
+  "curator_budget": 1.0,
+  "curator_min_gaps": 5
+}
+```
+
+### Why this matters
+- Soaks showed plan-phase emits 20-22 gaps per pass with 90% unverifiable; review-phase emits 0-5 with similar dilution. The signal that actually mattered (M2's `rm` vs `remove`) came from spec compliance, not the gap report.
+- The curator inverts the failure mode: instead of begging the original gap generator to be terse (which has failed before), we let it be verbose and prune separately. LLM judgment handles the judgment-heavy filters (spec duplication, severity-by-blast-radius); mechanical filters (anchor presence) become defensive sanity checks.
+
+### Stats
+- Test count: 1077 → **1099** passing (+22: 18 unit tests for curator + 4 orchestrator integration tests).
+- New module: `src/superpower_workflow/validation/gap_curator.py` (215 lines).
+- 28-gap ultrathink pass on the design before code (per `feedback_ultrathink_gap_passes`).
+
 ## [1.1.4] — 2026-05-29
 
 ### Added — Direction B: strict mode for trust-but-verify

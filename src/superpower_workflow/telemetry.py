@@ -273,6 +273,23 @@ class FeatureVerificationCompleted(TelemetryEvent):
 
 
 @dataclass
+class GapCurationCompleted(TelemetryEvent):
+    """Emitted when the gap curator filters a raw gap report into curated, scoped gaps."""
+
+    EVENT_TYPE: ClassVar[str] = "gap_curation_completed"
+    milestone: str = ""
+    phase: str = ""
+    raw_total: int = 0
+    curated_total: int = 0
+    dropped_unanchored: int = 0
+    dropped_spec_duplicate: int = 0
+    dropped_trivial: int = 0
+    dropped_speculative: int = 0
+    attrition_pct: float = 0.0
+    cost_usd: float = 0.0
+
+
+@dataclass
 class StrictModeIteration(TelemetryEvent):
     """Emitted when strict-mode loops Phase C on residual compliance/verification findings."""
 

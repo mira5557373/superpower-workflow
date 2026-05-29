@@ -43,6 +43,7 @@ from superpower_workflow.runner import ClaudeResult, run_claude
 from superpower_workflow.security import SecretsHandler, generate_sbom, sign_artifact
 from superpower_workflow.state import (
     GAP_REPORT_FILE,
+    GAP_REPORT_RAW_FILE,
     PHASE_FILE,
     PhaseState,
     acquire_lock,
@@ -58,6 +59,7 @@ from superpower_workflow.state import (
 from superpower_workflow.telemetry import (
     CoverageResult,
     FeatureVerificationCompleted,
+    GapCurationCompleted,
     GapReport,
     GapValidationEvent,
     MilestoneCompleted,
@@ -788,6 +790,8 @@ class Orchestrator:
             fallback_model=fallback,
         )
         cost += r.cost_usd
+        curator_cost = self._run_gap_curator(name, "plan")
+        cost += curator_cost
         self._emit_gap_report(name, "plan")
         self._emit_gap_validation(name)
         archive_reports(self.claude_dir, name, "plan")
@@ -973,6 +977,8 @@ class Orchestrator:
             fallback_model=fallback,
         )
         cost += r.cost_usd
+        curator_cost = self._run_gap_curator(name, "review")
+        cost += curator_cost
         self._emit_gap_report(name, "review")
         self._emit_gap_validation(name)
         archive_reports(self.claude_dir, name, "review")
@@ -1730,6 +1736,94 @@ class Orchestrator:
         )
 
         return report, cost
+
+    def _run_gap_curator(self, name: str, phase: str) -> float:
+        """Post-process raw .gap-report.json into a curated, scoped report.
+
+        Reads raw gap report + spec + focused diff + (review only) spec compliance.
+        Writes curated gap report back to .gap-report.json (raw preserved at
+        .gap-report.raw.json). Returns cost added, 0.0 when curator disabled/skipped.
+
+        Failure modes (claude error, parse error, IO error) all fall back to raw —
+        the orchestrator never fails over a curator failure.
+        """
+        validation = self.config.get("validation", {})
+        if not validation.get("gap_curator", False):
+            return 0.0
+
+        gap_path = self.claude_dir / GAP_REPORT_FILE
+        if not gap_path.exists():
+            return 0.0
+
+        try:
+            raw_report = json.loads(gap_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return 0.0
+
+        raw_total = raw_report.get("total_gaps_found", 0)
+        min_gaps = int(validation.get("curator_min_gaps", 5))
+        if raw_total < min_gaps:
+            return 0.0
+
+        from superpower_workflow.validation.gap_curator import run_gap_curator
+
+        spec_rel = self.config.get("spec") or self.config.get("spec_path", "")
+        spec_path = Path(self.cwd) / spec_rel if spec_rel else None
+        compliance_path = self.claude_dir / ".spec-compliance.json"
+        budget = float(validation.get("curator_budget", 1.0))
+
+        try:
+            curated = run_gap_curator(
+                raw_gap_report=raw_report,
+                phase=phase,
+                project_root=Path(self.cwd),
+                spec_path=spec_path,
+                compliance_path=compliance_path if phase == "review" else None,
+                plan_sha=self.state.plan_commit_sha or "",
+                run_claude_fn=run_claude,
+                model=self.config["model"],
+                budget=budget,
+                cwd=self.cwd,
+                system_prompt=self.sys_prompt,
+                fallback_model=self.config.get("fallback_model"),
+            )
+        except Exception:
+            return 0.0
+
+        if curated is None:
+            # Fall back to raw — leave .gap-report.json untouched
+            return 0.0
+
+        # Preserve raw, replace .gap-report.json with curated
+        try:
+            (self.claude_dir / GAP_REPORT_RAW_FILE).write_text(
+                json.dumps(raw_report, indent=2), encoding="utf-8"
+            )
+            gap_path.write_text(json.dumps(curated, indent=2), encoding="utf-8")
+        except OSError:
+            return 0.0
+
+        cost = float(curated.get("cost_usd", 0.0))
+        curated_total = curated.get("total_gaps_found", 0)
+        dropped = curated.get("dropped_reasons", {}) or {}
+        attrition = ((raw_total - curated_total) / raw_total * 100.0) if raw_total > 0 else 0.0
+
+        self._telemetry.emit(
+            GapCurationCompleted(
+                milestone=name,
+                phase=phase,
+                raw_total=raw_total,
+                curated_total=curated_total,
+                dropped_unanchored=int(dropped.get("unanchored", 0)),
+                dropped_spec_duplicate=int(dropped.get("spec_duplicate", 0)),
+                dropped_trivial=int(dropped.get("trivial", 0)),
+                dropped_speculative=int(dropped.get("speculative", 0)),
+                attrition_pct=round(attrition, 1),
+                cost_usd=cost,
+            )
+        )
+
+        return cost
 
     def _run_strict_mode_loop(
         self,
