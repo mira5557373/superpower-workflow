@@ -3,6 +3,24 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.4] — 2026-05-29
+
+### Added — Direction B: strict mode for trust-but-verify
+- `validation.strict_mode` (default `false`). When enabled, after Phase C finishes the orchestrator re-runs spec compliance + feature verification and, if any requirement is marked `missing` or any feature is marked `broken`, runs an explicit fix prompt that calls out each item with its evidence and requires TDD fixes. Loops up to `validation.max_strict_iterations` (default 2) and exits as soon as both counters hit zero.
+- Why this matters: in the 2026-05-29 M1→M2→M3 soak, M2 implemented `remove` subcommand instead of spec-required `rm`. With strict mode off (existing behavior), this shipped to push and was only fixed by happenstance when M3 needed `rm`. With strict mode on, the loop would have caught and fixed it inside M2.
+- New telemetry event `strict_mode_iteration` with `iteration / missing_requirements / broken_features / converged / cost_usd`.
+- New config keys: `validation.strict_mode`, `validation.max_strict_iterations`, `validation.strict_iteration_budget`.
+
+### Fixed — Direction A: CI failures observed on first real runs
+- CI now passes on the full ubuntu+windows × py3.11+3.12 matrix. Two real issues surfaced and were fixed:
+  - `ruff check .` was linting `soak-archive/` and `examples/` (sw-generated content not held to our style). Added `extend-exclude` for `soak-archive`, `examples`, `continue_sp2_sp7.py`.
+  - `DashboardData.has_changed()` only compared mtime, which on Windows + Python 3.12 produced false-negatives when tests wrote the file fast enough that two distinct writes shared a FileTime tick. Now compares `(mtime, size)`.
+
+### Validation
+- Strict-mode soak with all 4 todo-cli commands in one milestone: $6.38, 24.5 min, full Plan/Implement/Spec/Verify/Review/Push pipeline. Compliance and verification both came back clean on first pass, so strict mode correctly stayed dormant — confirming the loop doesn't false-positive.
+- 4 new unit tests (`TestStrictModeTrustButVerify`) cover trigger paths: off-by-default, loop-on-missing-until-resolved, cap-iterations, broken-features-also-trigger.
+- Test count: 1070 → **1077** passing on all CI matrix combinations.
+
 ## [1.1.3] — 2026-05-29
 
 ### Fixed (Path 1 — soak-artifact inspection)
