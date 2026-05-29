@@ -46,6 +46,11 @@ addopts = "-ra --strict-markers"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = [
+    "soak-archive",       # sw-generated artifacts preserved verbatim for audit
+    "examples",           # demo specs/projects, may not match our style
+    "continue_sp2_sp7.py",# legacy dev script, not part of the package
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
