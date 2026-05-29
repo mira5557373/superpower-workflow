@@ -86,13 +86,20 @@ class DashboardData:
             self._telemetry_path(config),
         ]
 
-    def _snapshot_mtimes(self) -> dict[str, float]:
-        mtimes: dict[str, float] = {}
+    def _snapshot_mtimes(self) -> dict[str, tuple[float, int]]:
+        """Snapshot (mtime, size) per watched path.
+
+        Size is included because Windows NTFS mtime has 100ns granularity and
+        Python 3.12+ has been observed to write fast enough that two distinct
+        writes share an mtime tick. Comparing size catches those cases.
+        """
+        mtimes: dict[str, tuple[float, int]] = {}
         for p in self._get_watched_paths():
             try:
-                mtimes[str(p)] = p.stat().st_mtime
+                st = p.stat()
+                mtimes[str(p)] = (st.st_mtime, st.st_size)
             except OSError:
-                mtimes[str(p)] = 0.0
+                mtimes[str(p)] = (0.0, 0)
         return mtimes
 
     def has_changed(self) -> bool:
