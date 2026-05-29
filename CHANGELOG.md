@@ -59,6 +59,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Optional `[server]`:** sqlalchemy, alembic, fastapi, uvicorn, psycopg2-binary.
 - **Optional `[security]`:** cryptography.
 
+### Known gaps deferred to v1.2.0
+- Alembic migrations not yet shipped. Today `Base.metadata.create_all` is the source of truth; safe because the schema is fresh. First schema change triggers Alembic baseline.
+
 ## [1.0.0] — 2026-05-24
 
 ### Added

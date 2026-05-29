@@ -305,13 +305,18 @@ def _cmd_init(project_root: Path) -> None:
     print("  Edit the spec path and verify_commands, then run: sw decompose")
 
 
+def _assets_root() -> Path:
+    """Return the bundled assets directory inside the installed package."""
+    return Path(__file__).resolve().parent / "_assets"
+
+
 def _install_project_local(claude_dir: Path) -> None:
     import shutil
 
-    pkg_root = Path(__file__).resolve().parent.parent.parent
+    assets = _assets_root()
 
     # Copy custom skills
-    skills_src = pkg_root / "skills"
+    skills_src = assets / "skills"
     skills_dst = claude_dir / "skills"
     if skills_src.exists():
         for skill_dir in skills_src.iterdir():
@@ -323,7 +328,7 @@ def _install_project_local(claude_dir: Path) -> None:
                 print(f"  Installed skill: {skill_dir.name}")
 
     # Copy commands
-    cmds_src = pkg_root / "commands"
+    cmds_src = assets / "commands"
     cmds_dst = claude_dir / "commands"
     if cmds_src.exists():
         cmds_dst.mkdir(parents=True, exist_ok=True)

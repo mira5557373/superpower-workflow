@@ -1,0 +1,20 @@
+{
+  "project_name": "todo-cli",
+  "spec_path": "../spec.md",
+  "milestones": [],
+  "verify_commands": {
+    "lint": "ruff check .",
+    "test": "pytest -q",
+    "coverage": "pytest --cov=todo --cov-fail-under=90"
+  },
+  "convergence": {
+    "max_ultrathink_passes": 3,
+    "max_review_passes": 3
+  },
+  "budgets": {
+    "plan": 5,
+    "implement": 15,
+    "review": 8,
+    "push": 2
+  }
+}

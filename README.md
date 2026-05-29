@@ -56,24 +56,44 @@ Three pain points:
 
 ## Installation
 
-### Base install (everything except the unified dashboard server)
+> superpower-workflow is distributed internally — not on PyPI. Pick one of the three install paths below.
+
+### Option A — pip install from git (recommended for individual users)
 
 ```bash
-pip install superpower-workflow
+pip install git+ssh://git@github.com/mira5557373/superpower-workflow.git@v1.1.0
+# or via https if you have a token:
+pip install git+https://github.com/mira5557373/superpower-workflow.git@v1.1.0
 ```
 
-or from source:
+Pin to a specific tag (`@v1.1.0`) — `master` is unstable.
+
+### Option B — wheel install (offline or air-gapped)
 
 ```bash
-git clone https://github.com/mira5557373/superpower-workflow.git
-cd superpower-workflow
-pip install -e .
+# on a build host:
+git clone git@github.com:mira5557373/superpower-workflow.git
+cd superpower-workflow && python -m build --wheel
+# copy dist/*.whl to the target host, then:
+pip install superpower_workflow-1.1.0-py3-none-any.whl
 ```
+
+### Option C — git submodule + editable install (for parent projects like `e2e_agent`)
+
+```bash
+git submodule add git@github.com:mira5557373/superpower-workflow.git
+git submodule update --init --recursive
+pip install -e ./superpower-workflow
+```
+
+This is how the `e2e_agent` repo consumes it.
 
 ### With the unified dashboard server
 
+Append the `[server]` extra to any of the above:
+
 ```bash
-pip install "superpower-workflow[server]"
+pip install "superpower-workflow[server] @ git+ssh://git@github.com/mira5557373/superpower-workflow.git@v1.1.0"
 ```
 
 This adds `sqlalchemy`, `alembic`, `fastapi`, `uvicorn`, and `psycopg2-binary`.
@@ -124,7 +144,7 @@ sw dashboard                     # single-project web dashboard on :3000
 | `sw doctor` | Pre-flight health checks (claude CLI, git, lint/test commands, disk, perms). |
 | `sw decompose <spec>` | Two-pass spec → milestone breakdown (writes `.claude/milestones.json`). |
 | `sw estimate` | Cost/duration estimate using historical telemetry when available. |
-| `sw run [--from M] [--only M]` | Execute milestones with full Plan/Implement/Review/Push loop. |
+| `sw run [--from M] [--milestone M] [--dry-run]` | Execute milestones with full Plan/Implement/Review/Push loop. `--dry-run` previews without spend. |
 | `sw status` | Show current run state, phase, retries, and progress. |
 | `sw resume` | Resume from last failure point (git-log aware smart resume). |
 | `sw clean` | Remove all runtime files (state, lock, gap reports, telemetry). |
@@ -296,10 +316,18 @@ Features:
 
 ## Examples
 
+### Preview before spending
+
+```bash
+sw run --dry-run
+```
+
+Prints the milestone list, per-phase budget, convergence loop settings, verify commands, and a cost/duration forecast (uses historical telemetry when available). No claude calls made.
+
 ### Run a single milestone
 
 ```bash
-sw run --only M3
+sw run --milestone M3
 ```
 
 ### Re-run from the middle after a crash

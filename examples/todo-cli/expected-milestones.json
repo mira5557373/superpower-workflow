@@ -1,0 +1,29 @@
+{
+  "_comment": "Expected output of `sw decompose spec.md` for the todo-cli spec. Exact text may vary across runs but the milestone count and rough scope should match.",
+  "milestones": [
+    {
+      "name": "storage-layer",
+      "description": "Implement atomic JSON storage at ~/.todo/store.json with 0600 perms.",
+      "paths": ["todo/storage.py", "tests/test_storage.py"],
+      "tests": ["create file with right perms", "round-trip", "atomic on crash"]
+    },
+    {
+      "name": "add-and-list",
+      "description": "todo add and todo list (with --all) commands. Deterministic output format.",
+      "paths": ["todo/cli.py", "tests/test_cli_add_list.py"],
+      "tests": ["adds with monotonic id", "list excludes done by default", "--all includes done"]
+    },
+    {
+      "name": "done-and-rm",
+      "description": "todo done <id> and todo rm <id>. Exit 1 on unknown id.",
+      "paths": ["todo/cli.py", "tests/test_cli_done_rm.py"],
+      "tests": ["done flips status", "rm removes row", "unknown id -> exit 1"]
+    },
+    {
+      "name": "coverage-and-polish",
+      "description": "Reach ≥90% coverage on todo/. Hit edge cases (empty store, corrupted JSON).",
+      "paths": ["tests/test_edge_cases.py"],
+      "tests": ["empty store list", "corrupted JSON fails loud"]
+    }
+  ]
+}

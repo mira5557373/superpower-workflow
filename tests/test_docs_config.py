@@ -64,11 +64,25 @@ class TestDocsConfig:
 
 class TestTemplateWorkflowJson:
     def test_template_has_docs_section(self):
-        template_path = Path(__file__).resolve().parent.parent / "templates" / "workflow.json"
+        template_path = (
+            Path(__file__).resolve().parent.parent
+            / "src"
+            / "superpower_workflow"
+            / "_assets"
+            / "templates"
+            / "workflow.json"
+        )
         config = _load_json5(template_path)
         assert "docs" in config
 
     def test_template_has_plugins_section(self):
-        template_path = Path(__file__).resolve().parent.parent / "templates" / "workflow.json"
+        template_path = (
+            Path(__file__).resolve().parent.parent
+            / "src"
+            / "superpower_workflow"
+            / "_assets"
+            / "templates"
+            / "workflow.json"
+        )
         config = _load_json5(template_path)
         assert "plugins" in config

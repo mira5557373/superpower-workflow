@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 router = APIRouter(tags=["websocket"])
+logger = logging.getLogger(__name__)
 
 _connections: list[WebSocket] = []
 
@@ -85,6 +87,13 @@ async def _push_new_events(
         if filter_run_uuid is not None:
             q = q.filter(SwEvent.run_id == filter_run_uuid)
         events = q.order_by(SwEvent.timestamp.asc()).limit(MAX_EVENTS_PER_TICK).all()
+        if len(events) >= MAX_EVENTS_PER_TICK:
+            logger.warning(
+                "ws live-feed falling behind: tick at cap (%d events); "
+                "backlog will drain over subsequent ticks. Consider raising "
+                "MAX_EVENTS_PER_TICK or shortening POLL_INTERVAL_SECONDS.",
+                MAX_EVENTS_PER_TICK,
+            )
         for evt in events:
             payload = {
                 "id": str(evt.id),

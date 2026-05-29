@@ -167,8 +167,7 @@ class Orchestrator:
         milestones = self._filter_milestones(milestone_filter, from_ms, to_ms, phase_prefix)
 
         if dry_run:
-            for ms in milestones:
-                print(f"  [DRY RUN] Would execute: {ms['name']}")
+            self._print_dry_run(milestones)
             return
 
         if not self._preflight_checks():
@@ -438,6 +437,64 @@ class Orchestrator:
     def _notify(self, event: str, payload: dict) -> None:
         if self._slack_config:
             send_notification(self._slack_config, event, payload)
+
+    def _print_dry_run(self, milestones: list[dict]) -> None:
+        from superpower_workflow.estimator import estimate
+
+        cfg = self.config
+        spec_path = cfg.get("spec") or cfg.get("spec_path") or "<unset>"
+        verify = cfg.get("verify_commands", {})
+        convergence = cfg.get("convergence", {})
+        budgets = cfg.get("budgets", {})
+
+        print(f"  Spec:                {spec_path}")
+        print(f"  Project:             {cfg.get('project_name', Path(self.cwd).name)}")
+        print()
+        print(f"  Milestones to run:   {len(milestones)}")
+        for i, ms in enumerate(milestones, 1):
+            name = ms.get("name", f"m{i}")
+            paths = ms.get("paths") or ms.get("module_paths") or []
+            paths_str = (
+                f"  [{', '.join(paths[:3])}{'…' if len(paths) > 3 else ''}]" if paths else ""
+            )
+            print(f"    {i:2d}. {name}{paths_str}")
+        print()
+
+        try:
+            est = estimate({**cfg, "milestones": milestones}, project_root=Path(self.cwd))
+            print("  Estimate (per-milestone × N):")
+            print(
+                f"    cost:              ${est['cost_optimistic']:.2f} – "
+                f"${est['cost_pessimistic']:.2f}"
+            )
+            if "duration_minutes_optimistic" in est:
+                print(
+                    f"    duration:          {est['duration_minutes_optimistic']}–"
+                    f"{est['duration_minutes_pessimistic']} min"
+                )
+        except Exception as e:
+            print(f"  Estimate unavailable: {e}")
+        print()
+
+        print("  Convergence loops:")
+        print(f"    ultrathink passes: max {convergence.get('max_ultrathink_passes', 3)}")
+        print(f"    review passes:     max {convergence.get('max_review_passes', 3)}")
+        print()
+
+        print("  Budgets (per phase):")
+        for phase in ("plan", "implement", "review", "push"):
+            v = budgets.get(phase)
+            if v is not None:
+                print(f"    {phase:9s} ${v}")
+        print()
+
+        print("  Verify commands:")
+        for name in ("lint", "test", "coverage", "sast", "dep_scan"):
+            cmd = verify.get(name)
+            shown = cmd if cmd else "<not configured>"
+            print(f"    {name:9s} {shown}")
+        print()
+        print("  No claude -p calls will be made. Drop --dry-run to execute.")
 
     def _preflight_checks(self) -> bool:
         if not acquire_lock(self.claude_dir):
