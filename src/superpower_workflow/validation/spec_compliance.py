@@ -13,15 +13,20 @@ def build_compliance_prompt(spec_path: str, spec_sections: str, module_dir: str)
     return (
         f"Read the spec at {spec_path}, focusing on sections {spec_sections}.\n"
         f"Read all files in {module_dir} and tests/.\n"
-        f"For each requirement in the spec:\n"
+        f"For EACH requirement in the spec (functional and non-functional):\n"
         f"  1. Search the codebase for its implementation\n"
-        f'  2. Rate: "implemented" (with file:function evidence) or "missing"\n'
-        f"Write .claude/.spec-compliance.json with this exact schema:\n"
+        f'  2. Classify: "implemented" (with file:function evidence) or "missing"\n'
+        f"You MUST list every requirement individually — do not summarize.\n"
+        f"Your response must be a single JSON object and NOTHING ELSE. "
+        f"No prose before or after. No tool calls to write files. "
+        f"Schema (must match exactly):\n"
         f'{{"spec_path": "{spec_path}", "spec_sections": "{spec_sections}", '
         f'"total_requirements": N, "implemented": N, "missing": N, '
-        f'"details": [{{"requirement": "...", "status": "implemented"|"missing", '
-        f'"evidence": "file.py:function"}}]}}\n'
-        f"IMPORTANT: Output ONLY the JSON content, nothing else."
+        f'"details": [{{"requirement": "...", "status": "implemented" or "missing", '
+        f'"evidence": "file.py:function or empty if missing"}}]}}\n'
+        f"Numeric fields total_requirements/implemented/missing must satisfy "
+        f"total_requirements == implemented + missing and equal len(details).\n"
+        f"Begin your response with `{{` and end with `}}`."
     )
 
 

@@ -268,6 +268,7 @@ def _cmd_init(project_root: Path) -> None:
         ".claude/.spec-compliance.json",
         ".claude/.feature-verification.json",
         ".claude/.quality-gate-results.json",
+        ".claude/reports/",
     ]
     python_entries = [
         ".venv/",

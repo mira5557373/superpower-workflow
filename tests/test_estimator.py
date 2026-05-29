@@ -66,3 +66,52 @@ def test_estimate_without_historical_falls_back():
     result = estimate(config, project_root=Path("/nonexistent"))
     assert result["cost_pessimistic"] > 0
     assert result["milestone_count"] == 3
+
+
+def test_calibration_against_real_soak_2026_05_29():
+    """Recalibration target from 2026-05-29 soak:
+    1 small milestone (todo-cli storage), opus, trust-but-verify enabled,
+    actual cost $7.00 (phases $6.17 + spec compliance $0.46 + feature verify $0.37).
+
+    Pre-fix forecast was $1.43-$2.85 (2.5× under). Post-fix the actual must
+    land within [optimistic, pessimistic].
+    """
+    config = {
+        "budgets": {"plan": 4, "implement": 10, "review": 4, "push": 1},
+        "milestones": ["M1-storage"],
+        "validation": {"spec_compliance": True, "feature_verification": True},
+    }
+    result = estimate(config)
+    actual_soak_cost = 7.00
+    assert result["cost_optimistic"] <= actual_soak_cost <= result["cost_pessimistic"], (
+        f"$7.00 soak result must fall within [optimistic={result['cost_optimistic']}, "
+        f"pessimistic={result['cost_pessimistic']}]"
+    )
+
+
+def test_trust_but_verify_adds_overhead():
+    """When validation is enabled, estimates must be higher than without."""
+    base_config = {
+        "budgets": {"plan": 5, "implement": 15, "review": 5, "push": 1},
+        "milestones": ["m1", "m2"],
+    }
+    without = estimate({**base_config, "validation": {}})
+    with_tbv = estimate(
+        {
+            **base_config,
+            "validation": {"spec_compliance": True, "feature_verification": True},
+        }
+    )
+    assert with_tbv["cost_pessimistic"] > without["cost_pessimistic"]
+
+
+def test_optimistic_not_aggressively_underforecast():
+    """Soak finding: OPTIMISTIC_FACTOR=0.5 was too aggressive. Optimistic should
+    be ≥ 60% of pessimistic, not 50%."""
+    config = {
+        "budgets": {"plan": 4, "implement": 10, "review": 4, "push": 1},
+        "milestones": ["m1"],
+    }
+    result = estimate(config)
+    ratio = result["cost_optimistic"] / max(result["cost_pessimistic"], 0.01)
+    assert ratio >= 0.6, f"optimistic/pessimistic ratio {ratio:.2f} too aggressive"

@@ -46,6 +46,7 @@ from superpower_workflow.state import (
     PHASE_FILE,
     PhaseState,
     acquire_lock,
+    archive_reports,
     clear_phase_state,
     load_config,
     load_state,
@@ -467,10 +468,10 @@ class Orchestrator:
                 f"    cost:              ${est['cost_optimistic']:.2f} – "
                 f"${est['cost_pessimistic']:.2f}"
             )
-            if "duration_minutes_optimistic" in est:
+            if "duration_optimistic_min" in est:
                 print(
-                    f"    duration:          {est['duration_minutes_optimistic']}–"
-                    f"{est['duration_minutes_pessimistic']} min"
+                    f"    duration:          {est['duration_optimistic_min']}–"
+                    f"{est['duration_pessimistic_min']} min"
                 )
         except Exception as e:
             print(f"  Estimate unavailable: {e}")
@@ -788,6 +789,7 @@ class Orchestrator:
         cost += r.cost_usd
         self._emit_gap_report(name, "plan")
         self._emit_gap_validation(name)
+        archive_reports(self.claude_dir, name, "plan")
         clear_phase_state(self.claude_dir)
         self._check_phase_result(r, "Phase A")
         self._telemetry.emit(
@@ -972,6 +974,7 @@ class Orchestrator:
         cost += r.cost_usd
         self._emit_gap_report(name, "review")
         self._emit_gap_validation(name)
+        archive_reports(self.claude_dir, name, "review")
         clear_phase_state(self.claude_dir)
         self._check_phase_result(r, "Phase C")
         self._telemetry.emit(
@@ -1586,6 +1589,10 @@ class Orchestrator:
             return
         try:
             data = json.loads(gap_path.read_text())
+            total = data.get("total_gaps_found", 0)
+            # Zero gaps trivially means convergence — the model may report
+            # converged=False just because it didn't think to set the flag.
+            converged = data.get("converged", False) or total == 0
             self._telemetry.emit(
                 GapReport(
                     milestone=milestone,
@@ -1595,8 +1602,8 @@ class Orchestrator:
                     important_gaps=data.get("important_gaps", 0),
                     minor_gaps=data.get("minor_gaps", 0),
                     deferred_gaps=data.get("deferred_gaps", 0),
-                    total_gaps_found=data.get("total_gaps_found", 0),
-                    converged=data.get("converged", False),
+                    total_gaps_found=total,
+                    converged=converged,
                 )
             )
         except (json.JSONDecodeError, OSError):

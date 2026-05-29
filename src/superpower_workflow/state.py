@@ -106,16 +106,35 @@ SPEC_COMPLIANCE_FILE = ".spec-compliance.json"
 FEATURE_VERIFICATION_FILE = ".feature-verification.json"
 QUALITY_GATE_RESULTS_FILE = ".quality-gate-results.json"
 
+REPORT_FILES = (
+    GAP_REPORT_FILE,
+    GAP_VALIDATION_FILE,
+    SPEC_COMPLIANCE_FILE,
+    FEATURE_VERIFICATION_FILE,
+    QUALITY_GATE_RESULTS_FILE,
+)
+
+
+def archive_reports(claude_dir: Path, milestone: str, phase: str) -> None:
+    """Copy report files to .claude/reports/<milestone>/<phase>/ before clearing.
+
+    Reports are short-lived in their canonical location (clear_phase_state wipes them
+    between phases). Archiving preserves them for post-run audit.
+    """
+    import shutil
+
+    safe_milestone = "".join(c if c.isalnum() or c in "-_." else "_" for c in milestone)
+    safe_phase = "".join(c if c.isalnum() or c in "-_." else "_" for c in phase)
+    dest = claude_dir / "reports" / safe_milestone / safe_phase
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in REPORT_FILES:
+        src = claude_dir / name
+        if src.exists():
+            shutil.copy2(src, dest / name.lstrip("."))
+
 
 def clear_phase_state(claude_dir: Path) -> None:
-    for name in (
-        PHASE_FILE,
-        GAP_REPORT_FILE,
-        GAP_VALIDATION_FILE,
-        SPEC_COMPLIANCE_FILE,
-        FEATURE_VERIFICATION_FILE,
-        QUALITY_GATE_RESULTS_FILE,
-    ):
+    for name in (PHASE_FILE, *REPORT_FILES):
         p = claude_dir / name
         p.unlink(missing_ok=True)
 

@@ -18,11 +18,15 @@ def build_verification_prompt(compliance_path: str) -> str:
         f"  3. Run all verification tests\n"
         f"Report which features pass and which fail.\n"
         f'Only verify objectively testable features. Mark subjective ones as "manual_review".\n'
-        f"Write .claude/.feature-verification.json with this exact schema:\n"
+        f"Your response must be a single JSON object and NOTHING ELSE. "
+        f"No prose before or after. No tool calls to write files. "
+        f"Schema (must match exactly):\n"
         f'{{"total_features": N, "verified_working": N, "broken": N, "manual_review": N, '
-        f'"details": [{{"feature": "...", "status": "pass"|"fail"|"manual_review", '
+        f'"details": [{{"feature": "...", "status": "pass" or "fail" or "manual_review", '
         f'"test": "test_file.py::test_name", "reason": "..."}}]}}\n'
-        f"IMPORTANT: Output ONLY the JSON content, nothing else."
+        f"Numeric fields must satisfy "
+        f"total_features == verified_working + broken + manual_review.\n"
+        f"Begin your response with `{{` and end with `}}`."
     )
 
 

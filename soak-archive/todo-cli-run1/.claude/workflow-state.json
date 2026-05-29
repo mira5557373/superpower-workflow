@@ -1,0 +1,15 @@
+{
+  "current_milestone_index": 0,
+  "current_step": null,
+  "last_phase_session_id": "19f8ae0d-85af-4732-93d5-7c53ed3c2b63",
+  "plan_commit_sha": "e05bdb81f010b5cba5014a90201e4f34e80f42c3",
+  "completed": [
+    "M1-storage"
+  ],
+  "failed": [],
+  "skipped": [],
+  "total_cost_usd": 6.996620999999999,
+  "spec_sha": "6915b5fe405d95d06a2fa5593ca2b21dda334cf3",
+  "run_id": "20260529-072311",
+  "started_at": "2026-05-29T07:23:11Z"
+}

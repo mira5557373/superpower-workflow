@@ -1,0 +1,10 @@
+{
+  "status": "complete",
+  "completed": [
+    "M1-storage"
+  ],
+  "failed": [],
+  "skipped": [],
+  "total_cost_usd": 7.0,
+  "run_id": "20260529-072311"
+}

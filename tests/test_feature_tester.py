@@ -16,9 +16,13 @@ class TestBuildVerificationPrompt:
         prompt = build_verification_prompt(".claude/.spec-compliance.json")
         assert ".spec-compliance.json" in prompt
 
-    def test_includes_output_instructions(self):
+    def test_prompt_demands_pure_json_output(self):
+        """Soak finding #A: prompt must NOT ask claude to write a file."""
         prompt = build_verification_prompt(".claude/.spec-compliance.json")
-        assert ".feature-verification.json" in prompt
+        assert "single JSON object" in prompt
+        assert "NOTHING ELSE" in prompt
+        assert "Write .claude/.feature-verification.json" not in prompt
+        assert "No tool calls" in prompt or "no tool calls" in prompt.lower()
 
     def test_instructs_test_execution(self):
         prompt = build_verification_prompt(".claude/.spec-compliance.json")

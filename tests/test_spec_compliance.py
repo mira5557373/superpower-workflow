@@ -21,9 +21,17 @@ class TestBuildCompliancePrompt:
         prompt = build_compliance_prompt("spec.md", "1", "src/mod/")
         assert "src/mod/" in prompt
 
-    def test_includes_output_instructions(self):
+    def test_prompt_demands_pure_json_output(self):
+        """Soak finding #A: prompt must NOT ask claude to write a file (instructions
+        conflicted with 'output ONLY JSON' and led to 0/0/0 results)."""
         prompt = build_compliance_prompt("spec.md", "1", "src/")
-        assert ".spec-compliance.json" in prompt
+        # Pure JSON output instruction must be present
+        assert "single JSON object" in prompt
+        assert "NOTHING ELSE" in prompt
+        # The conflicting file-write instruction must be gone
+        assert "Write .claude/.spec-compliance.json" not in prompt
+        # And the model is explicitly told not to use file-write tools
+        assert "No tool calls" in prompt or "no tool calls" in prompt.lower()
 
 
 class TestParseComplianceOutput:

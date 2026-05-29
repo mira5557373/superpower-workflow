@@ -907,6 +907,39 @@ class TestTelemetryQualityEvents:
         assert len(gaps) >= 1
         assert gaps[0]["important_gaps"] == 2
 
+    def test_zero_gaps_means_converged(self, tmp_path):
+        """Soak finding #C: total_gaps_found=0 must imply converged=True even when
+        the gap report didn't set the flag."""
+        _config(tmp_path)
+        gap_data = {
+            "critical_gaps": 0,
+            "important_gaps": 0,
+            "total_gaps_found": 0,
+            "converged": False,  # model forgot to flip the flag
+        }
+        call_count = {"n": 0}
+
+        def mock_run_claude(prompt, **kwargs):
+            call_count["n"] += 1
+            (tmp_path / ".claude" / ".gap-report.json").write_text(json.dumps(gap_data))
+            return _ok_result()
+
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", side_effect=mock_run_claude),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        events = _read_telemetry(tmp_path)
+        gaps = [e for e in events if e["type"] == "gap_report"]
+        assert all(g["converged"] for g in gaps), (
+            f"zero-gap reports must be marked converged. got: "
+            f"{[(g['total_gaps_found'], g['converged']) for g in gaps]}"
+        )
+
 
 class TestTelemetryIntegration:
     def test_full_run_event_sequence(self, tmp_path):

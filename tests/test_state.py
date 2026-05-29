@@ -16,6 +16,7 @@ from superpower_workflow.state import (
     PhaseState,
     WorkflowState,
     acquire_lock,
+    archive_reports,
     clear_phase_state,
     clone_state_to_worktree,
     load_config,
@@ -417,6 +418,55 @@ class TestGracefulHandling:
 
         assert not phase_file.exists()
         assert not gap_file.exists()
+
+
+class TestArchiveReports:
+    """Soak finding #B: reports must survive clear_phase_state for post-run audit."""
+
+    def test_archive_copies_existing_reports(self, tmp_claude_dir):
+        from superpower_workflow.state import (
+            FEATURE_VERIFICATION_FILE,
+            SPEC_COMPLIANCE_FILE,
+        )
+
+        (tmp_claude_dir / GAP_REPORT_FILE).write_text(json.dumps({"total": 5}))
+        (tmp_claude_dir / SPEC_COMPLIANCE_FILE).write_text(json.dumps({"total": 10}))
+        (tmp_claude_dir / FEATURE_VERIFICATION_FILE).write_text(json.dumps({"total": 3}))
+
+        archive_reports(tmp_claude_dir, "M1-storage", "plan")
+
+        dest = tmp_claude_dir / "reports" / "M1-storage" / "plan"
+        assert dest.is_dir()
+        assert (dest / "gap-report.json").exists()
+        assert (dest / "spec-compliance.json").exists()
+        assert (dest / "feature-verification.json").exists()
+        # Source files still in place — clearing is a separate step
+        assert (tmp_claude_dir / GAP_REPORT_FILE).exists()
+
+    def test_archive_no_op_when_no_reports(self, tmp_claude_dir):
+        """No reports present → archive creates the dir but no files."""
+        archive_reports(tmp_claude_dir, "M2", "review")
+        dest = tmp_claude_dir / "reports" / "M2" / "review"
+        assert dest.is_dir()
+        assert list(dest.iterdir()) == []
+
+    def test_archive_sanitizes_milestone_name(self, tmp_claude_dir):
+        """Path traversal attempts in milestone names must not escape."""
+        (tmp_claude_dir / GAP_REPORT_FILE).write_text("{}")
+        archive_reports(tmp_claude_dir, "../../etc/passwd", "plan")
+        # Sanitized form lives under reports/, not outside it
+        assert not (tmp_claude_dir.parent.parent / "etc").exists()
+        assert (tmp_claude_dir / "reports").is_dir()
+
+    def test_archive_preserves_full_after_clear(self, tmp_claude_dir):
+        """Archive → clear → archived reports remain."""
+        (tmp_claude_dir / GAP_REPORT_FILE).write_text(json.dumps({"total": 1}))
+        archive_reports(tmp_claude_dir, "M1", "plan")
+        clear_phase_state(tmp_claude_dir)
+        archived = tmp_claude_dir / "reports" / "M1" / "plan" / "gap-report.json"
+        assert archived.exists()
+        assert json.loads(archived.read_text()) == {"total": 1}
+        assert not (tmp_claude_dir / GAP_REPORT_FILE).exists()
 
 
 def test_ci_wait_step_roundtrips(tmp_path):
