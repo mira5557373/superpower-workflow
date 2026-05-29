@@ -121,6 +121,37 @@ class TestRunsRouter:
             r = client.get(f"/api/v1/runs/compare?ids={run_id}")
             assert r.status_code == 200
 
+    def test_get_run_accepts_human_run_id(self, client):
+        """Regression for soak bug #6: human run_id must work, not just UUID."""
+        runs = client.get("/api/v1/runs").json()
+        assert runs
+        human_id = runs[0]["run_id"]
+        assert "-" in human_id  # confirm it's the timestamp form, not a UUID
+        r = client.get(f"/api/v1/runs/{human_id}")
+        assert r.status_code == 200
+        assert r.json()["run_id"] == human_id
+
+    def test_compare_runs_accepts_human_run_ids(self, client):
+        """Regression for soak bug #6: compare must accept human run_ids."""
+        runs = client.get("/api/v1/runs").json()
+        assert runs
+        human_id = runs[0]["run_id"]
+        r = client.get(f"/api/v1/runs/compare?ids={human_id}")
+        assert r.status_code == 200
+        assert len(r.json()) == 1
+        assert r.json()[0]["run_id"] == human_id
+
+    def test_get_run_populates_milestones(self, client):
+        """Regression for soak bug #5: run detail must include its milestones."""
+        runs = client.get("/api/v1/runs").json()
+        assert runs
+        r = client.get(f"/api/v1/runs/{runs[0]['id']}")
+        assert r.status_code == 200
+        milestones = r.json()["milestones"]
+        assert len(milestones) == 2
+        names = {m["name"] for m in milestones}
+        assert names == {"sp1-quality-gates", "sp2-telemetry"}
+
 
 class TestMilestonesRouter:
     def test_list_milestones_for_run(self, client):
@@ -163,8 +194,43 @@ class TestEventsRouter:
         assert r.status_code == 200
 
     def test_events_type_filter(self, client):
-        r = client.get("/api/v1/events?type=phase_completed")
+        r = client.get("/api/v1/events?event_type=phase_completed")
         assert r.status_code == 200
+
+    def test_events_type_filter_actually_filters(self, client, seeded_engine):
+        """Regression for soak bug #4: ?type=X was silently ignored (param mismatch)."""
+        from superpower_workflow.db.engine import get_session_factory
+        from superpower_workflow.db.models import SwRun
+        from superpower_workflow.db.queries import create_event
+
+        s = get_session_factory(seeded_engine)()
+        run = s.query(SwRun).first()
+        create_event(s, run_id=run.id, event_type="milestone_started", data_json={"x": 1})
+        create_event(s, run_id=run.id, event_type="phase_completed", data_json={"x": 2})
+        create_event(s, run_id=run.id, event_type="run_completed", data_json={"x": 3})
+        s.close()
+
+        r = client.get("/api/v1/events?event_type=phase_completed")
+        assert r.status_code == 200
+        data = r.json()
+        assert len(data) == 1
+        assert data[0]["event_type"] == "phase_completed"
+
+    def test_events_run_id_accepts_human_run_id(self, client, seeded_engine):
+        """Regression for soak bug #5/#6: human run_id must work, not just UUID."""
+        from superpower_workflow.db.engine import get_session_factory
+        from superpower_workflow.db.models import SwRun
+        from superpower_workflow.db.queries import create_event
+
+        s = get_session_factory(seeded_engine)()
+        run = s.query(SwRun).first()
+        human_id = run.run_id
+        create_event(s, run_id=run.id, event_type="run_started", data_json={"x": 1})
+        s.close()
+
+        r = client.get(f"/api/v1/events?run_id={human_id}")
+        assert r.status_code == 200
+        assert len(r.json()) >= 1
 
 
 class TestMetricsRouter:

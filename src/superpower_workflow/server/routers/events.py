@@ -20,7 +20,7 @@ def _get_session(request: Request):
 def list_events(
     request: Request,
     run_id: str | None = None,
-    type: str | None = None,
+    event_type: str | None = Query(default=None, alias="event_type"),
     limit: int = Query(default=100, le=1000),
     offset: int = Query(default=0, ge=0),
 ):
@@ -28,10 +28,21 @@ def list_events(
     if session is None:
         return []
     try:
+        from superpower_workflow.db.models import SwRun
         from superpower_workflow.db.queries import list_events as db_list_events
 
-        rid = uuid.UUID(run_id) if run_id else None
-        events = db_list_events(session, run_id=rid, event_type=type, limit=limit, offset=offset)
+        rid: uuid.UUID | None = None
+        if run_id:
+            try:
+                rid = uuid.UUID(run_id)
+            except ValueError:
+                run_obj = session.query(SwRun).filter(SwRun.run_id == run_id).first()
+                if run_obj is None:
+                    return []
+                rid = run_obj.id
+        events = db_list_events(
+            session, run_id=rid, event_type=event_type, limit=limit, offset=offset
+        )
         return [
             {
                 "id": str(e.id),

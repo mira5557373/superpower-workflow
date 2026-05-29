@@ -160,9 +160,10 @@ class TestCheckSymbolExists:
 
 
 class TestNormalizeGap:
-    def test_removes_line_numbers(self):
+    def test_preserves_line_numbers(self):
+        """Line numbers distinguish gaps at different locations in the same file."""
         assert "store.py" in normalize_gap("[ultrathink] Store.put at store.py:45")
-        assert ":45" not in normalize_gap("[ultrathink] Store.put at store.py:45")
+        assert ":45" in normalize_gap("[ultrathink] Store.put at store.py:45")
 
     def test_lowercases(self):
         result = normalize_gap("[ultrathink] Missing VALIDATION in Store")
@@ -317,6 +318,30 @@ class TestValidateGaps:
         report = validate_gaps([], tmp_path)
         assert report.total_gaps == 0
         assert report.valid_gaps == 0
+
+    def test_distinct_descriptions_same_file_not_duplicate(self, tmp_path: Path):
+        """Regression for soak bug #7: same file with unrelated descriptions != duplicates."""
+        (tmp_path / "state.py").write_text("x\n" * 300)
+        gaps = [
+            "state.py:1 module docstring missing",
+            "state.py:200 acquire_lock function lacks timeout handling",
+        ]
+        report = validate_gaps(gaps, tmp_path)
+        assert report.duplicate_gaps == 0, (
+            "Unrelated gaps on different lines must not be treated as duplicates"
+        )
+        assert report.valid_gaps == 2
+
+    def test_file_in_subdir_resolves_recursively(self, tmp_path: Path):
+        """Regression for soak bug #8: gap referencing only the filename should resolve."""
+        nested = tmp_path / "src" / "pkg"
+        nested.mkdir(parents=True)
+        (nested / "policy.py").write_text("class Policy: pass\n")
+        gaps = ["policy.py missing rate-limit enforcement"]
+        report = validate_gaps(gaps, tmp_path)
+        assert report.invalid_gaps == 0
+        assert report.unverifiable_gaps == 0
+        assert report.valid_gaps == 1
 
 
 class TestGapValidationReportSerialization:

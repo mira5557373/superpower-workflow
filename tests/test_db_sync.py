@@ -5,7 +5,7 @@ import json
 import pytest
 
 from superpower_workflow.db.engine import create_engine_from_url, get_session_factory
-from superpower_workflow.db.models import Base, SwEvent, SwProject, SwRun
+from superpower_workflow.db.models import Base, SwEvent, SwMilestone, SwPhase, SwProject, SwRun
 from superpower_workflow.db.sync_adapter import DbSyncAdapter
 
 
@@ -118,6 +118,71 @@ class TestDbSyncAdapter:
     def test_sync_missing_file(self, db_engine, tmp_path):
         adapter = DbSyncAdapter(db_engine)
         adapter.sync(project_name="app", project_path="/p", jsonl_path=tmp_path / "nope.jsonl")
+
+    def test_sync_materializes_milestones_per_run(self, db_engine, tmp_path):
+        """Regression for soak bug #3: shared milestone_uuids dict undercounted."""
+        events = [
+            {"type": "run_started", "run_id": "r1", "model": "opus", "milestone_count": 1},
+            {"type": "milestone_started", "run_id": "r1", "milestone": "shared-name"},
+            {"type": "run_started", "run_id": "r2", "model": "opus", "milestone_count": 1},
+            {"type": "milestone_started", "run_id": "r2", "milestone": "shared-name"},
+        ]
+        path = tmp_path / "two-runs.jsonl"
+        path.write_text("\n".join(json.dumps(e) for e in events))
+        adapter = DbSyncAdapter(db_engine)
+        adapter.sync(project_name="app", project_path="/p", jsonl_path=path)
+        session = get_session_factory(db_engine)()
+        try:
+            milestones = session.query(SwMilestone).all()
+            assert len(milestones) == 2, (
+                "Each run must materialize its own milestone, even with shared name"
+            )
+            runs = {m.run_id for m in milestones}
+            assert len(runs) == 2
+        finally:
+            session.close()
+
+    def test_sync_materializes_phases(self, db_engine, jsonl_file):
+        """Regression for soak bug #2: phase_started events did not produce sw_phases rows."""
+        events = [
+            {"type": "run_started", "run_id": "rP", "model": "opus", "milestone_count": 1},
+            {"type": "milestone_started", "run_id": "rP", "milestone": "mP"},
+            {
+                "type": "phase_started",
+                "run_id": "rP",
+                "milestone": "mP",
+                "phase": "plan",
+                "model": "opus",
+            },
+            {
+                "type": "phase_completed",
+                "run_id": "rP",
+                "milestone": "mP",
+                "phase": "plan",
+                "status": "completed",
+                "cost_usd": 1.5,
+                "duration_ms": 5000,
+                "input_tokens": 1000,
+                "output_tokens": 500,
+            },
+        ]
+        path = jsonl_file.parent / "phases.jsonl"
+        path.write_text("\n".join(json.dumps(e) for e in events))
+        adapter = DbSyncAdapter(db_engine)
+        adapter.sync(project_name="app", project_path="/p", jsonl_path=path)
+        session = get_session_factory(db_engine)()
+        try:
+            phases = session.query(SwPhase).all()
+            assert len(phases) == 1
+            p = phases[0]
+            assert p.phase_type == "plan"
+            assert p.status == "completed"
+            assert p.cost_usd == 1.5
+            assert p.duration_ms == 5000
+            assert p.input_tokens == 1000
+            assert p.output_tokens == 500
+        finally:
+            session.close()
 
     def test_sync_corrupt_lines_skipped(self, db_engine, tmp_path):
         path = tmp_path / "corrupt.jsonl"

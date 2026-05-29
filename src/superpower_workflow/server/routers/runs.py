@@ -48,6 +48,24 @@ def list_runs(
         session.close()
 
 
+def _resolve_run_ids(session, raw_ids: list[str]) -> list[uuid.UUID]:
+    from superpower_workflow.db.models import SwRun
+
+    resolved: list[uuid.UUID] = []
+    for raw in raw_ids:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            resolved.append(uuid.UUID(raw))
+            continue
+        except ValueError:
+            run = session.query(SwRun).filter(SwRun.run_id == raw).first()
+            if run is not None:
+                resolved.append(run.id)
+    return resolved
+
+
 @router.get("/runs/compare")
 def compare_runs(request: Request, ids: str = Query(...)):
     session = _get_session(request)
@@ -56,7 +74,10 @@ def compare_runs(request: Request, ids: str = Query(...)):
     try:
         from superpower_workflow.db.models import SwRun
 
-        run_ids = [uuid.UUID(i.strip()) for i in ids.split(",") if i.strip()]
+        raw_ids = [i for i in ids.split(",") if i.strip()]
+        run_ids = _resolve_run_ids(session, raw_ids)
+        if not run_ids:
+            return []
         runs = session.query(SwRun).filter(SwRun.id.in_(run_ids)).all()
         return [
             {
@@ -83,10 +104,18 @@ def get_run(run_id: str, request: Request):
     try:
         from superpower_workflow.db.models import SwMilestone, SwRun
 
-        run = session.query(SwRun).filter(SwRun.id == uuid.UUID(run_id)).first()
+        try:
+            run = session.query(SwRun).filter(SwRun.id == uuid.UUID(run_id)).first()
+        except ValueError:
+            run = session.query(SwRun).filter(SwRun.run_id == run_id).first()
         if run is None:
             raise HTTPException(404, "Run not found")
-        milestones = session.query(SwMilestone).filter(SwMilestone.run_id == run.id).all()
+        milestones = (
+            session.query(SwMilestone)
+            .filter(SwMilestone.run_id == run.id)
+            .order_by(SwMilestone.started_at.asc())
+            .all()
+        )
         return {
             "id": str(run.id),
             "run_id": run.run_id,
@@ -95,7 +124,13 @@ def get_run(run_id: str, request: Request):
             "total_cost_usd": run.total_cost_usd,
             "milestone_count": run.milestone_count,
             "milestones": [
-                {"id": str(m.id), "name": m.name, "status": m.status, "cost_usd": m.cost_usd}
+                {
+                    "id": str(m.id),
+                    "name": m.name,
+                    "status": m.status,
+                    "cost_usd": m.cost_usd,
+                    "duration_seconds": m.duration_seconds,
+                }
                 for m in milestones
             ],
         }

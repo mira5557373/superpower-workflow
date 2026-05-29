@@ -121,7 +121,22 @@ def _extract_nearby_symbol(text: str, pos: int) -> str | None:
 def check_file_exists(file_path: str, project_root: Path) -> bool:
     if file_path.startswith("/") or ".." in file_path:
         return False
-    return (project_root / file_path).is_file()
+    if (project_root / file_path).is_file():
+        return True
+    return _find_file_by_name(project_root, Path(file_path).name) is not None
+
+
+def _find_file_by_name(root: Path, filename: str) -> Path | None:
+    for child in root.iterdir():
+        if child.name in _SKIP_DIRS:
+            continue
+        if child.is_file() and child.name == filename:
+            return child
+        if child.is_dir():
+            found = _find_file_by_name(child, filename)
+            if found is not None:
+                return found
+    return None
 
 
 def check_line_in_range(file_path: str, line: int, project_root: Path) -> bool:
@@ -129,7 +144,10 @@ def check_line_in_range(file_path: str, line: int, project_root: Path) -> bool:
         return False
     full = project_root / file_path
     if not full.is_file():
-        return False
+        found = _find_file_by_name(project_root, Path(file_path).name)
+        if found is None:
+            return False
+        full = found
     try:
         count = len(full.read_text(encoding="utf-8", errors="replace").splitlines())
         return line <= count
@@ -184,7 +202,6 @@ def _iter_source_files(root: Path):
 
 def normalize_gap(text: str) -> str:
     text = re.sub(r"\[[\w-]+\]\s*", "", text)
-    text = re.sub(r":\d+", "", text)
     text = re.sub(r"\S+/", "", text)
     return text.strip().lower()
 
@@ -193,14 +210,29 @@ def compute_similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
-def find_duplicates(gaps: list[str], threshold: float = 0.5) -> set[int]:
+def _file_keys(text: str) -> set[str]:
+    keys: set[str] = set()
+    for m in _FILE_COLON_LINE.finditer(text):
+        keys.add(Path(m.group(1)).name)
+    for m in _FILE_LINE_N.finditer(text):
+        keys.add(Path(m.group(1)).name)
+    for m in _FILE_ONLY.finditer(text):
+        keys.add(Path(m.group(1)).name)
+    return keys
+
+
+def find_duplicates(gaps: list[str], threshold: float = 0.7) -> set[int]:
     normalized = [normalize_gap(g) for g in gaps]
+    file_refs = [_file_keys(g) for g in gaps]
     duplicates: set[int] = set()
     for i in range(len(normalized)):
         if i in duplicates:
             continue
         for j in range(i + 1, len(normalized)):
             if j in duplicates:
+                continue
+            refs_i, refs_j = file_refs[i], file_refs[j]
+            if refs_i and refs_j and not (refs_i & refs_j):
                 continue
             if compute_similarity(normalized[i], normalized[j]) > threshold:
                 duplicates.add(j)

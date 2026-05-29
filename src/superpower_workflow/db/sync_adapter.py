@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from sqlalchemy import Engine
 
 from superpower_workflow.db.engine import get_session_factory
-from superpower_workflow.db.models import SwEvent, SwMilestone, SwRun
+from superpower_workflow.db.models import SwEvent, SwMilestone, SwPhase, SwRun
 from superpower_workflow.db.queries import get_or_create_project, get_run_by_run_id
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,8 @@ class DbSyncAdapter:
         try:
             proj = get_or_create_project(session, project_name, project_path)
             run_uuids: dict[str, uuid.UUID] = {}
-            milestone_uuids: dict[str, uuid.UUID] = {}
+            milestone_uuids: dict[tuple[uuid.UUID, str], uuid.UUID] = {}
+            phase_uuids: dict[tuple[uuid.UUID, str], uuid.UUID] = {}
 
             for event in events:
                 run_id = event.get("run_id", "")
@@ -86,16 +87,74 @@ class DbSyncAdapter:
 
                 if event_type == "milestone_started":
                     ms_name = event.get("milestone", "")
-                    if ms_name and ms_name not in milestone_uuids:
-                        ms = SwMilestone(
-                            id=uuid.uuid4(),
-                            run_id=run_uuid,
-                            name=ms_name,
-                            status="running",
+                    key = (run_uuid, ms_name)
+                    if ms_name and key not in milestone_uuids:
+                        existing_ms = (
+                            session.query(SwMilestone)
+                            .filter(SwMilestone.run_id == run_uuid, SwMilestone.name == ms_name)
+                            .first()
                         )
-                        session.add(ms)
-                        session.flush()
-                        milestone_uuids[ms_name] = ms.id
+                        if existing_ms is not None:
+                            milestone_uuids[key] = existing_ms.id
+                        else:
+                            ms = SwMilestone(
+                                id=uuid.uuid4(),
+                                run_id=run_uuid,
+                                name=ms_name,
+                                status="running",
+                            )
+                            session.add(ms)
+                            session.flush()
+                            milestone_uuids[key] = ms.id
+
+                if event_type == "milestone_completed":
+                    ms_name = event.get("milestone", "")
+                    ms_id = milestone_uuids.get((run_uuid, ms_name))
+                    if ms_id is not None:
+                        ms_obj = session.query(SwMilestone).filter(SwMilestone.id == ms_id).first()
+                        if ms_obj is not None:
+                            ms_obj.status = event.get("status", "completed")
+                            ms_obj.cost_usd = event.get("cost_usd", ms_obj.cost_usd)
+                            ms_obj.duration_seconds = event.get(
+                                "duration_seconds", ms_obj.duration_seconds
+                            )
+
+                if event_type == "phase_started":
+                    ms_name = event.get("milestone", "")
+                    phase_type = event.get("phase", "")
+                    ms_id = milestone_uuids.get((run_uuid, ms_name))
+                    if ms_id is not None and phase_type:
+                        phase_key = (ms_id, phase_type)
+                        if phase_key not in phase_uuids:
+                            phase = SwPhase(
+                                id=uuid.uuid4(),
+                                milestone_id=ms_id,
+                                phase_type=phase_type,
+                                status="running",
+                                model=event.get("model"),
+                                session_id=event.get("session_id"),
+                            )
+                            session.add(phase)
+                            session.flush()
+                            phase_uuids[phase_key] = phase.id
+
+                if event_type == "phase_completed":
+                    ms_name = event.get("milestone", "")
+                    phase_type = event.get("phase", "")
+                    ms_id = milestone_uuids.get((run_uuid, ms_name))
+                    phase_id = phase_uuids.get((ms_id, phase_type)) if ms_id is not None else None
+                    if phase_id is not None:
+                        phase_obj = session.query(SwPhase).filter(SwPhase.id == phase_id).first()
+                        if phase_obj is not None:
+                            phase_obj.status = event.get("status", "completed")
+                            phase_obj.cost_usd = event.get("cost_usd", phase_obj.cost_usd)
+                            phase_obj.duration_ms = event.get("duration_ms", phase_obj.duration_ms)
+                            phase_obj.input_tokens = event.get(
+                                "input_tokens", phase_obj.input_tokens
+                            )
+                            phase_obj.output_tokens = event.get(
+                                "output_tokens", phase_obj.output_tokens
+                            )
 
                 if event_type == "run_completed":
                     run_obj = session.query(SwRun).filter(SwRun.id == run_uuid).first()
@@ -103,6 +162,9 @@ class DbSyncAdapter:
                         run_obj.status = event.get("status", "complete")
                         run_obj.total_cost_usd = event.get("total_cost_usd", 0.0)
                         run_obj.completed_count = event.get("completed_count", 0)
+                        run_obj.failed_count = event.get("failed_count", 0)
+                        run_obj.skipped_count = event.get("skipped_count", 0)
+                        run_obj.duration_seconds = event.get("duration_seconds", 0.0)
 
                 evt = SwEvent(
                     id=uuid.uuid4(),
