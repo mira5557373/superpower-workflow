@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import time
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -73,8 +76,33 @@ def run_claude(
             )
 
             if result.returncode == 0 and result.stdout.strip():
-                return _parse_json_output(result.stdout)
+                parsed = _parse_json_output(result.stdout)
+                if parsed.is_error:
+                    upstream = ""
+                    if parsed.raw:
+                        upstream = parsed.raw.get("result") or parsed.raw.get("error") or ""
+                    logger.warning(
+                        "claude -p returned is_error=true (attempt %d/%d). model=%s upstream=%r",
+                        attempt + 1,
+                        len(RETRY_DELAYS) + 1,
+                        model,
+                        upstream[:300],
+                    )
+                    if attempt < len(RETRY_DELAYS):
+                        time.sleep(RETRY_DELAYS[attempt])
+                        continue
+                return parsed
 
+            stderr_msg = (result.stderr or "")[:300]
+            stdout_msg = (result.stdout or "")[:300]
+            logger.warning(
+                "claude -p subprocess failed (attempt %d/%d). returncode=%d stderr=%r stdout=%r",
+                attempt + 1,
+                len(RETRY_DELAYS) + 1,
+                result.returncode,
+                stderr_msg,
+                stdout_msg,
+            )
             if attempt < len(RETRY_DELAYS):
                 time.sleep(RETRY_DELAYS[attempt])
                 continue

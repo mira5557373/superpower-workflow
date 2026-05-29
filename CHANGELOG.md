@@ -3,6 +3,15 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.2] — 2026-05-29
+
+### Fixed (real-milestone soak)
+- `runner.run_claude` now logs the upstream error when claude returns `is_error=true` or exits non-zero. Previously the orchestrator showed only the generic "claude -p returned an error" with no actionable context, leading to multi-minute retries against an unavailable model. Surfaced upstream message (model not available, auth failures, etc.) at WARNING level on every failed attempt.
+- `sw init` `.gitignore` now includes `.claude/.workflow.lock.json`, `.claude/.workflow.lock.filelock`, and `.claude/workflow-complete.json` — the v1.1.0 lock changes introduced these auxiliary files but they weren't ignored, so the next `sw run` falsely tripped the "uncommitted changes" preflight.
+
+### Validation
+- End-to-end soak on a fresh todo-cli spec: Plan → Implement → Spec compliance → Feature verification → Review → Push, all phases green. $7.00 total, 26.7 min, 3 test files + working code produced, 11 conventional commits pushed to remote. Confirms the orchestrator hot path is intact after v1.1.0/v1.1.1 changes.
+
 ## [1.1.1] — 2026-05-29
 
 ### Fixed (post-1.1.0 soak)

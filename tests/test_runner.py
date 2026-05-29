@@ -165,6 +165,49 @@ class TestRunClaudeFailsAfterMaxRetries:
             assert mock_sleep.call_count == len(RETRY_DELAYS)
 
 
+class TestRunClaudeLogsUpstreamErrors:
+    """Soak finding: claude -p errors must be surfaced via logging, not silently retried."""
+
+    def test_run_claude_logs_api_error_message(self, caplog):
+        """When claude returns is_error=true in valid JSON, log the upstream message."""
+        api_error_response = (
+            '{"type":"result","is_error":true,'
+            '"result":"The model claude-sonnet-4-5 is not available on your foundry.",'
+            '"total_cost_usd":0,"session_id":"abc"}'
+        )
+        with (
+            patch("superpower_workflow.runner.subprocess.run") as mock_run,
+            patch("superpower_workflow.runner.time.sleep"),
+            caplog.at_level("WARNING", logger="superpower_workflow.runner"),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout=api_error_response, stderr="")
+
+            run_claude(prompt="test", model="sonnet", effort="medium", budget=1.0, cwd="/tmp")
+
+            assert any(
+                "not available" in rec.getMessage() or "claude-sonnet-4-5" in rec.getMessage()
+                for rec in caplog.records
+            ), f"upstream error not logged. records={[r.getMessage() for r in caplog.records]}"
+
+    def test_run_claude_logs_subprocess_stderr(self, caplog):
+        """When claude exits non-zero, log returncode + stderr + stdout."""
+        with (
+            patch("superpower_workflow.runner.subprocess.run") as mock_run,
+            patch("superpower_workflow.runner.time.sleep"),
+            caplog.at_level("WARNING", logger="superpower_workflow.runner"),
+        ):
+            mock_run.return_value = MagicMock(
+                returncode=2, stdout="", stderr="auth failed: missing API key"
+            )
+
+            run_claude(prompt="test", model="opus", effort="medium", budget=1.0, cwd="/tmp")
+
+            assert any(
+                "auth failed" in rec.getMessage() or "returncode=2" in rec.getMessage()
+                for rec in caplog.records
+            )
+
+
 class TestRunClaudeHandlesTimeout:
     """Test that run_claude handles subprocess timeout."""
 
