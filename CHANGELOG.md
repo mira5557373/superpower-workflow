@@ -3,6 +3,26 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.3] — 2026-05-29
+
+### Fixed (Path 1 — soak-artifact inspection)
+- **Spec compliance / feature verification prompts** rewritten to demand a single JSON object as the response and explicitly forbid file-writing tool calls. Previously the prompts told claude to BOTH `Write .claude/.spec-compliance.json` AND `Output ONLY the JSON content`, so claude often wrote the file (good) but returned a confirmation message in stdout (not JSON), and the parser returned 0/0/0. M2 soak post-fix: 14 requirements / 13 implemented / 1 missing with file:function evidence. M3 soak post-fix: 20/20/0 (full implementation including the auto-fix of M2's `remove`→`rm` subcommand typo).
+- **Trust-but-verify reports preserved after milestone success.** `clear_phase_state` was destroying `.gap-report.json` / `.spec-compliance.json` / `.feature-verification.json` between phases, so post-run audit had nothing to inspect. Added `archive_reports(claude_dir, milestone, phase)` that copies them to `.claude/reports/<milestone>/<phase>/` before clearing. Path sanitization defends against directory traversal in milestone names.
+- **Gap report `converged=False` when zero gaps** — the model often forgot to flip the flag. Override in `_emit_gap_report`: total_gaps_found == 0 implies converged.
+
+### Fixed (Path 2 — estimator recalibration from real soak data)
+- Forecast vs actual was 2.5× under ($1.43-$2.85 forecast, $7.00 actual). Three root causes fixed:
+  - `BUDGET_CAP_FRACTION=0.15` artificially clamped per-milestone cost at 15% of total per-phase budgets — no observed basis, removed.
+  - `OPTIMISTIC_FACTOR=0.5` was too aggressive — raised to `0.7`.
+  - Trust-but-verify costs were not modeled at all. Soak measured 13.5% overhead; added `TRUST_BUT_VERIFY_OVERHEAD=0.15` when validation flags are enabled.
+- Post-fix calibration: M2 forecast $5.60-$9.10, actual $6.30 ✓ in range.
+
+### Validation
+- 3-milestone real soak (todo-cli M1+M2+M3): $18.68 total, 73 min, 701 lines of test code, working CLI with `add`/`list`/`done`/`rm` commands. All three milestone Phase A/B/spec/verify/C/D paths succeeded.
+- Spec compliance now produces actionable signal — M2 caught a real implementation bug (`remove` subcommand vs spec's `rm`); M3 fixed it by adding `rm` as an alias.
+- Test count: 1063 → 1070 (+7 regression tests for Paths 1+2 fixes).
+- `soak-archive/todo-cli-run2/` preserves the full M1+M2+M3 evidence.
+
 ## [1.1.2] — 2026-05-29
 
 ### Fixed (real-milestone soak)

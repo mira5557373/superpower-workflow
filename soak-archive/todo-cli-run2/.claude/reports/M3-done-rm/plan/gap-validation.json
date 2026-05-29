@@ -1,0 +1,136 @@
+{
+  "total_gaps": 20,
+  "valid_gaps": 0,
+  "invalid_gaps": 3,
+  "unverifiable_gaps": 17,
+  "duplicate_gaps": 2,
+  "validations": [
+    {
+      "gap": "[ultrathink] Gap 1 (FIXED): Task 6 substantially overlapped Task 5 (done silent output). Replaced with 'done preserves text and created_at' test verifying only status changes.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Gap 2 (FIXED): Task 11 substantially overlapped Task 10 (remove silent output). Replaced with full lifecycle integration test (add -> done -> list -> rm -> list).",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Gap 3 (FIXED): Missing test for 'done' on a removed todo (cross-command interaction). Added as Task 21.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Gap 4 (FIXED): Missing test for 'rm' on already-removed todo (double-remove edge case). Added as Task 22.",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {},
+      "reason": "Duplicate gap"
+    },
+    {
+      "gap": "[ultrathink] Gap 5 (FIXED): Missing test verifying 'done' preserves text and created_at fields unchanged. Replaced Task 6 with this test.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Gap 6 (FIXED): Tasks 8/12 didn't check 'error:' prefix in stderr. Added 'assert \"error:\" in captured.err' to both, consistent with Tasks 19-20 pattern.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Gap 7 (FIXED): Error path tests didn't verify stdout was empty. Added 'assert captured.out == \"\"' to Tasks 8, 12, 21.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Gap 8 (FIXED): Missing full lifecycle integration test. Replaced Task 11 with add -> done -> list -> rm -> list workflow test.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Gap 9 (FIXED): Task 7 didn't check 'done' return code. Added 'assert ret == 0' after done command.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Gap 10 (FIXED): Task 17 didn't check 'rm' return code. Added 'assert ret == 0' for both done and rm calls.",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {},
+      "reason": "Duplicate gap"
+    },
+    {
+      "gap": "[ultrathink] Gap 11 (minor): Task 4 is a no-op since parser already has done/remove/rm from M2. Updated dependency graph to say 'verify existing'.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Gap 12 (minor): Tasks 14-15 duplicate existing tests from M2 (test_cli.py:142-151). Should note 'verify existing tests pass'.",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {
+        "file_exists": true,
+        "line_in_range": true,
+        "symbol_found": false
+      },
+      "reason": "M2 not found in codebase"
+    },
+    {
+      "gap": "[ultrathink] Gap 13 (minor): Task 16 checks return codes but doesn't verify state via list --all after double-done.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Gap 14 (minor): Task 18 checks presence of 'first' and 'third' but doesn't verify output ordering.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Gap 15 (minor, FIXED): Design decisions table inaccurately described argparse alias behavior. Corrected wording.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Gap 16 (minor, FIXED): Dependency graph didn't show Task 4 as prerequisite for Tasks 5-8. Restructured graph.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Gap 17 (minor, FIXED): Overview said 'M3 wires these together' but wiring was done in M2. Corrected.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Gap 18 (minor): Risk table claims error format consistency but no test cross-validates done vs remove error messages.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Gap 19 (minor): Missing test for negative ID argument (argparse may interpret '-1' as a flag).",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Gap 20 (minor): Scope boundaries don't mention design choice that done/rm produce no stdout on success.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "pass": 1,
+  "critical_gaps": 0,
+  "architectural_gaps": 0,
+  "important_gaps": 0,
+  "minor_gaps": 5,
+  "deferred_gaps": 10,
+  "total_gaps_found": 20,
+  "gaps_fixed_this_pass": 5,
+  "tests_green": true,
+  "lint_clean": true,
+  "converged": true,
+  "gap_summaries": [
+    "[post-impl] 🔴 FIXED: CLI registered 'remove' subcommand but not 'rm' — spec requires `todo rm <id>`. Added aliases=['rm'] to _build_parser and updated dispatch to check args.command in ('remove', 'rm')",
+    "[post-impl] 🟡 FIXED: No tests for rm alias — added test_rm_alias_deletes and test_rm_alias_unknown_id",
+    "[post-impl] 🟡 FIXED: No CLI test for done command success path — only error path tested via test_done_unknown_id. Added test_done_marks_todo verifying return 0, silent output, and state persistence",
+    "[post-impl] 🔵 FIXED: _format_todo(todo) param had no type annotation — added Todo type hint",
+    "[post-impl] 🔵 FIXED: No test for done→list exclusion via CLI — test_list_shows_open_only used store API for done. Added test_done_hides_from_default_list testing full CLI flow",
+    "[production] 🔵 DEFERRED: __main__.py 0% line coverage — subprocess-invoked code not tracked by pytest-cov; exercised by test_python_m_todo",
+    "[production] 🔵 DEFERRED: Branch coverage partial at cli.py:71->78 — impossible path (unmatched command after argparse validation)",
+    "[production] 🔵 DEFERRED: No parser-level test for done subcommand parsing — integration tests cover the path",
+    "[production] 🔵 DEFERRED: No parser-level test for remove/rm subcommand parsing — integration tests cover the path",
+    "[production] 🔵 DEFERRED: No test for text with special characters (unicode, quotes) through CLI — edge case, argparse handles transparently",
+    "[production] 🔵 DEFERRED: No test for empty text through CLI (todo add \"\") — storage layer tests cover empty text",
+    "[production] 🔵 DEFERRED: No test for remove on a done todo through CLI — trivially correct, remove doesn't check status",
+    "[production] 🔵 DEFERRED: No test for argparse error handling on invalid subcommand — argparse behavior, not application logic",
+    "[production] 🔵 DEFERRED: test_output_format_one_line_per_todo only checks line count, not format of each line — format tested by test_format_todo and test_add_prints_formatted_todo",
+    "[production] 🔵 DEFERRED: No test for --store with relative paths — Path conversion handles this transparently"
+  ]
+}

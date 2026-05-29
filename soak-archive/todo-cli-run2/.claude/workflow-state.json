@@ -1,0 +1,17 @@
+{
+  "current_milestone_index": 0,
+  "current_step": null,
+  "last_phase_session_id": "b45039a7-076f-49cc-81ce-bd61736c82da",
+  "plan_commit_sha": "2cb23b134301a00f5f64a1f1b0eadb4ba9deaed0",
+  "completed": [
+    "M1-storage",
+    "M2-cli",
+    "M3-done-rm"
+  ],
+  "failed": [],
+  "skipped": [],
+  "total_cost_usd": 18.68045725,
+  "spec_sha": "6915b5fe405d95d06a2fa5593ca2b21dda334cf3",
+  "run_id": "20260529-085824",
+  "started_at": "2026-05-29T08:58:24Z"
+}

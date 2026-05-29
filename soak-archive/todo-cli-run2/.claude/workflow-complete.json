@@ -1,0 +1,12 @@
+{
+  "status": "complete",
+  "completed": [
+    "M1-storage",
+    "M2-cli",
+    "M3-done-rm"
+  ],
+  "failed": [],
+  "skipped": [],
+  "total_cost_usd": 18.68,
+  "run_id": "20260529-085824"
+}

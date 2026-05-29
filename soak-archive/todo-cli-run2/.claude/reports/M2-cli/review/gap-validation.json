@@ -1,0 +1,109 @@
+{
+  "total_gaps": 15,
+  "valid_gaps": 0,
+  "invalid_gaps": 3,
+  "unverifiable_gaps": 12,
+  "duplicate_gaps": 1,
+  "validations": [
+    {
+      "gap": "[post-impl] \u00f0\u0178\u201d\u00b4 FIXED: CLI registered 'remove' subcommand but not 'rm' \u00e2\u20ac\u201d spec requires `todo rm <id>`. Added aliases=['rm'] to _build_parser and updated dispatch to check args.command in ('remove', 'rm')",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[post-impl] \u00f0\u0178\u0178\u00a1 FIXED: No tests for rm alias \u00e2\u20ac\u201d added test_rm_alias_deletes and test_rm_alias_unknown_id",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[post-impl] \u00f0\u0178\u0178\u00a1 FIXED: No CLI test for done command success path \u00e2\u20ac\u201d only error path tested via test_done_unknown_id. Added test_done_marks_todo verifying return 0, silent output, and state persistence",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[post-impl] \u00f0\u0178\u201d\u00b5 FIXED: _format_todo(todo) param had no type annotation \u00e2\u20ac\u201d added Todo type hint",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[post-impl] \u00f0\u0178\u201d\u00b5 FIXED: No test for done\u00e2\u2020\u2019list exclusion via CLI \u00e2\u20ac\u201d test_list_shows_open_only used store API for done. Added test_done_hides_from_default_list testing full CLI flow",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[production] \u00f0\u0178\u201d\u00b5 DEFERRED: __main__.py 0% line coverage \u00e2\u20ac\u201d subprocess-invoked code not tracked by pytest-cov; exercised by test_python_m_todo",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {
+        "file_exists": true,
+        "symbol_found": false
+      },
+      "reason": "DEFERRED not found in codebase"
+    },
+    {
+      "gap": "[production] \u00f0\u0178\u201d\u00b5 DEFERRED: Branch coverage partial at cli.py:71->78 \u00e2\u20ac\u201d impossible path (unmatched command after argparse validation)",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {
+        "file_exists": true,
+        "line_in_range": true,
+        "symbol_found": false
+      },
+      "reason": "Branch not found in codebase"
+    },
+    {
+      "gap": "[production] \u00f0\u0178\u201d\u00b5 DEFERRED: No parser-level test for done subcommand parsing \u00e2\u20ac\u201d integration tests cover the path",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[production] \u00f0\u0178\u201d\u00b5 DEFERRED: No parser-level test for remove/rm subcommand parsing \u00e2\u20ac\u201d integration tests cover the path",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {},
+      "reason": "Duplicate gap"
+    },
+    {
+      "gap": "[production] \u00f0\u0178\u201d\u00b5 DEFERRED: No test for text with special characters (unicode, quotes) through CLI \u00e2\u20ac\u201d edge case, argparse handles transparently",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[production] \u00f0\u0178\u201d\u00b5 DEFERRED: No test for empty text through CLI (todo add \"\") \u00e2\u20ac\u201d storage layer tests cover empty text",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[production] \u00f0\u0178\u201d\u00b5 DEFERRED: No test for remove on a done todo through CLI \u00e2\u20ac\u201d trivially correct, remove doesn't check status",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[production] \u00f0\u0178\u201d\u00b5 DEFERRED: No test for argparse error handling on invalid subcommand \u00e2\u20ac\u201d argparse behavior, not application logic",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[production] \u00f0\u0178\u201d\u00b5 DEFERRED: test_output_format_one_line_per_todo only checks line count, not format of each line \u00e2\u20ac\u201d format tested by test_format_todo and test_add_prints_formatted_todo",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[production] \u00f0\u0178\u201d\u00b5 DEFERRED: No test for --store with relative paths \u00e2\u20ac\u201d Path conversion handles this transparently",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    }
+  ]
+}

@@ -1,0 +1,139 @@
+{
+  "total_gaps": 20,
+  "valid_gaps": 0,
+  "invalid_gaps": 4,
+  "unverifiable_gaps": 16,
+  "duplicate_gaps": 1,
+  "validations": [
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b4 FIXED: Plan included done/rm commands (Tasks 14-17) that belong to M3-done-rm per workflow.json \u00e2\u20ac\u201d removed and renumbered",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {
+        "file_exists": false
+      },
+      "reason": "workflow.js not found"
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b4 FIXED: Parser tasks added done/rm subcommands that are M3 scope \u00e2\u20ac\u201d scoped parser to add+list only",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b4 FIXED: List tests used main([\"done\", ...]) CLI command which doesn't exist in M2 \u00e2\u20ac\u201d rewrote to use TodoStore.done() store API",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: Missing 'add with monotonic id' test required by workflow.json \u00e2\u20ac\u201d added Task 10",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {
+        "file_exists": false
+      },
+      "reason": "workflow.js not found"
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: No ISO-8601 validation on add output \u00e2\u20ac\u201d Task 8 now validates parts[2] via datetime.fromisoformat()",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: No deterministic output test per spec requirement \u00e2\u20ac\u201d added Task 16",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: Store init error handling described but untested \u00e2\u20ac\u201d added Task 19",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: Dependency graph referenced deleted tasks 14-17 \u00e2\u20ac\u201d rebuilt graph",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: Command mapping table included M3 commands \u00e2\u20ac\u201d scoped to add/list/no-command",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: Non-empty list tests didn't verify return code \u00e2\u20ac\u201d added ret == 0 assertions",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: Parser test used Unix path /tmp/my.json \u00e2\u20ac\u201d changed to tmp_path fixture",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {
+        "file_exists": false
+      },
+      "reason": "/tmp/my.js not found"
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: No test for listing multiple items in insertion order \u00e2\u20ac\u201d covered by deterministic + one-line-per-todo tests",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b5 FIXED: Corrupted store test only covered list \u00e2\u20ac\u201d Task 18 now tests both list and add",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b5 FIXED: No explicit scope boundary statement \u00e2\u20ac\u201d added 'Scope boundaries' section",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b5 DEFERRED: No test for text with special characters (unicode, quotes) \u00e2\u20ac\u201d edge case, can add later",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b5 DEFERRED: No test for main([]) empty argv \u00e2\u20ac\u201d similar to no-command test, low risk",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b5 DEFERRED: No test for --store with non-existent parent directory \u00e2\u20ac\u201d covered by TodoStore mkdir (M1)",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b5 DEFERRED: Plan doesn't acknowledge existing code scaffolding \u00e2\u20ac\u201d informational only",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b5 DEFERRED: No test for store auto-creation on first add \u00e2\u20ac\u201d covered by TodoStore constructor (M1)",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {},
+      "reason": "Duplicate gap"
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b5 DEFERRED: No test for main(None) default argv behavior \u00e2\u20ac\u201d trivially correct via argparse",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    }
+  ]
+}

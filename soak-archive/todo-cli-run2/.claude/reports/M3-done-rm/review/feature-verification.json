@@ -1,0 +1,129 @@
+{
+  "total_features": 20,
+  "verified_working": 19,
+  "broken": 0,
+  "manual_review": 1,
+  "details": [
+    {
+      "feature": "todo add \"<text>\" appends a new todo",
+      "status": "pass",
+      "test": "test_cli.py::test_add_prints_formatted_todo",
+      "reason": "Adds todo, verifies formatted output with id/status/timestamp/text"
+    },
+    {
+      "feature": "Added todo has a unique integer id",
+      "status": "pass",
+      "test": "test_storage.py::test_ids_increment",
+      "reason": "Verifies sequential ids (1,2,3) across three adds"
+    },
+    {
+      "feature": "Added todo has status open",
+      "status": "pass",
+      "test": "test_storage.py::test_add_returns_todo",
+      "reason": "Asserts todo.status == 'open' on freshly added todo"
+    },
+    {
+      "feature": "Added todo has ISO-8601 timestamp",
+      "status": "pass",
+      "test": "test_feature_verification.py::test_timestamp_is_utc",
+      "reason": "Parses created_at via fromisoformat and asserts UTC offset is 0"
+    },
+    {
+      "feature": "todo list prints todos, default shows only open",
+      "status": "pass",
+      "test": "test_cli.py::test_list_shows_open_only",
+      "reason": "Adds two todos, marks one done, list shows only the open one"
+    },
+    {
+      "feature": "todo list --all includes done",
+      "status": "pass",
+      "test": "test_cli.py::test_list_all_includes_done",
+      "reason": "Adds todo, marks done, list --all still shows it with 'done' status"
+    },
+    {
+      "feature": "todo done <id> flips status from open to done",
+      "status": "pass",
+      "test": "test_cli.py::test_done_marks_todo",
+      "reason": "Marks todo done via CLI, verifies 'done' in list --all output"
+    },
+    {
+      "feature": "todo done <id> errors with exit 1 if id is unknown",
+      "status": "pass",
+      "test": "test_cli.py::test_done_unknown_id",
+      "reason": "done 999 returns exit 1 with 'error:' on stderr"
+    },
+    {
+      "feature": "todo rm <id> removes a todo permanently",
+      "status": "pass",
+      "test": "test_cli.py::test_remove_deletes",
+      "reason": "Adds todo, removes it, list returns empty output"
+    },
+    {
+      "feature": "todo rm <id> errors with exit 1 if id is unknown",
+      "status": "pass",
+      "test": "test_cli.py::test_remove_unknown_id",
+      "reason": "remove 999 returns exit 1 with 'error:' and '999' on stderr"
+    },
+    {
+      "feature": "Storage at ~/.todo/store.json",
+      "status": "pass",
+      "test": "test_feature_verification.py::test_store_default_path_is_home_dot_todo",
+      "reason": "Verified DEFAULT_STORE_PATH = Path.home() / '.todo' / 'store.json' in cli.py:9"
+    },
+    {
+      "feature": "Store directory and file auto-created",
+      "status": "pass",
+      "test": "test_storage.py::test_store_creates_directory",
+      "reason": "Creates store with nested path, asserts parent directory exists"
+    },
+    {
+      "feature": "Store file has 0o600 permissions",
+      "status": "manual_review",
+      "test": "test_storage.py::test_store_file_permissions",
+      "reason": "Test exists but is skipped on Windows (POSIX-only); code sets 0o600 at storage.py:54 and storage.py:74"
+    },
+    {
+      "feature": "Atomic writes (write to .tmp then rename)",
+      "status": "pass",
+      "test": "test_feature_verification.py::test_atomic_write_uses_tmp_then_rename",
+      "reason": "Monkeypatches os.replace, verifies .tmp path passed as source during add"
+    },
+    {
+      "feature": "All commands deterministic given identical state",
+      "status": "pass",
+      "test": "test_cli.py::test_deterministic_output",
+      "reason": "Runs list twice on same state, asserts identical output"
+    },
+    {
+      "feature": "All output is plain text, one todo per line: <id> <status> <created> <text>",
+      "status": "pass",
+      "test": "test_cli.py::test_format_todo",
+      "reason": "Asserts format '1 open 2026-01-01T00:00:00+00:00 buy milk'; test_output_format_one_line_per_todo confirms line count"
+    },
+    {
+      "feature": "ruff check . clean",
+      "status": "pass",
+      "test": "test_cli.py::test_python_m_todo",
+      "reason": "Verified directly: 'ruff check .' returned 'All checks passed!' with exit 0"
+    },
+    {
+      "feature": "pytest -q passes with tests covering every CLI subcommand and storage edge cases",
+      "status": "pass",
+      "test": "test_cli.py::test_full_lifecycle",
+      "reason": "Verified directly: 75 passed, 2 skipped (POSIX-only permission tests), 0 failures"
+    },
+    {
+      "feature": "pytest --cov reports >= 90% coverage on todo/ package",
+      "status": "pass",
+      "test": "test_storage.py::test_atomic_write_preserves_data_on_failure",
+      "reason": "Verified directly: 98.54% total coverage (cli.py 100%, storage.py 100%, __init__.py 100%)"
+    },
+    {
+      "feature": "No external runtime dependencies beyond stdlib",
+      "status": "pass",
+      "test": "test_feature_verification.py::test_cli_module_exists",
+      "reason": "Verified by source inspection: imports are json, os, argparse, sys, pathlib, dataclasses, datetime \u00e2\u20ac\u201d all stdlib"
+    }
+  ],
+  "cost_usd": 0.30770049999999993
+}

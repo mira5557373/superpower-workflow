@@ -1,0 +1,1 @@
+README.md updated with all four sections (overview, quickstart, architecture, contributing) and current stats: 75 tests passing, 99% coverage, ~200 source lines.

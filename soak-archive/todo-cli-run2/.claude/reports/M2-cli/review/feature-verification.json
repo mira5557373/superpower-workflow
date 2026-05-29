@@ -1,0 +1,93 @@
+{
+  "total_features": 14,
+  "verified_working": 12,
+  "broken": 1,
+  "manual_review": 1,
+  "details": [
+    {
+      "feature": "todo add appends a new todo with unique integer id, status open, and ISO-8601 timestamp",
+      "status": "pass",
+      "test": "test_cli.py::test_add_prints_formatted_todo",
+      "reason": "Test verifies id=1, status=open, ISO-8601 parseable timestamp, and text. Additional coverage from test_storage.py::test_add_returns_todo and test_storage.py::test_add_generates_iso8601_timestamp."
+    },
+    {
+      "feature": "todo list [--all] prints todos; default shows only open, --all includes done",
+      "status": "pass",
+      "test": "test_cli.py::test_list_shows_open_only",
+      "reason": "test_list_shows_open_only confirms done items are hidden by default; test_list_all_includes_done confirms --all flag includes done items. Both pass."
+    },
+    {
+      "feature": "todo done <id> flips status from open to done; errors with exit 1 if id is unknown",
+      "status": "pass",
+      "test": "test_storage.py::test_done_flips_status",
+      "reason": "test_done_flips_status verifies status change to done. test_cli.py::test_done_unknown_id verifies exit code 1 and error message for unknown id."
+    },
+    {
+      "feature": "todo rm <id> removes a todo permanently; errors with exit 1 if id is unknown",
+      "status": "fail",
+      "test": "test_cli.py::test_remove_deletes",
+      "reason": "CLI registers 'remove' subcommand, not 'rm'. Running 'python -m todo rm 1' fails with 'invalid choice: rm'. The spec requires 'rm' alias but only 'remove' is implemented. Existing tests use 'remove' and pass, but the 'rm' alias is missing."
+    },
+    {
+      "feature": "Storage at ~/.todo/store.json (auto-created)",
+      "status": "pass",
+      "test": "test_storage.py::test_store_creates_directory",
+      "reason": "test_store_creates_directory verifies parent directory auto-creation. cli.py defines DEFAULT_STORE_PATH = Path.home() / '.todo' / 'store.json'. test_feature_verification.py::test_store_default_path_is_home_dot_todo confirms the path."
+    },
+    {
+      "feature": "Store file created with 0o600 permissions",
+      "status": "pass",
+      "test": "test_storage.py::test_store_file_permissions",
+      "reason": "Test exists and code correctly uses os.open with 0o600. Test is POSIX-only (skipped on Windows) but implementation is verified correct in storage.py:_write_initial_store."
+    },
+    {
+      "feature": "Atomic writes (write to .tmp, rename)",
+      "status": "pass",
+      "test": "test_feature_verification.py::test_atomic_write_uses_tmp_then_rename",
+      "reason": "Verifies os.replace is called with a .tmp source path. Additional coverage: test_storage.py::test_save_atomic_no_tmp_remains (no leftover .tmp) and test_storage.py::test_atomic_write_preserves_data_on_failure (original data survives failed write)."
+    },
+    {
+      "feature": "All commands deterministic given identical state",
+      "status": "pass",
+      "test": "test_cli.py::test_deterministic_output",
+      "reason": "Runs list twice on identical state and asserts output is byte-identical. Passes."
+    },
+    {
+      "feature": "All output is plain text, one todo per line: <id> <status> <created> <text>",
+      "status": "pass",
+      "test": "test_cli.py::test_format_todo",
+      "reason": "test_format_todo asserts exact format '1 open 2026-01-01T00:00:00+00:00 buy milk'. test_output_format_one_line_per_todo verifies two todos produce exactly two lines."
+    },
+    {
+      "feature": "ruff check . clean",
+      "status": "pass",
+      "test": "test_cli.py::test_python_m_todo",
+      "reason": "Verified by running 'ruff check .' directly: 'All checks passed!' with exit code 0. No dedicated test needed; this is a quality gate verified by tooling."
+    },
+    {
+      "feature": "pytest -q passes with tests covering every CLI subcommand + storage edge cases",
+      "status": "pass",
+      "test": "test_cli.py::test_python_m_todo",
+      "reason": "Verified by running 'pytest -q': 59 passed, 2 skipped (POSIX permission tests on Windows). All CLI subcommands (add, list, done, remove) and storage edge cases have dedicated tests."
+    },
+    {
+      "feature": "pytest --cov reports >= 90% coverage on todo/ package",
+      "status": "pass",
+      "test": "test_cli.py::test_python_m_todo",
+      "reason": "Verified by running 'pytest --cov=todo': 98.54% total coverage. cli.py and storage.py at 100%. Only todo/__main__.py (2 lines) uncovered. Passes the 90% threshold."
+    },
+    {
+      "feature": "No tags, due dates, priorities, or recurring tasks",
+      "status": "pass",
+      "test": "test_storage.py::test_todo_to_dict",
+      "reason": "test_todo_to_dict asserts the dict has exactly {id, text, status, created_at} with no extra fields. Todo dataclass in storage.py confirms only these four fields exist. No tag/due-date/priority/recurring code anywhere."
+    },
+    {
+      "feature": "No interactive mode and no multi-user/network features",
+      "status": "manual_review",
+      "test": "N/A",
+      "reason": "Architectural constraint about absence of features. Code inspection confirms no socket/network imports and argparse is non-interactive, but 'no interactive mode' and 'no network features' are design-level properties not fully capturable in a unit test."
+    }
+  ],
+  "cost_usd": 0.30792699999999995
+}

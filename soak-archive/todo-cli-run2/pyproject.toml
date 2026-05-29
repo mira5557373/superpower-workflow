@@ -1,0 +1,21 @@
+[project]
+name = "todo-cli"
+version = "0.1.0"
+description = "A tiny command-line todo manager"
+requires-python = ">=3.11"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["todo"]
+
+[tool.coverage.report]
+fail_under = 90
