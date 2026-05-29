@@ -3,6 +3,24 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.1] — 2026-05-29
+
+### Fixed (post-1.1.0 soak)
+- 8 bugs surfaced by v1.1.0 soak test: WebSocket producer wired (polling), sync adapter materializes sw_phases and per-run milestones, `/api/v1/events` filter param renamed (`type` → `event_type`), `/runs/{id}` and `/runs/compare` accept human run_ids, run detail returns its milestones, gap validator no longer flags distinct lines of the same file as duplicates, gap validator falls back to recursive filename search.
+- Wheel packaging: `templates/`, `skills/`, `commands/` moved into `src/superpower_workflow/_assets/` so they actually ship with `pip install`. Previously only worked with `pip install -e .`.
+
+### Added
+- `.github/workflows/test.yml` — matrix CI on push/PR (ubuntu+windows × py3.11+3.12) with wheel asset-presence check.
+- `sw run --dry-run` now prints milestone list, per-phase budget, convergence-loop config, verify commands, and a cost/duration forecast that uses historical telemetry when available. No claude calls made.
+- `examples/todo-cli/` — tiny end-to-end demo (spec + expected decomposition + reference workflow.json) for internal onboarding.
+- WebSocket emits a warning when `MAX_EVENTS_PER_TICK` is hit so backlog isn't silent.
+
+### Changed
+- README install section rewritten for internal distribution: three paths (git+ssh, local wheel, submodule editable). PyPI references removed.
+
+### Stats
+- 1063 tests passing across all platforms in CI matrix.
+
 ## [1.1.0] — 2026-05-28
 
 ### Added
