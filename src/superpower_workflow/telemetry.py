@@ -272,6 +272,19 @@ class FeatureVerificationCompleted(TelemetryEvent):
     cost_usd: float = 0.0
 
 
+@dataclass
+class StrictModeIteration(TelemetryEvent):
+    """Emitted when strict-mode loops Phase C on residual compliance/verification findings."""
+
+    EVENT_TYPE: ClassVar[str] = "strict_mode_iteration"
+    milestone: str = ""
+    iteration: int = 0
+    missing_requirements: int = 0
+    broken_features: int = 0
+    converged: bool = False
+    cost_usd: float = 0.0
+
+
 class TelemetryEmitter:
     def __init__(self, path: Path | None, run_id: str) -> None:
         self._path = path

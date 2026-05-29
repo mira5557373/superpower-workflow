@@ -71,6 +71,7 @@ from superpower_workflow.telemetry import (
     RunCompleted,
     RunStarted,
     SpecComplianceCompleted,
+    StrictModeIteration,
     TelemetryEmitter,
 )
 
@@ -1055,6 +1056,18 @@ class Orchestrator:
         plan_sha = self.state.plan_commit_sha or ""
         self._check_trailers(plan_sha, logger)
 
+        # Strict mode: loop on residual compliance/verification findings
+        strict_cost = self._run_strict_mode_loop(
+            name=name,
+            ms=ms,
+            model=model,
+            fallback=fallback,
+            initial_compliance=compliance_report,
+            initial_verification=verification_report,
+            logger=logger,
+        )
+        cost += strict_cost
+
         # Phase D: Push + Tag
         try:
             self._call_pre_phase("push", ms)
@@ -1717,6 +1730,131 @@ class Orchestrator:
         )
 
         return report, cost
+
+    def _run_strict_mode_loop(
+        self,
+        name: str,
+        ms: dict,
+        model: str,
+        fallback: str | None,
+        initial_compliance: dict | None,
+        initial_verification: dict | None,
+        logger,
+    ) -> float:
+        """When validation.strict_mode is on, re-check compliance + verification after
+        Phase C and loop with explicit findings until missing+broken == 0 or cap hit.
+
+        Returns total cost added by strict iterations (0.0 when strict mode is off).
+        """
+        validation = self.config.get("validation", {})
+        if not validation.get("strict_mode", False):
+            return 0.0
+
+        max_iterations = int(validation.get("max_strict_iterations", 2))
+        if max_iterations <= 0:
+            return 0.0
+
+        compliance = initial_compliance or {}
+        verification = initial_verification or {}
+        total_cost = 0.0
+
+        for iteration in range(1, max_iterations + 1):
+            missing_items = [
+                d for d in (compliance.get("details") or []) if d.get("status") == "missing"
+            ]
+            broken_items = [
+                d
+                for d in (verification.get("details") or [])
+                if d.get("status") in ("fail", "broken")
+            ]
+
+            if not missing_items and not broken_items:
+                if iteration > 1:
+                    self._telemetry.emit(
+                        StrictModeIteration(
+                            milestone=name,
+                            iteration=iteration - 1,
+                            missing_requirements=0,
+                            broken_features=0,
+                            converged=True,
+                            cost_usd=0.0,
+                        )
+                    )
+                return total_cost
+
+            fix_prompt_parts = [
+                f"Trust-but-verify (strict mode, iteration {iteration}/{max_iterations}) "
+                f"found unresolved issues in milestone {name}.",
+                "",
+            ]
+            if missing_items:
+                fix_prompt_parts.append("MISSING REQUIREMENTS (must implement):")
+                for d in missing_items:
+                    fix_prompt_parts.append(
+                        f"  - {d.get('requirement', '?')}  (evidence: {d.get('evidence', '-')})"
+                    )
+                fix_prompt_parts.append("")
+            if broken_items:
+                fix_prompt_parts.append("BROKEN FEATURES (must fix):")
+                for d in broken_items:
+                    fix_prompt_parts.append(
+                        f"  - {d.get('feature', '?')}  "
+                        f"reason: {d.get('reason', '-')}  "
+                        f"test: {d.get('test', '-')}"
+                    )
+                fix_prompt_parts.append("")
+            fix_prompt_parts.append(
+                "Implement and/or fix each item above with TDD (red then green). "
+                "Commit each fix as a separate conventional-commits change. "
+                "Do not refactor unrelated code."
+            )
+            fix_prompt = "\n".join(fix_prompt_parts)
+
+            r = run_claude(
+                fix_prompt,
+                model=model,
+                effort="high",
+                budget=float(validation.get("strict_iteration_budget", 8.0)),
+                cwd=self.cwd,
+                system_prompt=self.sys_prompt,
+                fallback_model=fallback,
+            )
+            total_cost += r.cost_usd
+            logger.log(
+                "STRICT_ITERATION",
+                iteration=iteration,
+                missing=len(missing_items),
+                broken=len(broken_items),
+                cost=round(r.cost_usd, 2),
+            )
+
+            new_compliance, c_cost = self._run_spec_compliance(name, ms)
+            total_cost += c_cost
+            new_verification, v_cost = self._run_feature_verification(name)
+            total_cost += v_cost
+
+            compliance = new_compliance or {}
+            verification = new_verification or {}
+
+            still_missing = compliance.get("missing", 0)
+            still_broken = verification.get("broken", 0)
+            converged = still_missing == 0 and still_broken == 0
+
+            self._telemetry.emit(
+                StrictModeIteration(
+                    milestone=name,
+                    iteration=iteration,
+                    missing_requirements=still_missing,
+                    broken_features=still_broken,
+                    converged=converged,
+                    cost_usd=r.cost_usd + c_cost + v_cost,
+                )
+            )
+
+            if converged:
+                return total_cost
+
+        return total_cost
 
     def _find_plan_path(self, name: str) -> str:
         plans_dir = Path(self.cwd) / "docs" / "superpowers" / "plans"

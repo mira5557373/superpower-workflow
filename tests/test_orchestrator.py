@@ -2165,3 +2165,247 @@ class TestOrchestratorStateSteps:
 
         loaded = load_state(claude_dir)
         assert loaded.current_step == "spec_compliance"
+
+
+class TestStrictModeTrustButVerify:
+    """Path B: validation.strict_mode loops Phase C on residual missing/broken findings."""
+
+    def _strict_config(self, tmp_path, **overrides):
+        config = _config(tmp_path)
+        config["validation"] = {
+            "spec_compliance": True,
+            "feature_verification": True,
+            "strict_mode": True,
+            "max_strict_iterations": 2,
+            "strict_iteration_budget": 5.0,
+            **overrides,
+        }
+        (tmp_path / ".claude" / "workflow.json").write_text(json.dumps(config))
+        return config
+
+    def test_strict_mode_disabled_skips_loop(self, tmp_path):
+        """When strict_mode=False, no strict iterations are emitted even with missing items."""
+        _config(tmp_path)
+        compliance_with_missing = (
+            {
+                "total_requirements": 1,
+                "implemented": 0,
+                "missing": 1,
+                "details": [{"requirement": "rm subcommand", "status": "missing", "evidence": "-"}],
+                "cost_usd": 0.3,
+            },
+            0.3,
+        )
+
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+            patch.object(
+                Orchestrator,
+                "_run_spec_compliance",
+                return_value=compliance_with_missing,
+            ),
+            patch.object(Orchestrator, "_run_feature_verification", return_value=(None, 0.0)),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+        events = _read_telemetry(tmp_path)
+        types = [e["type"] for e in events]
+        assert "strict_mode_iteration" not in types
+
+    def test_strict_mode_loops_on_missing_until_resolved(self, tmp_path):
+        """Strict mode iterates until missing+broken == 0 or cap hit."""
+        self._strict_config(tmp_path, max_strict_iterations=3)
+
+        # Returns: first call has missing=1, second has missing=0
+        compliance_responses = [
+            (
+                {
+                    "total_requirements": 1,
+                    "implemented": 0,
+                    "missing": 1,
+                    "details": [
+                        {
+                            "requirement": "rm subcommand",
+                            "status": "missing",
+                            "evidence": "remove registered not rm",
+                        }
+                    ],
+                    "cost_usd": 0.3,
+                },
+                0.3,
+            ),
+            (
+                {
+                    "total_requirements": 1,
+                    "implemented": 1,
+                    "missing": 0,
+                    "details": [],
+                    "cost_usd": 0.3,
+                },
+                0.3,
+            ),
+        ]
+        compliance_iter = iter(compliance_responses)
+
+        verification_responses = [
+            (
+                {
+                    "total_features": 1,
+                    "verified_working": 1,
+                    "broken": 0,
+                    "manual_review": 0,
+                    "details": [],
+                    "cost_usd": 0.2,
+                },
+                0.2,
+            ),
+            (
+                {
+                    "total_features": 1,
+                    "verified_working": 1,
+                    "broken": 0,
+                    "manual_review": 0,
+                    "details": [],
+                    "cost_usd": 0.2,
+                },
+                0.2,
+            ),
+        ]
+        verification_iter = iter(verification_responses)
+
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+            patch.object(
+                Orchestrator,
+                "_run_spec_compliance",
+                side_effect=lambda *a, **kw: next(compliance_iter),
+            ),
+            patch.object(
+                Orchestrator,
+                "_run_feature_verification",
+                side_effect=lambda *a, **kw: next(verification_iter),
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+
+        events = _read_telemetry(tmp_path)
+        iters = [e for e in events if e["type"] == "strict_mode_iteration"]
+        assert len(iters) == 1, f"expected 1 strict iteration, got {len(iters)}: {iters}"
+        assert iters[0]["iteration"] == 1
+        assert iters[0]["missing_requirements"] == 0
+        assert iters[0]["broken_features"] == 0
+        assert iters[0]["converged"] is True
+
+    def test_strict_mode_caps_iterations(self, tmp_path):
+        """If issues persist, strict mode bails after max_strict_iterations."""
+        self._strict_config(tmp_path, max_strict_iterations=2)
+
+        # Always returns missing=1
+        compliance_persistent = (
+            {
+                "total_requirements": 1,
+                "implemented": 0,
+                "missing": 1,
+                "details": [
+                    {"requirement": "rm subcommand", "status": "missing", "evidence": "still wrong"}
+                ],
+                "cost_usd": 0.3,
+            },
+            0.3,
+        )
+
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+            patch.object(Orchestrator, "_run_spec_compliance", return_value=compliance_persistent),
+            patch.object(Orchestrator, "_run_feature_verification", return_value=(None, 0.0)),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+
+        events = _read_telemetry(tmp_path)
+        iters = [e for e in events if e["type"] == "strict_mode_iteration"]
+        assert len(iters) == 2, f"expected exactly max_strict_iterations=2, got {len(iters)}"
+        assert all(not it["converged"] for it in iters)
+        assert iters[-1]["iteration"] == 2
+
+    def test_strict_mode_includes_broken_features(self, tmp_path):
+        """Broken features (not just missing requirements) also trigger strict loop."""
+        self._strict_config(tmp_path, max_strict_iterations=1)
+        compliance_clean = (
+            {
+                "total_requirements": 0,
+                "implemented": 0,
+                "missing": 0,
+                "details": [],
+                "cost_usd": 0.2,
+            },
+            0.2,
+        )
+        verification_broken_then_clean = iter(
+            [
+                (
+                    {
+                        "total_features": 1,
+                        "verified_working": 0,
+                        "broken": 1,
+                        "manual_review": 0,
+                        "details": [
+                            {
+                                "feature": "atomic_write",
+                                "status": "fail",
+                                "reason": "race condition",
+                                "test": "test_atomic.py::x",
+                            }
+                        ],
+                        "cost_usd": 0.2,
+                    },
+                    0.2,
+                ),
+                (
+                    {
+                        "total_features": 1,
+                        "verified_working": 1,
+                        "broken": 0,
+                        "manual_review": 0,
+                        "details": [],
+                        "cost_usd": 0.2,
+                    },
+                    0.2,
+                ),
+            ]
+        )
+
+        with (
+            patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+            patch.object(Orchestrator, "_run_spec_compliance", return_value=compliance_clean),
+            patch.object(
+                Orchestrator,
+                "_run_feature_verification",
+                side_effect=lambda *a, **kw: next(verification_broken_then_clean),
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+
+        events = _read_telemetry(tmp_path)
+        iters = [e for e in events if e["type"] == "strict_mode_iteration"]
+        assert len(iters) == 1
+        assert iters[0]["broken_features"] == 0  # converged
+        assert iters[0]["converged"] is True
