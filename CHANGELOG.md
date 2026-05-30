@@ -3,6 +3,28 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.8] — 2026-05-30
+
+### Added — code QA pipeline foundations (T1.8.1 – T1.8.4)
+- New `src/superpower_workflow/project_detect.py` module: inspects a project root for marker files (pyproject.toml, package.json, Cargo.toml, go.mod, tsconfig.json, pom.xml, Gemfile) and returns a `ProjectProfile` with detected languages, per-language `verify_commands`, and per-language `quality_gates`.
+- Per-language QA gate templates:
+  - **Python**: bandit (security), radon (complexity), pip-audit (deps), mypy (types)
+  - **TypeScript/JavaScript**: npm audit (deps), tsc --noEmit (types)
+  - **Rust**: cargo audit, clippy, rustfmt
+  - **Go**: govulncheck, gosec, golangci-lint
+- `sw init` now auto-detects project language and populates `verify_commands` with sensible defaults (ruff for Python, eslint for JS/TS, cargo clippy for Rust, golangci-lint for Go). Legacy null-stub behavior preserved with `--minimal`.
+- New `sw init --with-quality-gates` flag: pre-populates the `quality_gates` block with language-detected security/complexity/dep-scan commands. Internal teams running `sw init --with-quality-gates` in a Python project get a working bandit+pip-audit+radon+mypy gate set in one command.
+- **Mixed-language projects (G1.8.6)**: when both `pyproject.toml` and `package.json` are present, primary language wins for `verify_commands` but `quality_gates` merge — `dep_scan` from secondaries fills in if absent in primary.
+
+### Changed
+- `_cmd_init` signature gained `with_quality_gates: bool = False` and `minimal: bool = False`. CLI dispatch reads them from argparse. Backward-compatible — existing callers passing only `project_root` continue to work.
+
+### Deferred to v1.1.8.1
+- Wiring quality-gate failures into the strict-mode loop (T1.8.3). The strict loop's existing missing/broken sources work; adding quality-gate findings needs careful sequencing + integration testing that wasn't safe to land overnight. Scoped for the next patch.
+
+### Stats
+- Test count: 1173 → **1195** passing (+22 project_detect + +6 init quality-gates integration).
+
 ## [1.1.7] — 2026-05-30
 
 The "soak harvest" release: ships the v1.1.6 A/B-soak findings as defaults, the planned spec linter, the cache-hit-rate analytics unlocked by the token-extraction fix, and a CI fix for the imminent Node 20 deprecation.

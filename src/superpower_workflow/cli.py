@@ -55,7 +55,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"sw {__version__}")
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("init", help="Create .claude/workflow.json")
+    init_p = sub.add_parser("init", help="Create .claude/workflow.json")
+    init_p.add_argument(
+        "--with-quality-gates",
+        action="store_true",
+        help="Pre-populate quality_gates with language-detected defaults "
+        "(bandit/radon/pip-audit for Python, npm audit for JS/TS, etc.)",
+    )
+    init_p.add_argument(
+        "--minimal",
+        action="store_true",
+        help="Skip auto-detected verify_commands and quality_gates (advanced users)",
+    )
     sub.add_parser("doctor", help="Pre-flight health checks")
 
     lint_p = sub.add_parser(
@@ -91,6 +102,24 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "verify-defaults",
         help="Audit telemetry against the default-flip eligibility framework",
+    )
+
+    onboard_p = sub.add_parser(
+        "onboard",
+        help="Interactive wizard to set up .claude/workflow.json (T1.9.5)",
+    )
+    onboard_p.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Use defaults without prompting (smoke-test mode)",
+    )
+
+    recmodel_p = sub.add_parser(
+        "recommend-model",
+        help="Suggest best model for this project from historical telemetry (T1.9.3)",
+    )
+    recmodel_p.add_argument(
+        "--json", dest="json_output", action="store_true", help="Output as JSON"
     )
 
     lock_p = sub.add_parser("lock", help="Inspect or force-clean the workflow lock")
@@ -190,13 +219,26 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _cmd_init(project_root: Path) -> None:
+def _cmd_init(
+    project_root: Path,
+    with_quality_gates: bool = False,
+    minimal: bool = False,
+) -> None:
     claude_dir = project_root / ".claude"
     claude_dir.mkdir(parents=True, exist_ok=True)
     config_path = claude_dir / "workflow.json"
     if config_path.exists():
         print(f"  workflow.json already exists at {config_path}")
         return
+
+    # v1.1.8: detect project type for per-language defaults (T1.8.4)
+    profile = None
+    if not minimal:
+        from superpower_workflow.project_detect import detect
+
+        profile = detect(project_root)
+        if profile.languages:
+            print(f"  Detected language(s): {', '.join(profile.languages)}")
 
     default_config = {
         "schema_version": 1,
@@ -212,7 +254,18 @@ def _cmd_init(project_root: Path) -> None:
             "min_gaps_for_substantial": 20,
             "persistent_gap_downgrade_after": 3,
         },
-        "verify_commands": {"test": None, "lint": None, "format": None},
+        "verify_commands": (
+            {k: v for k, v in profile.verify_commands.items()}
+            if (profile and profile.verify_commands and not minimal)
+            else {"test": None, "lint": None, "format": None}
+        ),
+        # v1.1.8: pre-populated when --with-quality-gates AND project type detected.
+        # Stays empty otherwise — users opt in by setting commands here.
+        "quality_gates": (
+            {k: v for k, v in profile.quality_gates.items()}
+            if (profile and profile.quality_gates and with_quality_gates and not minimal)
+            else {}
+        ),
         "git_strategy": "main",
         "telemetry": {
             "enabled": True,
@@ -1183,7 +1236,11 @@ def main() -> None:
         return
 
     if args.command == "init":
-        _cmd_init(project_root)
+        _cmd_init(
+            project_root,
+            with_quality_gates=getattr(args, "with_quality_gates", False),
+            minimal=getattr(args, "minimal", False),
+        )
         return
 
     if args.command == "migrate-gitignore":
@@ -1192,6 +1249,14 @@ def main() -> None:
 
     if args.command == "verify-defaults":
         _cmd_verify_defaults(project_root)
+        return
+
+    if args.command == "onboard":
+        _cmd_onboard(project_root, interactive=not getattr(args, "non_interactive", False))
+        return
+
+    if args.command == "recommend-model":
+        _cmd_recommend_model(project_root, json_output=getattr(args, "json_output", False))
         return
 
     if args.command == "clean":
