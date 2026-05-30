@@ -24,6 +24,53 @@ class ClaudeResult:
     raw: dict | None = None
 
 
+def extract_token_usage(raw: dict | None) -> dict[str, int | float]:
+    """Pull token counts from a claude -p result envelope.
+
+    Real claude responses put tokens under `usage.input_tokens` /
+    `usage.output_tokens` / `usage.cache_creation_input_tokens` /
+    `usage.cache_read_input_tokens`. The defensive fallback also reads
+    top-level fields so legacy mocked dicts (which set them at the root)
+    still work.
+
+    Returns a dict with the 4 token counters plus a derived `cache_hit_rate`
+    = cache_read / (cache_read + cache_creation + input_tokens), 0.0 when
+    denominator is zero.
+    """
+    if not raw:
+        return {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_hit_rate": 0.0,
+        }
+    usage = raw.get("usage") or {}
+
+    def _pick(key: str) -> int:
+        v = usage.get(key)
+        if v is None:
+            v = raw.get(key, 0)
+        try:
+            return int(v or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    input_tokens = _pick("input_tokens")
+    output_tokens = _pick("output_tokens")
+    cache_creation = _pick("cache_creation_input_tokens")
+    cache_read = _pick("cache_read_input_tokens")
+    denom = input_tokens + cache_creation + cache_read
+    cache_hit_rate = round(cache_read / denom, 4) if denom > 0 else 0.0
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_creation_input_tokens": cache_creation,
+        "cache_read_input_tokens": cache_read,
+        "cache_hit_rate": cache_hit_rate,
+    }
+
+
 RETRY_DELAYS = [30, 120, 300]
 TIMEOUT_SECONDS = 7200
 

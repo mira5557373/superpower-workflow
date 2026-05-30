@@ -90,18 +90,55 @@ def ci_fix_loop(
     system_prompt: str = "",
     fallback_model: str | None = None,
     on_attempt: Callable[[int, int, str], None] | None = None,
-) -> tuple[bool, float]:
+) -> tuple[bool, float, dict[str, int | float]]:
+    """Run the CI-fix loop. Returns (success, total_cost, aggregated_token_usage).
+
+    aggregated_token_usage sums input_tokens / output_tokens / cache_* across
+    every claude -p call this loop made; cache_hit_rate is recomputed from the
+    aggregated counters. Returns zeros when no claude calls were made.
+    """
+    from superpower_workflow.runner import extract_token_usage
+
     timeout = ci_config.get("wait_timeout_seconds", 600)
     poll = ci_config.get("poll_interval_seconds", 30)
     max_attempts = ci_config.get("max_fix_attempts", 3)
     fix_model = ci_config.get("model", model)
     total_cost = 0.0
+    agg = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_hit_rate": 0.0,
+    }
+
+    def _accumulate(raw: dict | None) -> None:
+        u = extract_token_usage(raw)
+        for k in (
+            "input_tokens",
+            "output_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        ):
+            agg[k] += int(u[k])
+
+    def _finalize_rate() -> None:
+        denom = (
+            agg["input_tokens"]
+            + agg["cache_creation_input_tokens"]
+            + agg["cache_read_input_tokens"]
+        )
+        agg["cache_hit_rate"] = (
+            round(agg["cache_read_input_tokens"] / denom, 4) if denom > 0 else 0.0
+        )
 
     result = wait_for_ci(cwd, timeout_seconds=timeout, poll_interval_seconds=poll)
     if result.status == "passed":
-        return True, 0.0
+        _finalize_rate()
+        return True, 0.0, agg
     if result.status == "timeout":
-        return False, 0.0
+        _finalize_rate()
+        return False, 0.0, agg
 
     for attempt in range(max_attempts):
         if on_attempt:
@@ -118,6 +155,7 @@ def ci_fix_loop(
             fallback_model=fallback_model,
         )
         total_cost += r.cost_usd
+        _accumulate(r.raw)
         push = subprocess.run(["git", "push"], capture_output=True, cwd=cwd, timeout=60)
         if push.returncode != 0:
             if on_attempt:
@@ -128,6 +166,8 @@ def ci_fix_loop(
         if result.status == "passed":
             if on_attempt:
                 on_attempt(attempt + 1, max_attempts, "passed")
-            return True, total_cost
+            _finalize_rate()
+            return True, total_cost, agg
 
-    return False, total_cost
+    _finalize_rate()
+    return False, total_cost, agg

@@ -138,7 +138,7 @@ class TestCiFixLoop:
             return CIResult(status="passed", run_id="100")
 
         with patch("superpower_workflow.integrations.ci_fix.wait_for_ci", side_effect=mock_wait):
-            success, cost = ci_fix_loop(
+            success, cost, _tokens = ci_fix_loop(
                 cwd=".",
                 ci_config=self._ci_config(),
                 run_claude_fn=lambda *a, **kw: ClaudeResult(),
@@ -171,7 +171,7 @@ class TestCiFixLoop:
             patch("superpower_workflow.integrations.ci_fix.subprocess.run") as mock_sub,
         ):
             mock_sub.return_value = CompletedProcess(args=[], returncode=0, stdout="", stderr="")
-            success, cost = ci_fix_loop(
+            success, cost, _tokens = ci_fix_loop(
                 cwd=".",
                 ci_config=self._ci_config(),
                 run_claude_fn=mock_claude,
@@ -194,7 +194,7 @@ class TestCiFixLoop:
             patch("superpower_workflow.integrations.ci_fix.subprocess.run") as mock_sub,
         ):
             mock_sub.return_value = CompletedProcess(args=[], returncode=0, stdout="", stderr="")
-            success, cost = ci_fix_loop(
+            success, cost, _tokens = ci_fix_loop(
                 cwd=".",
                 ci_config=self._ci_config(max_fix_attempts=2),
                 run_claude_fn=mock_claude,
@@ -209,7 +209,7 @@ class TestCiFixLoop:
             return CIResult(status="timeout")
 
         with patch("superpower_workflow.integrations.ci_fix.wait_for_ci", side_effect=mock_wait):
-            success, cost = ci_fix_loop(
+            success, cost, _tokens = ci_fix_loop(
                 cwd=".",
                 ci_config=self._ci_config(),
                 run_claude_fn=lambda *a, **kw: ClaudeResult(),

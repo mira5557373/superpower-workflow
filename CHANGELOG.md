@@ -3,6 +3,30 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.6] — 2026-05-30
+
+### Fixed — silent bug eliminated (T1.6.1)
+- **Token counts were always 0 in every `PhaseCompleted` event since v1.0.** `r.raw.get("input_tokens")` read at the top level of the claude response envelope, but claude returns tokens under `r.raw["usage"]["input_tokens"]`. Every cost-per-token, cache-hit-rate, and tokens-per-dollar analytic since launch has been broken. Fix: new `extract_token_usage()` helper in `runner.py` canonicalizes extraction across all five phase emission sites (Phase A/B/C/D/E).
+- Added two new fields to `PhaseCompleted`: `cache_creation_input_tokens` and `cache_read_input_tokens`. Computed derived field `cache_hit_rate = cache_read / (input + cache_creation + cache_read)`.
+- Extended `SwPhase` SQLAlchemy model with the same two columns; `db/writer.py` and `db/sync_adapter.py` updated with defensive `usage.*` fallback for legacy event dicts.
+- Phase E (ci_fix) previously hardcoded tokens to 0 because `ci_fix_loop` didn't surface them. Changed signature to `tuple[bool, float, dict[str, int|float]]` returning aggregated token usage across the loop; orchestrator unpacks via `**ci_tokens`.
+
+### Added — operational tooling (T1.6.2, T1.6.4)
+- `sw migrate-gitignore` — idempotently appends missing sw + Python entries to an existing project's `.gitignore`. Internal teams upgrading from v1.1.x can run this once to pick up the new entries.
+- `sw verify-defaults` — audits a project's `.claude/telemetry.jsonl` against the default-flip eligibility framework: a feature flips from off→on by default only after ≥3 milestones of data showing positive ROI (curator: avg attrition ≥ 30%; strict mode: convergence ≥ 80%).
+- New `python_entries` in `sw init` gitignore template: `.coverage`, `.coverage.*`, `htmlcov/`, `.tox/`, `.mypy_cache/`, `.ruff_cache/`, `.pytest_cache/`. Tripped the orchestrator's uncommitted-changes preflight in multiple real soaks.
+
+### Changed
+- Extracted `SW_GITIGNORE_ENTRIES` and `PYTHON_GITIGNORE_ENTRIES` to module-level constants in `cli.py` so the migrate command and regression tests share one source of truth.
+- `ci_fix_loop` return signature changed from `(success, cost)` to `(success, cost, tokens)`. Internal API; not part of the user-facing CLI.
+
+### Stats
+- Test count: 1099 → **1115** passing (+8 token-extraction tests + 7 gitignore tests + 6 verify-defaults tests + token regression).
+- Full CI matrix expected green on ubuntu + windows × py3.11 + py3.12 + build-wheel.
+
+### Coming next (per the approved roadmap)
+- v1.1.6 ships these foundation fixes. The 12-run A/B soak (curator on/off × strict on/off × 3 trials, $90 cap) will run after this release lands, producing the data to justify default flips in v1.2.0.
+
 ## [1.1.5] — 2026-05-29
 
 ### Added — gap curator (opt-in)

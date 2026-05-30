@@ -149,11 +149,16 @@ class DbSyncAdapter:
                             phase_obj.status = event.get("status", "completed")
                             phase_obj.cost_usd = event.get("cost_usd", phase_obj.cost_usd)
                             phase_obj.duration_ms = event.get("duration_ms", phase_obj.duration_ms)
+                            # Defensive: prefer top-level (post-v1.1.6) but fall back to
+                            # usage.* for legacy event dicts.
+                            usage = event.get("usage") or {}
                             phase_obj.input_tokens = event.get(
-                                "input_tokens", phase_obj.input_tokens
+                                "input_tokens",
+                                usage.get("input_tokens", phase_obj.input_tokens),
                             )
                             phase_obj.output_tokens = event.get(
-                                "output_tokens", phase_obj.output_tokens
+                                "output_tokens",
+                                usage.get("output_tokens", phase_obj.output_tokens),
                             )
 
                 if event_type == "run_completed":

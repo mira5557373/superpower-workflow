@@ -95,6 +95,9 @@ class PhaseCompleted(TelemetryEvent):
     session_id: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_hit_rate: float = 0.0
 
 
 @dataclass

@@ -39,7 +39,7 @@ from superpower_workflow.prompts import (
     phase_d_prompt,
     system_prompt,
 )
-from superpower_workflow.runner import ClaudeResult, run_claude
+from superpower_workflow.runner import ClaudeResult, extract_token_usage, run_claude
 from superpower_workflow.security import SecretsHandler, generate_sbom, sign_artifact
 from superpower_workflow.state import (
     GAP_REPORT_FILE,
@@ -804,8 +804,7 @@ class Orchestrator:
                 cost_usd=r.cost_usd,
                 duration_ms=r.duration_ms,
                 session_id=r.session_id,
-                input_tokens=r.raw.get("input_tokens", 0) if r.raw else 0,
-                output_tokens=r.raw.get("output_tokens", 0) if r.raw else 0,
+                **extract_token_usage(r.raw),
             )
         )
         logger.log("PHASE_A_COMPLETE", cost=round(r.cost_usd, 2))
@@ -858,8 +857,7 @@ class Orchestrator:
                 cost_usd=r.cost_usd,
                 duration_ms=r.duration_ms,
                 session_id=r.session_id,
-                input_tokens=r.raw.get("input_tokens", 0) if r.raw else 0,
-                output_tokens=r.raw.get("output_tokens", 0) if r.raw else 0,
+                **extract_token_usage(r.raw),
             )
         )
         logger.log("PHASE_B_COMPLETE", cost=round(r.cost_usd, 2))
@@ -991,8 +989,7 @@ class Orchestrator:
                 cost_usd=r.cost_usd,
                 duration_ms=r.duration_ms,
                 session_id=r.session_id,
-                input_tokens=r.raw.get("input_tokens", 0) if r.raw else 0,
-                output_tokens=r.raw.get("output_tokens", 0) if r.raw else 0,
+                **extract_token_usage(r.raw),
             )
         )
         logger.log("PHASE_C_COMPLETE", cost=round(r.cost_usd, 2))
@@ -1102,8 +1099,7 @@ class Orchestrator:
                 cost_usd=r.cost_usd,
                 duration_ms=r.duration_ms,
                 session_id=r.session_id,
-                input_tokens=r.raw.get("input_tokens", 0) if r.raw else 0,
-                output_tokens=r.raw.get("output_tokens", 0) if r.raw else 0,
+                **extract_token_usage(r.raw),
             )
         )
         logger.log("PHASE_D_COMPLETE", cost=round(r.cost_usd, 2))
@@ -1171,7 +1167,7 @@ class Orchestrator:
                     },
                 )
 
-            ci_success, ci_cost = ci_fix_loop(
+            ci_success, ci_cost, ci_tokens = ci_fix_loop(
                 cwd=self.cwd,
                 ci_config=ci_config,
                 run_claude_fn=run_claude,
@@ -1196,6 +1192,7 @@ class Orchestrator:
                     cost_usd=round(ci_cost, 2),
                     duration_ms=0,
                     session_id="",
+                    **ci_tokens,
                 )
             )
             self._audit.append(

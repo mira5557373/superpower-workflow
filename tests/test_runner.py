@@ -9,8 +9,81 @@ from unittest.mock import MagicMock, patch
 from superpower_workflow.runner import (
     RETRY_DELAYS,
     TIMEOUT_SECONDS,
+    extract_token_usage,
     run_claude,
 )
+
+
+class TestExtractTokenUsage:
+    """Regression: pre-v1.1.6 read tokens at top level. Claude returns them
+    under `usage.input_tokens` / etc., so every PhaseCompleted event since v1.0
+    logged 0/0. This helper canonicalizes extraction across all 5 phases."""
+
+    def test_extracts_from_usage_nested(self):
+        # Matches real claude -p response structure (verified against M1 soak)
+        raw = {
+            "result": "ok",
+            "total_cost_usd": 0.18,
+            "usage": {
+                "input_tokens": 3,
+                "output_tokens": 13,
+                "cache_creation_input_tokens": 29522,
+                "cache_read_input_tokens": 0,
+            },
+        }
+        u = extract_token_usage(raw)
+        assert u["input_tokens"] == 3
+        assert u["output_tokens"] == 13
+        assert u["cache_creation_input_tokens"] == 29522
+        assert u["cache_read_input_tokens"] == 0
+
+    def test_computes_cache_hit_rate(self):
+        raw = {
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 900,
+            }
+        }
+        u = extract_token_usage(raw)
+        # denom = 100 + 0 + 900 = 1000; rate = 900/1000 = 0.9
+        assert u["cache_hit_rate"] == 0.9
+
+    def test_falls_back_to_top_level(self):
+        """Legacy mocks that set tokens at root should still work."""
+        raw = {"input_tokens": 42, "output_tokens": 7}
+        u = extract_token_usage(raw)
+        assert u["input_tokens"] == 42
+        assert u["output_tokens"] == 7
+
+    def test_handles_none(self):
+        u = extract_token_usage(None)
+        assert u["input_tokens"] == 0
+        assert u["output_tokens"] == 0
+        assert u["cache_hit_rate"] == 0.0
+
+    def test_handles_empty_dict(self):
+        u = extract_token_usage({})
+        assert u["input_tokens"] == 0
+        assert u["cache_hit_rate"] == 0.0
+
+    def test_denom_zero_means_rate_zero(self):
+        raw = {"usage": {"input_tokens": 0, "output_tokens": 0}}
+        u = extract_token_usage(raw)
+        assert u["cache_hit_rate"] == 0.0
+
+    def test_coerces_string_numbers(self):
+        raw = {"usage": {"input_tokens": "100", "output_tokens": "50"}}
+        u = extract_token_usage(raw)
+        assert u["input_tokens"] == 100
+        assert u["output_tokens"] == 50
+
+    def test_handles_garbage_values(self):
+        raw = {"usage": {"input_tokens": None, "output_tokens": "not-a-number"}}
+        u = extract_token_usage(raw)
+        assert u["input_tokens"] == 0
+        assert u["output_tokens"] == 0
 
 
 class TestRunClaudeReturnsParseResult:

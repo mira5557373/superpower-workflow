@@ -174,9 +174,14 @@ class TelemetryDbWriter:
                     phase_obj.status = event_dict.get("status", "completed")
                     phase_obj.cost_usd = event_dict.get("cost_usd", phase_obj.cost_usd)
                     phase_obj.duration_ms = event_dict.get("duration_ms", phase_obj.duration_ms)
-                    phase_obj.input_tokens = event_dict.get("input_tokens", phase_obj.input_tokens)
+                    # Prefer top-level (post-v1.1.6 events) but fall back to usage.* for
+                    # legacy dicts that pass the raw claude envelope through.
+                    usage = event_dict.get("usage") or {}
+                    phase_obj.input_tokens = event_dict.get(
+                        "input_tokens", usage.get("input_tokens", phase_obj.input_tokens)
+                    )
                     phase_obj.output_tokens = event_dict.get(
-                        "output_tokens", phase_obj.output_tokens
+                        "output_tokens", usage.get("output_tokens", phase_obj.output_tokens)
                     )
 
         if event_type == "run_completed" and self._run_uuid:

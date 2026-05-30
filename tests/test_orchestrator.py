@@ -48,6 +48,18 @@ def _ok_result(cost=1.0):
     return ClaudeResult(text="done", cost_usd=cost, session_id="s1", is_error=False)
 
 
+def _empty_tokens():
+    """ci_fix_loop returns (success, cost, tokens) post-v1.1.6. Mocks supply
+    a zero-tokens dict so PhaseCompleted unpacks correctly."""
+    return {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_hit_rate": 0.0,
+    }
+
+
 def _smart_subprocess(*args, **kwargs):
     cmd = args[0] if args else kwargs.get("args", [])
     if isinstance(cmd, list) and len(cmd) >= 2:
@@ -1621,7 +1633,7 @@ def test_orchestrator_runs_phase_e_when_ci_enabled(tmp_path):
         patch("superpower_workflow.orchestrator.ci_fix_loop") as mock_ci,
         patch("superpower_workflow.orchestrator.send_notification"),
     ):
-        mock_ci.return_value = (True, 0.5)
+        mock_ci.return_value = (True, 0.5, _empty_tokens())
         orch = Orchestrator(tmp_path)
         orch.run()
 
@@ -1675,7 +1687,7 @@ def test_orchestrator_phase_e_cost_added(tmp_path):
         patch("superpower_workflow.orchestrator.ci_fix_loop") as mock_ci,
         patch("superpower_workflow.orchestrator.send_notification"),
     ):
-        mock_ci.return_value = (True, 3.0)
+        mock_ci.return_value = (True, 3.0, _empty_tokens())
         orch = Orchestrator(tmp_path)
         orch.run()
 
@@ -1705,7 +1717,7 @@ def test_orchestrator_phase_e_failure_does_not_fail_milestone(tmp_path):
         patch("superpower_workflow.orchestrator.ci_fix_loop") as mock_ci,
         patch("superpower_workflow.orchestrator.send_notification"),
     ):
-        mock_ci.return_value = (False, 2.0)
+        mock_ci.return_value = (False, 2.0, _empty_tokens())
         orch = Orchestrator(tmp_path)
         orch.run()
 
@@ -2165,6 +2177,60 @@ class TestOrchestratorStateSteps:
 
         loaded = load_state(claude_dir)
         assert loaded.current_step == "spec_compliance"
+
+
+class TestTokenExtractionRegression:
+    """T1.6.1 — every PhaseCompleted event since v1.0 logged input_tokens=0
+    because the orchestrator read r.raw["input_tokens"] but claude returns
+    tokens under r.raw["usage"]["input_tokens"]. Confirm post-fix telemetry."""
+
+    def test_phase_completed_carries_real_tokens_from_usage(self, tmp_path):
+        _config(tmp_path)
+
+        def claude_with_usage(prompt, **kw):
+            return ClaudeResult(
+                text="done",
+                cost_usd=1.0,
+                session_id="abc",
+                is_error=False,
+                raw={
+                    "result": "done",
+                    "total_cost_usd": 1.0,
+                    "session_id": "abc",
+                    "usage": {
+                        "input_tokens": 3,
+                        "output_tokens": 13,
+                        "cache_creation_input_tokens": 29522,
+                        "cache_read_input_tokens": 12000,
+                    },
+                },
+            )
+
+        with (
+            patch(
+                "superpower_workflow.orchestrator.run_claude",
+                side_effect=claude_with_usage,
+            ),
+            patch(
+                "superpower_workflow.orchestrator.subprocess.run",
+                side_effect=_smart_subprocess,
+            ),
+        ):
+            orch = Orchestrator(tmp_path)
+            orch.run()
+
+        events = _read_telemetry(tmp_path)
+        phase_events = [e for e in events if e["type"] == "phase_completed"]
+        assert phase_events, "expected at least one phase_completed event"
+        for e in phase_events:
+            assert e["input_tokens"] == 3, (
+                f"input_tokens should come from usage.input_tokens, got {e['input_tokens']}"
+            )
+            assert e["output_tokens"] == 13
+            assert e["cache_creation_input_tokens"] == 29522
+            assert e["cache_read_input_tokens"] == 12000
+            # cache_hit_rate = 12000 / (3 + 29522 + 12000) = 12000/41525 = 0.289...
+            assert 0.28 < e["cache_hit_rate"] < 0.30
 
 
 class TestGapCuratorIntegration:

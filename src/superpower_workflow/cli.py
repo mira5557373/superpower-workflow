@@ -9,6 +9,46 @@ from pathlib import Path
 
 from superpower_workflow import __version__
 
+# Gitignore templates — extracted as module constants so `sw migrate-gitignore`
+# (T1.6.2) can apply the same set to existing projects idempotently.
+SW_GITIGNORE_ENTRIES: tuple[str, ...] = (
+    ".claude/workflow-state.json",
+    ".claude/.workflow-phase.json",
+    ".claude/.gap-report.json",
+    ".claude/.gap-report.raw.json",
+    ".claude/.workflow.lock",
+    ".claude/.workflow.lock.json",
+    ".claude/.workflow.lock.filelock",
+    ".claude/workflow-complete.json",
+    ".claude/workflow-*.log",
+    ".claude/telemetry.jsonl",
+    ".claude/audit-trail.jsonl",
+    ".worktrees/",
+    ".claude/.gap-validation.json",
+    ".claude/.spec-compliance.json",
+    ".claude/.feature-verification.json",
+    ".claude/.quality-gate-results.json",
+    ".claude/reports/",
+)
+
+PYTHON_GITIGNORE_ENTRIES: tuple[str, ...] = (
+    ".venv/",
+    "__pycache__/",
+    "*.pyc",
+    "dist/",
+    "build/",
+    "*.egg-info/",
+    # Coverage + tool caches (T1.6.2: gap G1.6.5 — these have tripped the
+    # orchestrator's uncommitted-changes preflight in real soaks)
+    ".coverage",
+    ".coverage.*",
+    "htmlcov/",
+    ".tox/",
+    ".mypy_cache/",
+    ".ruff_cache/",
+    ".pytest_cache/",
+)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sw", description="Superpower Workflow Orchestrator")
@@ -22,6 +62,14 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="Show progress")
     sub.add_parser("resume", help="Resume from failure point")
     sub.add_parser("clean", help="Remove runtime files")
+    sub.add_parser(
+        "migrate-gitignore",
+        help="Append missing sw + Python entries to .gitignore (idempotent)",
+    )
+    sub.add_parser(
+        "verify-defaults",
+        help="Audit telemetry against the default-flip eligibility framework",
+    )
 
     lock_p = sub.add_parser("lock", help="Inspect or force-clean the workflow lock")
     lock_sub = lock_p.add_subparsers(dest="lock_command")
@@ -258,36 +306,9 @@ def _cmd_init(project_root: Path) -> None:
             print(f"  Auto-discovered spec: {config['spec']}")
 
     gitignore = project_root / ".gitignore"
-    entries = [
-        ".claude/workflow-state.json",
-        ".claude/.workflow-phase.json",
-        ".claude/.gap-report.json",
-        ".claude/.gap-report.raw.json",
-        ".claude/.workflow.lock",
-        ".claude/.workflow.lock.json",
-        ".claude/.workflow.lock.filelock",
-        ".claude/workflow-complete.json",
-        ".claude/workflow-*.log",
-        ".claude/telemetry.jsonl",
-        ".claude/audit-trail.jsonl",
-        ".worktrees/",
-        ".claude/.gap-validation.json",
-        ".claude/.spec-compliance.json",
-        ".claude/.feature-verification.json",
-        ".claude/.quality-gate-results.json",
-        ".claude/reports/",
-    ]
-    python_entries = [
-        ".venv/",
-        "__pycache__/",
-        "*.pyc",
-        "dist/",
-        "build/",
-        "*.egg-info/",
-    ]
     existing = gitignore.read_text() if gitignore.exists() else ""
-    sw_new = [e for e in entries if e not in existing]
-    py_new = [e for e in python_entries if e not in existing]
+    sw_new = [e for e in SW_GITIGNORE_ENTRIES if e not in existing]
+    py_new = [e for e in PYTHON_GITIGNORE_ENTRIES if e not in existing]
     with open(gitignore, "a") as f:
         if sw_new:
             f.write("\n# superpower-workflow runtime files\n")
@@ -378,6 +399,122 @@ def _install_project_local(claude_dir: Path) -> None:
 
     settings_path.write_text(json.dumps(settings, indent=2))
     print("  Configured settings.local.json (superpowers + hook + permissions)")
+
+
+def _cmd_migrate_gitignore(project_root: Path) -> None:
+    """T1.6.2 / G1.6.6 — idempotently add missing sw + Python entries to an
+    existing project's .gitignore.
+
+    Reads the file (creates empty if absent), checks each constant against
+    the current content with substring match, appends only the missing ones
+    under labeled sections. Safe to re-run; no changes if everything is
+    already present.
+    """
+    gitignore = project_root / ".gitignore"
+    existing = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
+    sw_new = [e for e in SW_GITIGNORE_ENTRIES if e not in existing]
+    py_new = [e for e in PYTHON_GITIGNORE_ENTRIES if e not in existing]
+
+    if not sw_new and not py_new:
+        print("  .gitignore is up to date (no entries missing)")
+        return
+
+    lines: list[str] = []
+    if sw_new:
+        lines.append("")
+        lines.append("# superpower-workflow runtime files")
+        lines.extend(sw_new)
+    if py_new:
+        lines.append("")
+        lines.append("# Python standard ignores")
+        lines.extend(py_new)
+
+    if existing and not existing.endswith("\n"):
+        existing += "\n"
+    gitignore.write_text(existing + "\n".join(lines) + "\n", encoding="utf-8")
+    print(f"  Added {len(sw_new) + len(py_new)} entries to {gitignore}")
+    if sw_new:
+        print(f"    sw entries: {len(sw_new)}")
+    if py_new:
+        print(f"    python entries: {len(py_new)}")
+
+
+def _cmd_verify_defaults(project_root: Path) -> None:
+    """T1.6.4 / G1.6.8 — audit telemetry against the default-flip framework.
+
+    The rule (documented in CHANGELOG): an opt-in feature flag flips from
+    `false` → `true` only after >=3 milestones of data showing positive ROI
+    (attrition >= 30% AND no quality regression).
+
+    This command reads `.claude/telemetry.jsonl` and tells you whether each
+    currently-off feature qualifies to be turned on by default in the next
+    release.
+    """
+    telemetry = project_root / ".claude" / "telemetry.jsonl"
+    if not telemetry.exists():
+        print(f"  No telemetry found at {telemetry}")
+        print("  Run at least 3 milestones before verify-defaults will be useful.")
+        return
+
+    curation_events: list[dict] = []
+    strict_events: list[dict] = []
+    milestone_count = 0
+    try:
+        for line in telemetry.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            t = e.get("type", "")
+            if t == "gap_curation_completed":
+                curation_events.append(e)
+            elif t == "strict_mode_iteration":
+                strict_events.append(e)
+            elif t == "milestone_completed":
+                milestone_count += 1
+    except OSError as err:
+        print(f"  Could not read telemetry: {err}")
+        return
+
+    print(f"\n  Milestones completed: {milestone_count}")
+    print(f"  Curation events:      {len(curation_events)}")
+    print(f"  Strict iterations:    {len(strict_events)}")
+    print()
+
+    if milestone_count < 3:
+        print("  STATUS: insufficient data (need >= 3 completed milestones).")
+        return
+
+    # gap_curator default-flip check
+    if curation_events:
+        attritions = [e.get("attrition_pct", 0.0) for e in curation_events]
+        avg_attrition = sum(attritions) / len(attritions) if attritions else 0.0
+        passes = avg_attrition >= 30.0
+        verdict = "QUALIFIES" if passes else "INSUFFICIENT"
+        print(
+            f"  validation.gap_curator default-flip: {verdict} "
+            f"(avg attrition {avg_attrition:.1f}%, target >= 30%)"
+        )
+    else:
+        print("  validation.gap_curator default-flip: no curation data collected")
+
+    # strict_mode default-flip check
+    if strict_events:
+        converged = sum(1 for e in strict_events if e.get("converged"))
+        conv_rate = converged / len(strict_events) * 100.0
+        passes = conv_rate >= 80.0
+        verdict = "QUALIFIES" if passes else "INSUFFICIENT"
+        print(
+            f"  validation.strict_mode default-flip: {verdict} "
+            f"(convergence {conv_rate:.0f}%, target >= 80%)"
+        )
+    else:
+        print(
+            "  validation.strict_mode default-flip: no strict iterations observed "
+            "(may be already-clean output)"
+        )
 
 
 def _cmd_metrics(project_root: Path, json_output: bool = False) -> None:
@@ -839,6 +976,14 @@ def main() -> None:
 
     if args.command == "init":
         _cmd_init(project_root)
+        return
+
+    if args.command == "migrate-gitignore":
+        _cmd_migrate_gitignore(project_root)
+        return
+
+    if args.command == "verify-defaults":
+        _cmd_verify_defaults(project_root)
         return
 
     if args.command == "clean":
