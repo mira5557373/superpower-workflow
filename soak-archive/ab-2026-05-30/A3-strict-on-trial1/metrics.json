@@ -1,0 +1,69 @@
+{
+  "phase_costs": [
+    1.0103997500000002,
+    2.8446232500000006,
+    1.209073,
+    0.2025575
+  ],
+  "phase_tokens": [
+    {
+      "phase": "plan",
+      "input": 21,
+      "output": 18161,
+      "cache_creation": 38077,
+      "cache_read": 627727,
+      "cache_hit_rate": 0.9428
+    },
+    {
+      "phase": "implement",
+      "input": 85,
+      "output": 19535,
+      "cache_creation": 65367,
+      "cache_read": 3886479,
+      "cache_hit_rate": 0.9834
+    },
+    {
+      "phase": "review",
+      "input": 27,
+      "output": 17530,
+      "cache_creation": 55510,
+      "cache_read": 840751,
+      "cache_hit_rate": 0.938
+    },
+    {
+      "phase": "push",
+      "input": 6,
+      "output": 318,
+      "cache_creation": 24832,
+      "cache_read": 73415,
+      "cache_hit_rate": 0.7472
+    }
+  ],
+  "spec_compliance": [
+    {
+      "total": 15,
+      "implemented": 15,
+      "missing": 0,
+      "cost": 0.19994374999999998
+    }
+  ],
+  "feature_verification": [
+    {
+      "total": 15,
+      "verified": 14,
+      "broken": 0,
+      "manual_review": 1,
+      "cost": 0.19099575
+    }
+  ],
+  "curation": [],
+  "strict_iterations": [],
+  "milestone_cost": 5.66,
+  "milestone_duration_s": 1428.3,
+  "total_cost_usd": 5.66,
+  "status": "complete",
+  "test_file_count": 2,
+  "config": "A3-strict-on",
+  "trial": 1,
+  "wall_seconds": 1441
+}

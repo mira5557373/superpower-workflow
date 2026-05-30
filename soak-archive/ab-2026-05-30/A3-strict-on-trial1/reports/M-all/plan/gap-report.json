@@ -1,0 +1,30 @@
+{
+  "pass": 1,
+  "critical_gaps": 0,
+  "architectural_gaps": 0,
+  "important_gaps": 0,
+  "minor_gaps": 5,
+  "deferred_gaps": 0,
+  "total_gaps_found": 15,
+  "gaps_fixed_this_pass": 10,
+  "tests_green": true,
+  "lint_clean": true,
+  "converged": true,
+  "gap_summaries": [
+    "[ultrathink] 🔴 FIXED: CLI test store isolation — Tasks 13-20 had no mechanism to redirect storage away from ~/.todo/store.json. Fixed: added TODO_STORE_PATH env var to TodoStore.__init__ (Task 3) and conftest fixture (Task 1), CLI tests use monkeypatch.setenv.",
+    "[ultrathink] 🔴 FIXED: Windows os.chmod(0o600) — os.chmod only handles read-only flag on Windows. Task 2 test_store_file_permissions would fail. Fixed: added sys.platform guard in storage implementation (Task 3) and pytest.mark.skipif in test (Task 2).",
+    "[ultrathink] 🟡 FIXED: Missing if __name__ == '__main__' guard in cli.py — Task 14 didn't include it, needed for python -m todo.cli invocation in tests. Fixed: added to Task 14.",
+    "[ultrathink] 🟡 FIXED: Timestamp assertion strategy unspecified — Tasks 4, 13 test output with timestamps but didn't specify how to handle non-deterministic values. Fixed: specified datetime.fromisoformat() validation in Tasks 4 and 13, frozen time for Task 21 deterministic test.",
+    "[ultrathink] 🟡 FIXED: Task 10 verify statement incorrect — said 'all tests PASS after implementation' but this is the RED phase. Fixed: changed to 'FAIL (RED)'.",
+    "[ultrathink] 🟡 FIXED: ruff missing from dev dependencies — Task 1 listed pytest, pytest-cov but not ruff. Fixed: added ruff to Task 1 dev dependencies.",
+    "[ultrathink] 🟡 FIXED: No test for todo with no subcommand — argparse exits non-zero but no test covered it. Fixed: added test_no_subcommand_exits_nonzero to Task 21.",
+    "[ultrathink] 🟡 FIXED: ID reuse after rm untested — After rm(2) from [1,2,3], next add should get ID 4. Fixed: added test_add_id_after_rm to Task 4.",
+    "[ultrathink] 🟡 FIXED: List output ordering undefined — Spec requires deterministic output but order wasn't specified. Fixed: specified ascending ID order in architecture and Task 7.",
+    "[ultrathink] 🟡 FIXED: Store path configuration in CLI undefined — Task 14 didn't describe how main() constructs TodoStore. Fixed: specified TodoStore() picks up from TODO_STORE_PATH env var.",
+    "[ultrathink] 🔵 Remaining: Task 12 bypasses TDD RED phase — tests pass with existing implementation, documenting behavior rather than driving it. Acceptable for locking in atomicity.",
+    "[ultrathink] 🔵 Remaining: Error message format for unknown ID loosely specified — test_cli_done_unknown_id_prints_error doesn't specify exact message. Error format defined in Task 18/20 as 'Error: todo <id> not found'.",
+    "[ultrathink] 🔵 Remaining: No test for done on already-done todo — behavior undefined by spec. Current impl silently succeeds (no-op). Acceptable.",
+    "[ultrathink] 🔵 Remaining: No test for special characters in todo text — quotes, Unicode, newlines. Low risk since JSON handles these natively.",
+    "[ultrathink] 🔵 Remaining: Dependency graph showed Task 12 blocking CLI tasks — fixed to show CLI depends on storage implementation tasks, not Task 12."
+  ]
+}

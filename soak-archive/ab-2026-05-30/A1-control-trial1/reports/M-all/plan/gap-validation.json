@@ -1,0 +1,85 @@
+{
+  "total_gaps": 11,
+  "valid_gaps": 0,
+  "invalid_gaps": 3,
+  "unverifiable_gaps": 8,
+  "duplicate_gaps": 0,
+  "validations": [
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b4 FIXED: File path mismatch \u00e2\u20ac\u201d plan used todo/store.py and tests/test_store.py but workflow.json milestone specifies todo/storage.py and tests/test_storage.py. Renamed all references.",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {
+        "file_exists": false
+      },
+      "reason": "todo/store.py not found; tests/test_store.py not found; workflow.js not found; todo/storage.py not found; tests/test_storage.py not found"
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b4 FIXED: Task 8 referenced click.testing.CliRunner but project uses argparse (no click dependency). Changed to main() + monkeypatched sys.argv + capsys.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: No pip install -e . step in Task 1 \u00e2\u20ac\u201d CLI subprocess tests require package installation. Added to scaffolding task.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: Timestamp tests would be flaky \u00e2\u20ac\u201d no time-freezing or regex approach mentioned. Added note to use regex matching for ISO-8601 assertions.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: test_atomic_write_uses_tmp mocked rename (tests implementation not behavior). Changed to test_atomic_write_no_partial_file (verifies no .tmp artifact remains).",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: test_load_corrupted_json had ambiguous behavior (raise error or return empty). Clarified: raises SystemExit.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: test_done_already_done had rambling spec analysis instead of a clear decision. Made explicit: idempotent, exits 0.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: todo/models.py was outside milestone paths (workflow.json lists only storage.py and cli.py). Merged Todo dataclass into storage.py.",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {
+        "file_exists": false
+      },
+      "reason": "todo/models.py not found; workflow.js not found; storage.py not found; cli.py not found"
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: No sort order test for list command. Added test_list_sorted_by_id.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b5 REMAINING: CLAUDE.md originally said 'click or argparse' \u00e2\u20ac\u201d updated to 'argparse' but this is cosmetic.",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {
+        "file_exists": true,
+        "symbol_found": false
+      },
+      "reason": "REMAINING not found in codebase"
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b5 REMAINING: Task 18 test_empty_store_list duplicated Task 10 test_list_empty \u00e2\u20ac\u201d removed duplicate.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    }
+  ]
+}

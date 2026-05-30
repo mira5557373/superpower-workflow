@@ -1,0 +1,141 @@
+{
+  "total_features": 22,
+  "verified_working": 18,
+  "broken": 0,
+  "manual_review": 4,
+  "details": [
+    {
+      "feature": "todo add appends a new todo",
+      "status": "pass",
+      "test": "test_cli.py::TestCliAdd::test_cli_add_prints_todo",
+      "reason": "Test adds a todo and verifies output contains the text. Passes."
+    },
+    {
+      "feature": "todo add assigns a unique integer id",
+      "status": "pass",
+      "test": "test_storage.py::TestAddTodo::test_add_todo_increments_id",
+      "reason": "Test adds two todos and asserts ids are 1 and 2. Passes."
+    },
+    {
+      "feature": "todo add sets status to open",
+      "status": "pass",
+      "test": "test_storage.py::TestAddTodo::test_add_todo_status_is_open",
+      "reason": "Test asserts new todo has status 'open'. Passes."
+    },
+    {
+      "feature": "todo add records ISO-8601 timestamp",
+      "status": "pass",
+      "test": "test_storage.py::TestAddTodo::test_add_todo_created_is_iso8601",
+      "reason": "Test asserts created field matches ISO-8601 regex pattern. Passes."
+    },
+    {
+      "feature": "todo list prints todos, default shows only open",
+      "status": "pass",
+      "test": "test_cli.py::TestCliList::test_cli_list_shows_open_only",
+      "reason": "Test adds two todos, marks one done, lists without --all, asserts only open todo shown. Passes."
+    },
+    {
+      "feature": "todo list --all includes done todos",
+      "status": "pass",
+      "test": "test_cli.py::TestCliList::test_cli_list_all_shows_everything",
+      "reason": "Test adds two todos, marks one done, lists with --all, asserts both shown. Passes."
+    },
+    {
+      "feature": "todo done flips status from open to done",
+      "status": "pass",
+      "test": "test_storage.py::TestMarkDone::test_done_changes_status",
+      "reason": "Test marks todo done and asserts status is 'done'. Passes."
+    },
+    {
+      "feature": "todo done errors with exit 1 if id is unknown",
+      "status": "pass",
+      "test": "test_cli.py::TestCliDone::test_cli_done_unknown_id_exit_1",
+      "reason": "Test runs done with nonexistent id 999 and asserts exit code 1. Passes."
+    },
+    {
+      "feature": "todo rm removes a todo permanently",
+      "status": "pass",
+      "test": "test_cli.py::TestCliRm::test_cli_rm_removes_todo",
+      "reason": "Test adds todo, removes it, lists --all and asserts empty output. Passes."
+    },
+    {
+      "feature": "todo rm errors with exit 1 if id is unknown",
+      "status": "pass",
+      "test": "test_cli.py::TestCliRm::test_cli_rm_unknown_id_exit_1",
+      "reason": "Test runs rm with nonexistent id 999 and asserts exit code 1. Passes."
+    },
+    {
+      "feature": "Storage at ~/.todo/store.json",
+      "status": "pass",
+      "test": "test_storage.py::TestStoreInit::test_default_path_from_env",
+      "reason": "Code hardcodes default path as ~/.todo/store.json in storage.py:10. Env var override test confirms path mechanism works."
+    },
+    {
+      "feature": "Storage directory auto-created",
+      "status": "pass",
+      "test": "test_storage.py::TestStoreInit::test_load_creates_directory_and_file",
+      "reason": "Test creates store in nonexistent subdir and asserts file exists after add. Passes."
+    },
+    {
+      "feature": "Storage file has 0o600 permissions",
+      "status": "pass",
+      "test": "test_storage.py::TestStoreFilePermissions::test_store_file_permissions",
+      "reason": "Test asserts file mode is 0o600 after write. Skipped on Windows where code also skips chmod (os.name != 'nt' guard). Correct on both platforms."
+    },
+    {
+      "feature": "Atomic writes via .tmp then rename",
+      "status": "pass",
+      "test": "test_storage.py::TestEdgeCases::test_atomic_write_no_tmp_left_behind",
+      "reason": "Test asserts no .tmp files remain after write. Code uses write-to-.tmp then os.replace. Passes."
+    },
+    {
+      "feature": "All commands deterministic \u00e2\u20ac\u201d identical output given identical state",
+      "status": "manual_review",
+      "test": "N/A",
+      "reason": "Architectural property. Output depends on timestamps recorded at creation time, so identical state produces identical output, but verifying determinism across invocations requires time mocking. Requires manual review."
+    },
+    {
+      "feature": "Output is plain text, one todo per line: <id> <status> <created> <text>",
+      "status": "pass",
+      "test": "test_cli.py::TestCliList::test_cli_list_output_format",
+      "reason": "Test asserts each output line matches regex pattern '<id> <status> <timestamp> <text>'. Passes."
+    },
+    {
+      "feature": "ruff check . clean",
+      "status": "pass",
+      "test": "ruff_check_invocation",
+      "reason": "Ran 'ruff check .' directly. Output: 'All checks passed!'"
+    },
+    {
+      "feature": "pytest -q passes with tests for every CLI subcommand + storage edge cases",
+      "status": "pass",
+      "test": "pytest_suite_invocation",
+      "reason": "Ran 'pytest -v'. Result: 47 passed, 1 skipped (Windows permissions). All subcommands and edge cases covered."
+    },
+    {
+      "feature": "pytest --cov >= 90% coverage on todo/ package",
+      "status": "pass",
+      "test": "pytest_cov_invocation",
+      "reason": "Ran 'pytest --cov=todo'. Coverage: 98% total (cli.py 98%, storage.py 98%). Exceeds 90% threshold."
+    },
+    {
+      "feature": "No tags, due dates, priorities, or recurring tasks",
+      "status": "manual_review",
+      "test": "N/A",
+      "reason": "Absence-of-feature constraint. No such fields exist in storage.py or cli.py, but proving absence requires manual code review, not a pass/fail test."
+    },
+    {
+      "feature": "No interactive mode",
+      "status": "manual_review",
+      "test": "N/A",
+      "reason": "Absence-of-feature constraint. CLI uses argparse only with no interactive input loops, but proving absence requires manual code review."
+    },
+    {
+      "feature": "No multi-user or network features",
+      "status": "manual_review",
+      "test": "N/A",
+      "reason": "Absence-of-feature constraint. No network imports or multi-user logic exist, but proving absence requires manual code review."
+    }
+  ],
+  "cost_usd": 0.320542
+}

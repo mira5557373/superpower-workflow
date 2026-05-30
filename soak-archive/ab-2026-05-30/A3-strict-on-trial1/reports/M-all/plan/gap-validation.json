@@ -1,0 +1,105 @@
+{
+  "total_gaps": 15,
+  "valid_gaps": 0,
+  "invalid_gaps": 2,
+  "unverifiable_gaps": 13,
+  "duplicate_gaps": 0,
+  "validations": [
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b4 FIXED: CLI test store isolation \u00e2\u20ac\u201d Tasks 13-20 had no mechanism to redirect storage away from ~/.todo/store.json. Fixed: added TODO_STORE_PATH env var to TodoStore.__init__ (Task 3) and conftest fixture (Task 1), CLI tests use monkeypatch.setenv.",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {
+        "file_exists": false
+      },
+      "reason": "/.todo/store.js not found"
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b4 FIXED: Windows os.chmod(0o600) \u00e2\u20ac\u201d os.chmod only handles read-only flag on Windows. Task 2 test_store_file_permissions would fail. Fixed: added sys.platform guard in storage implementation (Task 3) and pytest.mark.skipif in test (Task 2).",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: Missing if __name__ == '__main__' guard in cli.py \u00e2\u20ac\u201d Task 14 didn't include it, needed for python -m todo.cli invocation in tests. Fixed: added to Task 14.",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {
+        "file_exists": false
+      },
+      "reason": "cli.py not found"
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: Timestamp assertion strategy unspecified \u00e2\u20ac\u201d Tasks 4, 13 test output with timestamps but didn't specify how to handle non-deterministic values. Fixed: specified datetime.fromisoformat() validation in Tasks 4 and 13, frozen time for Task 21 deterministic test.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: Task 10 verify statement incorrect \u00e2\u20ac\u201d said 'all tests PASS after implementation' but this is the RED phase. Fixed: changed to 'FAIL (RED)'.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: ruff missing from dev dependencies \u00e2\u20ac\u201d Task 1 listed pytest, pytest-cov but not ruff. Fixed: added ruff to Task 1 dev dependencies.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: No test for todo with no subcommand \u00e2\u20ac\u201d argparse exits non-zero but no test covered it. Fixed: added test_no_subcommand_exits_nonzero to Task 21.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: ID reuse after rm untested \u00e2\u20ac\u201d After rm(2) from [1,2,3], next add should get ID 4. Fixed: added test_add_id_after_rm to Task 4.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: List output ordering undefined \u00e2\u20ac\u201d Spec requires deterministic output but order wasn't specified. Fixed: specified ascending ID order in architecture and Task 7.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: Store path configuration in CLI undefined \u00e2\u20ac\u201d Task 14 didn't describe how main() constructs TodoStore. Fixed: specified TodoStore() picks up from TODO_STORE_PATH env var.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b5 Remaining: Task 12 bypasses TDD RED phase \u00e2\u20ac\u201d tests pass with existing implementation, documenting behavior rather than driving it. Acceptable for locking in atomicity.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b5 Remaining: Error message format for unknown ID loosely specified \u00e2\u20ac\u201d test_cli_done_unknown_id_prints_error doesn't specify exact message. Error format defined in Task 18/20 as 'Error: todo <id> not found'.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b5 Remaining: No test for done on already-done todo \u00e2\u20ac\u201d behavior undefined by spec. Current impl silently succeeds (no-op). Acceptable.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b5 Remaining: No test for special characters in todo text \u00e2\u20ac\u201d quotes, Unicode, newlines. Low risk since JSON handles these natively.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b5 Remaining: Dependency graph showed Task 12 blocking CLI tasks \u00e2\u20ac\u201d fixed to show CLI depends on storage implementation tasks, not Task 12.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    }
+  ]
+}

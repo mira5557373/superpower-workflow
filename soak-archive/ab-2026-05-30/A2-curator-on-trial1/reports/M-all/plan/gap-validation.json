@@ -1,0 +1,153 @@
+{
+  "total_gaps": 22,
+  "valid_gaps": 0,
+  "invalid_gaps": 4,
+  "unverifiable_gaps": 18,
+  "duplicate_gaps": 0,
+  "validations": [
+    {
+      "gap": "[ultrathink] CLI test invocation method unspecified \u00e2\u20ac\u201d tests/test_cli.py would fail because `todo` console script isn't on PATH without install; fixed: use sys.executable -m todo.cli",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {
+        "file_exists": false
+      },
+      "reason": "tests/test_cli.py not found"
+    },
+    {
+      "gap": "[ultrathink] Timestamp nondeterminism breaks assertions \u00e2\u20ac\u201d Tasks 14/16/24 assert output with timestamps but no strategy specified; fixed: use regex patterns r\"\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\"",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] CLI test storage path mechanism inconsistent \u00e2\u20ac\u201d Task 14 says env var/monkeypatch, Task 15 says --store-path flag; fixed: standardized on TODO_STORE_PATH env var",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Non-integer ID argument not tested \u00e2\u20ac\u201d todo done abc / todo rm abc argparse behavior untested; fixed: added type=int and test_cli_done_non_integer_id_exit_nonzero",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] done on already-done todo behavior unspecified \u00e2\u20ac\u201d spec says 'flips open to done' but silent on repeat; fixed: specified idempotent behavior with test",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] done/rm success output undefined \u00e2\u20ac\u201d spec output format exists but plan didn't assign it to commands; fixed: done prints updated todo, rm prints nothing",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Platform-conditional permission tests missing \u00e2\u20ac\u201d 0o600 doesn't work on Windows; fixed: skipif os.name=='nt' and guard chmod in code",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Corrupted JSON behavior undefined \u00e2\u20ac\u201d Task 12 tests for it without specifying expected behavior; fixed: ValueError with message",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] conftest.py missing from plan \u00e2\u20ac\u201d CLI tests need shared run_cli fixture; fixed: added to architecture and Task 14",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {
+        "file_exists": false
+      },
+      "reason": "conftest.py not found"
+    },
+    {
+      "gap": "[ultrathink] E2E test claims exact output but timestamps vary \u00e2\u20ac\u201d Task 24 said 'verify exact output'; fixed: use regex/split assertions",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Task 1 missing pip install -e \u00e2\u20ac\u201d without it console script doesn't exist; fixed: added pip install -e '.[dev]'",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Storage path ~ expansion not specified \u00e2\u20ac\u201d Store(path='~/.todo/store.json') needs expanduser; fixed: Path.expanduser() in Store.__init__",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {
+        "file_exists": false
+      },
+      "reason": "/.todo/store.js not found"
+    },
+    {
+      "gap": "[ultrathink] add text argument handling unclear \u00e2\u20ac\u201d single positional vs nargs='+'; fixed: single positional arg per spec syntax",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Error message format/channel undefined \u00e2\u20ac\u201d plan didn't specify stderr or message format; fixed: stderr with 'error: todo <id> not found'",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Minor: no __main__.py for python -m todo \u00e2\u20ac\u201d not in spec, deferred",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {
+        "file_exists": false
+      },
+      "reason": "__main__.py not found"
+    },
+    {
+      "gap": "[ultrathink] Minor: dev dependency declaration style unspecified \u00e2\u20ac\u201d fixed: [project.optional-dependencies]",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Minor: list handler naming could shadow Python builtin \u00e2\u20ac\u201d implementation detail",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Minor: --strict-markers not in pytest config \u00e2\u20ac\u201d low priority",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Minor: empty text todo add '' behavior unspecified \u00e2\u20ac\u201d not in spec",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Minor: risk register mitigations vague \u00e2\u20ac\u201d improved inline",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Minor: list with only done items and no --all \u00e2\u20ac\u201d implicitly empty output",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] Minor: JSON array order preservation assumed \u00e2\u20ac\u201d correct per JSON spec",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    }
+  ]
+}

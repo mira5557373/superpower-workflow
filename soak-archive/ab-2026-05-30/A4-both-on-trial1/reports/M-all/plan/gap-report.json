@@ -1,0 +1,19 @@
+{
+  "curated_gaps": [],
+  "dropped_count": 12,
+  "dropped_reasons": {
+    "unanchored": 0,
+    "spec_duplicate": 0,
+    "trivial": 11,
+    "speculative": 1
+  },
+  "critical_gaps": 0,
+  "architectural_gaps": 0,
+  "important_gaps": 0,
+  "minor_gaps": 0,
+  "deferred_gaps": 0,
+  "total_gaps_found": 0,
+  "converged": true,
+  "curated": true,
+  "cost_usd": 0.17997375000000002
+}

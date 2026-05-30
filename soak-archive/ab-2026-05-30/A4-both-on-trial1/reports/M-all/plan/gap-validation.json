@@ -1,0 +1,94 @@
+{
+  "total_gaps": 12,
+  "valid_gaps": 0,
+  "invalid_gaps": 4,
+  "unverifiable_gaps": 8,
+  "duplicate_gaps": 0,
+  "validations": [
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b4 FIXED: File naming mismatch \u00e2\u20ac\u201d plan used todo/store.py and tests/test_store.py but workflow.json milestone M-all specifies todo/storage.py and tests/test_storage.py. Renamed all references.",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {
+        "file_exists": false
+      },
+      "reason": "todo/store.py not found; tests/test_store.py not found; workflow.js not found; todo/storage.py not found; tests/test_storage.py not found"
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b4 FIXED: CLAUDE.md module map listed store.py instead of storage.py. Updated to match.",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {
+        "file_exists": false,
+        "symbol_found": false
+      },
+      "reason": "FIXED not found in codebase; store.py not found; storage.py not found"
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1-arch FIXED: Unnecessary models.py module \u00e2\u20ac\u201d Todo dataclass merged into storage.py to align with milestone tracked paths (todo/storage.py, todo/cli.py). Removed test_models.py, consolidated into test_storage.py.",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {
+        "file_exists": false
+      },
+      "reason": "models.py not found; storage.py not found; todo/storage.py not found; todo/cli.py not found; test_models.py not found; test_storage.py not found"
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: No timestamp freezing specified in test tasks T09/T13. Added frozen_time fixture to conftest.py (T04) and referenced in T09 test descriptions with deterministic timestamp assertions.",
+      "state": "invalid",
+      "confidence": 0.1,
+      "checks": {
+        "file_exists": false
+      },
+      "reason": "conftest.py not found"
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: T19 equivocated on done-on-already-done behavior. Resolved: exit 1, since spec says 'flips from open to done' implying open precondition. Added explicit test in T13.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: T01 missing dev dependencies. Added [project.optional-dependencies] dev = ['pytest', 'pytest-cov', 'ruff'] and pip install step.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: T08 missing main(argv=None) signature. Added explicit contract: accepts optional argv for testability, uses sys.argv[1:] when None.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: T07 didn't assert id argument parsed as int. Added type=int assertion for done and rm id args.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: T11 missing sort-order test. Added test that list output is sorted by id ascending.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u0178\u00a1 FIXED: Design decisions table added to plan documenting all resolved ambiguities (done-on-done, rm silence, timestamp format, main signature).",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b5 REMAINING: T15 assumes rm is silent on success \u00e2\u20ac\u201d reasonable but spec doesn't explicitly state it. Documented in Design Decisions table.",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    },
+    {
+      "gap": "[ultrathink] \u00f0\u0178\u201d\u00b5 REMAINING: Dependency graph could show T04-T06 explicitly depending on T03 (currently noted in text but not in ASCII graph).",
+      "state": "unverifiable",
+      "confidence": 0.5,
+      "checks": {}
+    }
+  ]
+}

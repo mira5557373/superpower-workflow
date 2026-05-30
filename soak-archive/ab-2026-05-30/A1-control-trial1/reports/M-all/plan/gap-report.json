@@ -1,0 +1,26 @@
+{
+  "pass": 1,
+  "critical_gaps": 0,
+  "architectural_gaps": 0,
+  "important_gaps": 0,
+  "minor_gaps": 2,
+  "deferred_gaps": 0,
+  "total_gaps_found": 11,
+  "gaps_fixed_this_pass": 9,
+  "tests_green": true,
+  "lint_clean": true,
+  "converged": true,
+  "gap_summaries": [
+    "[ultrathink] 🔴 FIXED: File path mismatch — plan used todo/store.py and tests/test_store.py but workflow.json milestone specifies todo/storage.py and tests/test_storage.py. Renamed all references.",
+    "[ultrathink] 🔴 FIXED: Task 8 referenced click.testing.CliRunner but project uses argparse (no click dependency). Changed to main() + monkeypatched sys.argv + capsys.",
+    "[ultrathink] 🟡 FIXED: No pip install -e . step in Task 1 — CLI subprocess tests require package installation. Added to scaffolding task.",
+    "[ultrathink] 🟡 FIXED: Timestamp tests would be flaky — no time-freezing or regex approach mentioned. Added note to use regex matching for ISO-8601 assertions.",
+    "[ultrathink] 🟡 FIXED: test_atomic_write_uses_tmp mocked rename (tests implementation not behavior). Changed to test_atomic_write_no_partial_file (verifies no .tmp artifact remains).",
+    "[ultrathink] 🟡 FIXED: test_load_corrupted_json had ambiguous behavior (raise error or return empty). Clarified: raises SystemExit.",
+    "[ultrathink] 🟡 FIXED: test_done_already_done had rambling spec analysis instead of a clear decision. Made explicit: idempotent, exits 0.",
+    "[ultrathink] 🟡 FIXED: todo/models.py was outside milestone paths (workflow.json lists only storage.py and cli.py). Merged Todo dataclass into storage.py.",
+    "[ultrathink] 🟡 FIXED: No sort order test for list command. Added test_list_sorted_by_id.",
+    "[ultrathink] 🔵 REMAINING: CLAUDE.md originally said 'click or argparse' — updated to 'argparse' but this is cosmetic.",
+    "[ultrathink] 🔵 REMAINING: Task 18 test_empty_store_list duplicated Task 10 test_list_empty — removed duplicate."
+  ]
+}

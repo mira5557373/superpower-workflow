@@ -1,0 +1,160 @@
+{
+  "curated_gaps": [
+    {
+      "summary": "CLI test invocation method unspecified \u00e2\u20ac\u201d tests will fail because `todo` console script isn't on PATH without install",
+      "file": "tests/test_cli.py",
+      "line": null,
+      "symbol": "run_cli",
+      "predicted_defect": "All CLI integration tests fail with FileNotFoundError or command-not-found when invoking `todo` as a subprocess",
+      "fix_recommendation": "Invoke CLI in tests via `subprocess.run([sys.executable, '-m', 'todo.cli', ...])` instead of `todo`",
+      "severity": "important",
+      "confidence": 0.95
+    },
+    {
+      "summary": "Timestamp nondeterminism breaks test assertions \u00e2\u20ac\u201d tasks assert output containing timestamps but no strategy to handle varying values",
+      "file": "tests/test_cli.py",
+      "line": null,
+      "symbol": "assert",
+      "predicted_defect": "Tests intermittently fail when timestamp second rolls over between add and assert",
+      "fix_recommendation": "Assert timestamps with regex pattern `r'\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}'` instead of exact string match",
+      "severity": "important",
+      "confidence": 0.95
+    },
+    {
+      "summary": "CLI test storage path mechanism inconsistent \u00e2\u20ac\u201d plan Task 14 says env var/monkeypatch, Task 15 says --store-path flag",
+      "file": "todo/storage.py",
+      "line": null,
+      "symbol": "Store.__init__",
+      "predicted_defect": "Tests write to real ~/.todo/store.json or fail due to conflicting isolation mechanisms",
+      "fix_recommendation": "Standardize on `TODO_STORE_PATH` env var read in Store.__init__ with os.environ.get fallback to default path",
+      "severity": "important",
+      "confidence": 0.9
+    },
+    {
+      "summary": "Non-integer ID argument not validated \u00e2\u20ac\u201d `todo done abc` / `todo rm abc` produces unhelpful argparse error",
+      "file": "todo/cli.py",
+      "line": null,
+      "symbol": "add_argument('id')",
+      "predicted_defect": "Non-integer ID input produces argparse's generic error message instead of clean exit-1 with app error",
+      "fix_recommendation": "Use `add_argument('id', type=int)` in done/rm subparsers and add test `test_cli_done_non_integer_id_exit_nonzero`",
+      "severity": "important",
+      "confidence": 0.92
+    },
+    {
+      "summary": "done on already-done todo behavior unspecified \u00e2\u20ac\u201d spec says 'flips open to done' but silent on repeat invocation",
+      "file": "todo/storage.py",
+      "line": null,
+      "symbol": "Store.done",
+      "predicted_defect": "Calling `todo done <id>` twice may raise, silently no-op, or flip back \u00e2\u20ac\u201d undefined behavior",
+      "fix_recommendation": "Make idempotent: if already done, return successfully without error; add test `test_done_already_done_idempotent`",
+      "severity": "minor",
+      "confidence": 0.85
+    },
+    {
+      "summary": "done/rm success output undefined \u00e2\u20ac\u201d plan didn't specify what these commands print on success",
+      "file": "todo/cli.py",
+      "line": null,
+      "symbol": "handle_done",
+      "predicted_defect": "done/rm commands produce no output or inconsistent output, breaking scripted usage expectations",
+      "fix_recommendation": "`done` prints updated todo line in standard format; `rm` prints nothing (silent success)",
+      "severity": "important",
+      "confidence": 0.88
+    },
+    {
+      "summary": "Platform-conditional permission tests missing \u00e2\u20ac\u201d 0o600 chmod doesn't work on Windows",
+      "file": "tests/test_storage.py",
+      "line": null,
+      "symbol": "test_file_permissions",
+      "predicted_defect": "Permission tests fail on Windows CI/dev environments with OSError or wrong mode bits",
+      "fix_recommendation": "Add `@pytest.mark.skipif(os.name == 'nt', reason='chmod not supported on Windows')` and guard `os.chmod` in storage.py",
+      "severity": "minor",
+      "confidence": 0.93
+    },
+    {
+      "summary": "Corrupted JSON behavior undefined \u00e2\u20ac\u201d storage reads invalid JSON but expected behavior not specified",
+      "file": "todo/storage.py",
+      "line": null,
+      "symbol": "Store.load",
+      "predicted_defect": "Corrupted store.json causes unhandled JSONDecodeError traceback instead of clean error",
+      "fix_recommendation": "Catch `json.JSONDecodeError` in load, raise `ValueError('corrupted store: ...')` with exit 1 in CLI",
+      "severity": "important",
+      "confidence": 0.9
+    },
+    {
+      "summary": "conftest.py missing from plan \u00e2\u20ac\u201d CLI tests need shared fixtures for subprocess invocation and temp store path",
+      "file": "tests/conftest.py",
+      "line": null,
+      "symbol": "run_cli",
+      "predicted_defect": "Test code duplicates subprocess boilerplate across test files; fixture inconsistencies cause subtle failures",
+      "fix_recommendation": "Add `tests/conftest.py` with `run_cli` fixture wrapping `subprocess.run([sys.executable, '-m', 'todo.cli', ...])` and tmp_path store",
+      "severity": "minor",
+      "confidence": 0.8
+    },
+    {
+      "summary": "Task 1 missing pip install -e \u00e2\u20ac\u201d without editable install, imports and console_scripts don't resolve",
+      "file": "pyproject.toml",
+      "line": null,
+      "symbol": "pip install -e",
+      "predicted_defect": "ModuleNotFoundError when running tests or CLI after initial project setup",
+      "fix_recommendation": "Add `pip install -e '.[dev]'` as first step in Task 1 setup instructions",
+      "severity": "important",
+      "confidence": 0.92
+    },
+    {
+      "summary": "Storage path ~ expansion not specified \u00e2\u20ac\u201d Store('~/.todo/store.json') passes literal tilde to Path",
+      "file": "todo/storage.py",
+      "line": null,
+      "symbol": "Store.__init__",
+      "predicted_defect": "FileNotFoundError: `~/.todo/store.json` treated as literal path instead of expanding to home directory",
+      "fix_recommendation": "Call `Path(path).expanduser()` in `Store.__init__`",
+      "severity": "important",
+      "confidence": 0.95
+    },
+    {
+      "summary": "add text argument handling unclear \u00e2\u20ac\u201d single positional vs nargs='+' produces different parsing behavior",
+      "file": "todo/cli.py",
+      "line": null,
+      "symbol": "add_argument('text')",
+      "predicted_defect": "`todo add hello world` either fails (single positional) or joins incorrectly (nargs='+' without join)",
+      "fix_recommendation": "Use single positional arg: `add_argument('text')` \u00e2\u20ac\u201d user quotes multi-word text per spec syntax `todo add \"<text>\"`",
+      "severity": "important",
+      "confidence": 0.85
+    },
+    {
+      "summary": "Error message format/channel undefined \u00e2\u20ac\u201d plan didn't specify stderr or message format for errors",
+      "file": "todo/cli.py",
+      "line": null,
+      "symbol": "handle_error",
+      "predicted_defect": "Errors print to stdout instead of stderr, polluting piped output; inconsistent message format",
+      "fix_recommendation": "Print `error: todo <id> not found` to stderr via `print(..., file=sys.stderr)` and `sys.exit(1)`",
+      "severity": "important",
+      "confidence": 0.88
+    },
+    {
+      "summary": "Empty text todo behavior unspecified \u00e2\u20ac\u201d `todo add ''` creates a todo with blank text",
+      "file": "todo/cli.py",
+      "line": null,
+      "symbol": "handle_add",
+      "predicted_defect": "Empty-string todos are silently created, producing malformed output lines with trailing whitespace",
+      "fix_recommendation": "Validate `text.strip()` is non-empty in add handler; print error to stderr and exit 1 if blank",
+      "severity": "minor",
+      "confidence": 0.75
+    }
+  ],
+  "dropped_count": 8,
+  "dropped_reasons": {
+    "unanchored": 1,
+    "spec_duplicate": 1,
+    "trivial": 3,
+    "speculative": 3
+  },
+  "critical_gaps": 0,
+  "architectural_gaps": 0,
+  "important_gaps": 10,
+  "minor_gaps": 4,
+  "deferred_gaps": 0,
+  "total_gaps_found": 14,
+  "converged": false,
+  "curated": true,
+  "cost_usd": 0.26254125
+}

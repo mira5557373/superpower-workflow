@@ -1,0 +1,99 @@
+{
+  "total_features": 15,
+  "verified_working": 14,
+  "broken": 0,
+  "manual_review": 1,
+  "details": [
+    {
+      "feature": "todo add appends a new todo with a unique integer id",
+      "status": "pass",
+      "test": "test_storage.py::test_add_returns_todo_with_id",
+      "reason": "Verifies id is int; test_add_auto_increments_id confirms uniqueness"
+    },
+    {
+      "feature": "todo add sets status to open",
+      "status": "pass",
+      "test": "test_storage.py::test_add_returns_todo_with_id",
+      "reason": "Asserts todo['status'] == 'open'"
+    },
+    {
+      "feature": "todo add records ISO-8601 timestamp",
+      "status": "pass",
+      "test": "test_storage.py::test_add_returns_todo_with_id",
+      "reason": "Calls datetime.fromisoformat(todo['created']) which would raise on non-ISO-8601"
+    },
+    {
+      "feature": "todo list prints todos",
+      "status": "pass",
+      "test": "test_cli.py::test_cli_list_shows_open_only",
+      "reason": "Verifies list subcommand produces output lines with todo text"
+    },
+    {
+      "feature": "todo list default shows only open",
+      "status": "pass",
+      "test": "test_storage.py::test_list_default_returns_open_only",
+      "reason": "Saves open+done todos, list() returns only the open one"
+    },
+    {
+      "feature": "todo list --all includes done",
+      "status": "pass",
+      "test": "test_cli.py::test_cli_list_all_flag",
+      "reason": "Adds open+done todos, list --all returns both lines"
+    },
+    {
+      "feature": "todo done flips status from open to done",
+      "status": "pass",
+      "test": "test_storage.py::test_done_flips_status",
+      "reason": "Adds a task, calls done(1), asserts status == 'done'"
+    },
+    {
+      "feature": "todo done errors with exit 1 if id is unknown",
+      "status": "pass",
+      "test": "test_cli.py::test_cli_done_unknown_id_exits_1",
+      "reason": "Asserts SystemExit with code 1 for nonexistent id 999"
+    },
+    {
+      "feature": "todo rm removes a todo permanently",
+      "status": "pass",
+      "test": "test_storage.py::test_rm_removes_todo",
+      "reason": "Adds a task, rm(1), load() returns empty list"
+    },
+    {
+      "feature": "todo rm errors with exit 1 if id is unknown",
+      "status": "pass",
+      "test": "test_cli.py::test_cli_rm_unknown_id_exits_1",
+      "reason": "Asserts SystemExit with code 1 for nonexistent id 999"
+    },
+    {
+      "feature": "Storage at ~/.todo/store.json auto-created",
+      "status": "pass",
+      "test": "test_storage.py::test_init_creates_directory",
+      "reason": "Creates store in nonexistent subdir, asserts directory was created"
+    },
+    {
+      "feature": "Store file permissions 0o600",
+      "status": "manual_review",
+      "test": "test_storage.py::test_store_file_permissions",
+      "reason": "Test exists but is skipped on win32 (current platform). Code correctly guards with sys.platform != 'win32'. Cannot verify on this OS."
+    },
+    {
+      "feature": "Atomic writes via .tmp then rename",
+      "status": "pass",
+      "test": "test_storage.py::test_atomic_write_no_partial_on_disk",
+      "reason": "Asserts no .tmp file remains after save; test_save_preserves_existing_on_failure verifies original data survives a failed write"
+    },
+    {
+      "feature": "All commands deterministic - identical output given identical state",
+      "status": "pass",
+      "test": "test_cli.py::test_deterministic_output",
+      "reason": "Creates identical state twice with mocked timestamp, asserts output strings are equal"
+    },
+    {
+      "feature": "Plain text output one todo per line: <id> <status> <created> <text>",
+      "status": "pass",
+      "test": "test_cli.py::test_output_format",
+      "reason": "Regex matches pattern ^\\d+ (open|done) \\d{4}-\\d{2}-\\d{2}T.+ .+$"
+    }
+  ],
+  "cost_usd": 0.19099575
+}

@@ -1,0 +1,81 @@
+{
+  "phase_costs": [
+    0.9808109999999999,
+    1.5447899999999994,
+    0.96053725,
+    0.20729975000000003
+  ],
+  "phase_tokens": [
+    {
+      "phase": "plan",
+      "input": 20,
+      "output": 18124,
+      "cache_creation": 38308,
+      "cache_read": 567522,
+      "cache_hit_rate": 0.9367
+    },
+    {
+      "phase": "implement",
+      "input": 46,
+      "output": 14066,
+      "cache_creation": 51730,
+      "cache_read": 1731115,
+      "cache_hit_rate": 0.971
+    },
+    {
+      "phase": "review",
+      "input": 23,
+      "output": 13267,
+      "cache_creation": 48811,
+      "cache_read": 640677,
+      "cache_hit_rate": 0.9292
+    },
+    {
+      "phase": "push",
+      "input": 6,
+      "output": 447,
+      "cache_creation": 25051,
+      "cache_read": 73712,
+      "cache_hit_rate": 0.7463
+    }
+  ],
+  "spec_compliance": [
+    {
+      "total": 22,
+      "implemented": 22,
+      "missing": 0,
+      "cost": 0.23227725
+    }
+  ],
+  "feature_verification": [
+    {
+      "total": 22,
+      "verified": 18,
+      "broken": 0,
+      "manual_review": 4,
+      "cost": 0.320542
+    }
+  ],
+  "curation": [
+    {
+      "phase": "plan",
+      "raw_total": 22,
+      "curated_total": 14,
+      "attrition_pct": 36.4,
+      "dropped_unanchored": 1,
+      "dropped_spec_duplicate": 1,
+      "dropped_trivial": 3,
+      "dropped_speculative": 3,
+      "cost": 0.26254125
+    }
+  ],
+  "strict_iterations": [],
+  "milestone_cost": 4.51,
+  "milestone_duration_s": 1401.0,
+  "total_cost_usd": 4.51,
+  "status": "complete",
+  "test_file_count": 2,
+  "config": "A2-curator-on",
+  "trial": 1,
+  "wall_seconds": 1414
+}

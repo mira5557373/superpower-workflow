@@ -1,0 +1,85 @@
+{
+  "spec_path": "spec.md",
+  "spec_sections": "all",
+  "total_requirements": 15,
+  "implemented": 15,
+  "missing": 0,
+  "details": [
+    {
+      "requirement": "todo add appends a new todo with a unique integer id",
+      "status": "implemented",
+      "evidence": "todo/storage.py:add"
+    },
+    {
+      "requirement": "todo add sets status to open",
+      "status": "implemented",
+      "evidence": "todo/storage.py:add"
+    },
+    {
+      "requirement": "todo add records ISO-8601 timestamp",
+      "status": "implemented",
+      "evidence": "todo/storage.py:add"
+    },
+    {
+      "requirement": "todo list prints todos",
+      "status": "implemented",
+      "evidence": "todo/cli.py:main"
+    },
+    {
+      "requirement": "todo list default shows only open",
+      "status": "implemented",
+      "evidence": "todo/storage.py:list"
+    },
+    {
+      "requirement": "todo list --all includes done",
+      "status": "implemented",
+      "evidence": "todo/storage.py:list"
+    },
+    {
+      "requirement": "todo done flips status from open to done",
+      "status": "implemented",
+      "evidence": "todo/storage.py:done"
+    },
+    {
+      "requirement": "todo done errors with exit 1 if id is unknown",
+      "status": "implemented",
+      "evidence": "todo/cli.py:main"
+    },
+    {
+      "requirement": "todo rm removes a todo permanently",
+      "status": "implemented",
+      "evidence": "todo/storage.py:rm"
+    },
+    {
+      "requirement": "todo rm errors with exit 1 if id is unknown",
+      "status": "implemented",
+      "evidence": "todo/cli.py:main"
+    },
+    {
+      "requirement": "Storage at ~/.todo/store.json auto-created",
+      "status": "implemented",
+      "evidence": "todo/storage.py:__init__"
+    },
+    {
+      "requirement": "Store file permissions 0o600",
+      "status": "implemented",
+      "evidence": "todo/storage.py:save"
+    },
+    {
+      "requirement": "Atomic writes via .tmp then rename",
+      "status": "implemented",
+      "evidence": "todo/storage.py:save"
+    },
+    {
+      "requirement": "All commands deterministic \u00e2\u20ac\u201d identical output given identical state",
+      "status": "implemented",
+      "evidence": "todo/storage.py:list"
+    },
+    {
+      "requirement": "Plain text output one todo per line: <id> <status> <created> <text>",
+      "status": "implemented",
+      "evidence": "todo/cli.py:_format_todo"
+    }
+  ],
+  "cost_usd": 0.19994374999999998
+}

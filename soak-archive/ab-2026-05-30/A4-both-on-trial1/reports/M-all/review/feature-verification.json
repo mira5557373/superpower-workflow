@@ -1,0 +1,93 @@
+{
+  "total_features": 14,
+  "verified_working": 11,
+  "broken": 0,
+  "manual_review": 3,
+  "details": [
+    {
+      "feature": "todo add \"<text>\" appends a new todo with a unique integer id, status open, and ISO-8601 timestamp",
+      "status": "pass",
+      "test": "tests/test_cli.py::TestCmdAdd::test_creates_todo",
+      "reason": "Test verifies id=1, status='open', ISO-8601 created timestamp, and text. Sequential ID generation also verified by test_sequential_ids. All 4 TestCmdAdd tests pass."
+    },
+    {
+      "feature": "todo list [--all] prints todos, default shows only open, --all includes done",
+      "status": "pass",
+      "test": "tests/test_cli.py::TestCmdList::test_shows_only_open",
+      "reason": "test_shows_only_open verifies default excludes done items; test_shows_all verifies --all includes done items; test_empty_store verifies empty output. All 5 TestCmdList tests pass."
+    },
+    {
+      "feature": "todo done <id> flips status from open to done, errors with exit 1 if id is unknown",
+      "status": "pass",
+      "test": "tests/test_cli.py::TestCmdDone::test_marks_done",
+      "reason": "test_marks_done verifies status flip to 'done'; test_unknown_id_exits verifies SystemExit with code 1 for unknown id. All 4 TestCmdDone tests pass."
+    },
+    {
+      "feature": "todo rm <id> removes a todo permanently, errors with exit 1 if id is unknown",
+      "status": "pass",
+      "test": "tests/test_cli.py::TestCmdRm::test_removes_todo",
+      "reason": "test_removes_todo verifies deletion; test_unknown_id_exits verifies SystemExit with code 1; test_does_not_affect_other_todos verifies surgical removal. All 4 TestCmdRm tests pass."
+    },
+    {
+      "feature": "Storage at ~/.todo/store.json, auto-created with 0o600 permissions",
+      "status": "pass",
+      "test": "tests/test_storage.py::TestLoadTodos::test_save_creates_directory",
+      "reason": "test_save_creates_directory verifies auto-creation of directory and file. test_file_permissions verifies 0o600 mode (skipped on Windows but code has platform guard with os.name != 'nt'). DEFAULT_STORE_PATH confirmed as Path.home() / '.todo' / 'store.json'."
+    },
+    {
+      "feature": "Atomic writes (write to .tmp, rename)",
+      "status": "pass",
+      "test": "tests/test_storage.py::TestSaveTodos::test_no_tmp_file_remains",
+      "reason": "Two tests verify no .tmp file remains after save. Code inspection confirms save_todos writes to .tmp then calls os.replace. Both tests pass."
+    },
+    {
+      "feature": "All commands deterministic \u00e2\u20ac\u201d output identical across runs given identical state",
+      "status": "pass",
+      "test": "tests/test_cli.py::TestDeterministicOutput::test_same_sequence_identical_output",
+      "reason": "test_same_sequence_identical_output verifies two consecutive list calls produce identical output. test_list_sorted_regardless_of_insert_order verifies consistent sort order. Both tests pass."
+    },
+    {
+      "feature": "All output is plain text, one todo per line: <id> <status> <created> <text>",
+      "status": "pass",
+      "test": "tests/test_cli.py::TestCmdList::test_output_format",
+      "reason": "test_output_format verifies exact format '1 open 2026-01-15T10:30:00+00:00 buy milk'. test_format_line in test_storage.py verifies Todo.format_line(). Both pass."
+    },
+    {
+      "feature": "ruff check . clean",
+      "status": "pass",
+      "test": "ruff check .",
+      "reason": "Ran 'ruff check .' directly \u00e2\u20ac\u201d output: 'All checks passed!' No linting violations found."
+    },
+    {
+      "feature": "pytest -q passes with tests covering every CLI subcommand + storage edge cases",
+      "status": "pass",
+      "test": "pytest -v",
+      "reason": "47 passed, 1 skipped (platform-specific permissions test on Windows). Tests cover all subcommands (add, list, done, rm) and storage edge cases (corrupted JSON, empty list, missing file, roundtrip)."
+    },
+    {
+      "feature": "pytest --cov reports >= 90% coverage on the todo/ package",
+      "status": "pass",
+      "test": "pytest --cov=todo",
+      "reason": "Coverage report: todo/__init__.py 100%, todo/cli.py 99%, todo/storage.py 97%, TOTAL 98%. 98% >= 90% threshold met."
+    },
+    {
+      "feature": "No tags, due dates, priorities, or recurring tasks",
+      "status": "manual_review",
+      "test": "N/A",
+      "reason": "Negative design constraint. Code inspection confirms build_parser defines no such arguments, but absence of features is a subjective architectural review, not an objectively testable assertion."
+    },
+    {
+      "feature": "No interactive mode",
+      "status": "manual_review",
+      "test": "N/A",
+      "reason": "Negative design constraint. Code inspection confirms argparse-only CLI with no interactive prompts or input() calls, but verifying complete absence of interactivity is a subjective review."
+    },
+    {
+      "feature": "No multi-user or network features",
+      "status": "manual_review",
+      "test": "N/A",
+      "reason": "Negative design constraint. Code inspection confirms local file I/O only with no network imports or multi-user logic, but verifying complete absence of such features is a subjective review."
+    }
+  ],
+  "cost_usd": 0.25625
+}

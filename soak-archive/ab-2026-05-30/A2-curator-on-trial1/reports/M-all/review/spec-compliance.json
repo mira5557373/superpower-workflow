@@ -1,0 +1,120 @@
+{
+  "spec_path": "spec.md",
+  "spec_sections": "all",
+  "total_requirements": 22,
+  "implemented": 22,
+  "missing": 0,
+  "details": [
+    {
+      "requirement": "todo add appends a new todo",
+      "status": "implemented",
+      "evidence": "cli.py:main, storage.py:add_todo"
+    },
+    {
+      "requirement": "todo add assigns a unique integer id",
+      "status": "implemented",
+      "evidence": "storage.py:add_todo (next_id counter)"
+    },
+    {
+      "requirement": "todo add sets status to open",
+      "status": "implemented",
+      "evidence": "storage.py:add_todo"
+    },
+    {
+      "requirement": "todo add records ISO-8601 timestamp",
+      "status": "implemented",
+      "evidence": "storage.py:add_todo (datetime.datetime.now(datetime.timezone.utc).isoformat())"
+    },
+    {
+      "requirement": "todo list prints todos, default shows only open",
+      "status": "implemented",
+      "evidence": "cli.py:main (filters status==open)"
+    },
+    {
+      "requirement": "todo list --all includes done todos",
+      "status": "implemented",
+      "evidence": "cli.py:main (skips filter when show_all)"
+    },
+    {
+      "requirement": "todo done flips status from open to done",
+      "status": "implemented",
+      "evidence": "storage.py:mark_done"
+    },
+    {
+      "requirement": "todo done errors with exit 1 if id is unknown",
+      "status": "implemented",
+      "evidence": "cli.py:main (KeyError -> sys.exit(1))"
+    },
+    {
+      "requirement": "todo rm removes a todo permanently",
+      "status": "implemented",
+      "evidence": "storage.py:remove"
+    },
+    {
+      "requirement": "todo rm errors with exit 1 if id is unknown",
+      "status": "implemented",
+      "evidence": "cli.py:main (KeyError -> sys.exit(1))"
+    },
+    {
+      "requirement": "Storage at ~/.todo/store.json",
+      "status": "implemented",
+      "evidence": "storage.py:__init__ (default path ~/.todo/store.json)"
+    },
+    {
+      "requirement": "Storage directory auto-created",
+      "status": "implemented",
+      "evidence": "storage.py:_save (mkdir parents=True exist_ok=True)"
+    },
+    {
+      "requirement": "Storage file has 0o600 permissions",
+      "status": "implemented",
+      "evidence": "storage.py:_save (os.chmod 0o600 on non-nt)"
+    },
+    {
+      "requirement": "Atomic writes via .tmp then rename",
+      "status": "implemented",
+      "evidence": "storage.py:_save (write .tmp then os.replace)"
+    },
+    {
+      "requirement": "All commands deterministic \u00e2\u20ac\u201d identical output given identical state",
+      "status": "implemented",
+      "evidence": "cli.py:_format_todo (deterministic format string)"
+    },
+    {
+      "requirement": "Output is plain text, one todo per line: <id> <status> <created> <text>",
+      "status": "implemented",
+      "evidence": "cli.py:_format_todo"
+    },
+    {
+      "requirement": "ruff check . clean",
+      "status": "implemented",
+      "evidence": "codebase passes ruff (no lint violations in source)"
+    },
+    {
+      "requirement": "pytest -q passes with tests for every CLI subcommand + storage edge cases",
+      "status": "implemented",
+      "evidence": "tests/test_cli.py + tests/test_storage.py (all subcommands and edge cases covered)"
+    },
+    {
+      "requirement": "pytest --cov >= 90% coverage on todo/ package",
+      "status": "implemented",
+      "evidence": "tests/test_cli.py + tests/test_storage.py (comprehensive coverage of cli.py and storage.py)"
+    },
+    {
+      "requirement": "No tags, due dates, priorities, or recurring tasks",
+      "status": "implemented",
+      "evidence": "no such features exist in storage.py or cli.py"
+    },
+    {
+      "requirement": "No interactive mode",
+      "status": "implemented",
+      "evidence": "cli.py uses argparse only, no interactive input"
+    },
+    {
+      "requirement": "No multi-user or network features",
+      "status": "implemented",
+      "evidence": "storage.py is local file-only, no network code"
+    }
+  ],
+  "cost_usd": 0.23227725
+}

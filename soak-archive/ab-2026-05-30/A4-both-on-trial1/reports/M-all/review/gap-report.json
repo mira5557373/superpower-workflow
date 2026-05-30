@@ -1,0 +1,75 @@
+{
+  "milestone": "M-all",
+  "base_commit": "17ae235b84c4865018702d9514ca95e8ce137183",
+  "review_date": "2026-05-30",
+  "files_reviewed": [
+    "todo/cli.py",
+    "todo/storage.py",
+    "todo/__init__.py",
+    "tests/test_cli.py",
+    "tests/test_storage.py",
+    "tests/conftest.py",
+    "pyproject.toml"
+  ],
+  "test_results": {
+    "passed": 47,
+    "skipped": 1,
+    "failed": 0,
+    "coverage_percent": 98
+  },
+  "lint_clean": true,
+  "gap_summaries": [
+    {
+      "id": 1,
+      "tag": "[post-impl]",
+      "severity": "minor",
+      "file": "tests/test_cli.py",
+      "description": "test_no_subcommand_exits did not verify exit code == 1 (weak assertion)",
+      "status": "fixed"
+    },
+    {
+      "id": 2,
+      "tag": "[post-impl]",
+      "severity": "minor",
+      "file": "tests/test_cli.py",
+      "description": "test_main_no_args did not verify exit code == 1 (weak assertion)",
+      "status": "fixed"
+    },
+    {
+      "id": 3,
+      "tag": "[production]",
+      "severity": "acceptable",
+      "file": "todo/cli.py",
+      "description": "No __main__.py — python -m todo not supported (console script entry point works)",
+      "status": "accepted"
+    },
+    {
+      "id": 4,
+      "tag": "[production]",
+      "severity": "acceptable",
+      "file": "todo/storage.py",
+      "description": "~/.todo/ directory created with default permissions instead of 0o700",
+      "status": "accepted"
+    },
+    {
+      "id": 5,
+      "tag": "[production]",
+      "severity": "acceptable",
+      "file": "todo/storage.py",
+      "description": "Brief permission window between os.replace() and os.chmod() on Unix",
+      "status": "accepted"
+    }
+  ],
+  "counts": {
+    "critical": 0,
+    "important": 0,
+    "minor_fixed": 2,
+    "acceptable": 3
+  },
+  "convergence": {
+    "post_impl": true,
+    "production": true,
+    "tests_green": true,
+    "lint_clean": true
+  }
+}
