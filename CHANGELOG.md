@@ -3,6 +3,25 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.9] — 2026-05-30
+
+### Added — observability & onboarding (T1.9.3, T1.9.5)
+
+**`sw onboard`** — interactive wizard that walks new users through workflow.json setup. Detects project type (via project_detect from v1.1.8), proposes budgets via size presets (small/$50, medium/$250, large/$1000), and offers per-feature toggles (gap_curator on by default per soak, strict_mode off, spec_linter on). Idempotent on re-run (G1.9.6) — detects existing workflow.json and offers merge/replace/abort. Falls back to defaults under `--non-interactive` for smoke-testing.
+
+**`sw recommend-model`** — analyzes `.claude/telemetry.jsonl` and ranks models by quality-per-dollar efficiency. Quality score weighted across spec_compliance_rate (0.4) + (1 - strict_iter_rate) (0.3) + first_pass_rate (0.2) + curator_health (0.1). Returns provisional pick when fewer than 3 milestones per model — labeled "Insufficient data". `--json` for machine-readable output.
+
+### New modules
+- `src/superpower_workflow/onboard.py` — wizard + `OnboardConfig` dataclass + `build_workflow_config` composer
+- `src/superpower_workflow/recommender.py` — `ModelStats` + `RecommendationReport` + `recommend()`
+
+### Deferred to v1.1.9.1
+- Cost projection mid-run (T1.9.1) — needs the estimator's per-phase ratios pinned by a larger telemetry corpus to avoid wildly speculative numbers.
+- `sw watch` TUI upgrades (T1.9.4) — current implementation is functional; visual polish needs design iteration that's better done in person.
+
+### Stats
+- Test count: 1195 → **1213** passing (+18: 12 onboard + 6 recommender).
+
 ## [1.1.8] — 2026-05-30
 
 ### Added — code QA pipeline foundations (T1.8.1 – T1.8.4)

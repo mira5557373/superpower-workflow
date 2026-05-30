@@ -603,6 +603,72 @@ def _cmd_verify_defaults(project_root: Path) -> None:
         )
 
 
+def _cmd_onboard(project_root: Path, interactive: bool = True) -> None:
+    """T1.9.5 — interactive `sw onboard` wizard."""
+    from superpower_workflow.onboard import build_workflow_config, run_onboard, write_config
+
+    choices = run_onboard(project_root, interactive=interactive)
+    if choices.accept_existing == "abort":
+        print("  Aborted. No changes written.")
+        return
+
+    config = build_workflow_config(project_root, choices)
+
+    if interactive:
+        print()
+        print("  Proposed workflow.json:")
+        print(f"    spec:                  {config['spec']}")
+        print(f"    model:                 {config['model']}")
+        print(
+            f"    budgets/cap:           plan ${config['budgets']['plan']} "
+            f"/ implement ${config['budgets']['implement']} "
+            f"/ review ${config['budgets']['review']} "
+            f"/ push ${config['budgets']['push']}  cap ${config['max_total_budget_usd']}"
+        )
+        print(f"    gap_curator:           {config['validation']['gap_curator']}")
+        print(f"    strict_mode:           {config['validation']['strict_mode']}")
+        print(f"    spec_linter:           {config['validation']['spec_linter']}")
+        print(f"    quality_gates:         {len(config['quality_gates'])} preset gate(s)")
+        sys.stdout.write("\n  Write this configuration? [Y/n]: ")
+        sys.stdout.flush()
+        answer = sys.stdin.readline().strip().lower()
+        if answer and not answer.startswith("y"):
+            print("  Aborted. No changes written.")
+            return
+
+    path = write_config(project_root, config)
+    print(f"  Wrote {path}")
+    print("  Next: edit your spec, then run `sw lint-spec` and `sw decompose`.")
+
+
+def _cmd_recommend_model(project_root: Path, json_output: bool = False) -> None:
+    """T1.9.3 — analyze telemetry and recommend the best model/cost tradeoff."""
+    from superpower_workflow.recommender import recommend
+
+    telemetry_path = project_root / ".claude" / "telemetry.jsonl"
+    report = recommend(telemetry_path)
+
+    if json_output:
+        print(json.dumps(report.to_dict(), indent=2))
+        return
+
+    if not report.models:
+        print("  No model data — run at least one milestone first.")
+        return
+
+    print()
+    print(f"  Recommended model: {report.recommended}")
+    print(f"  Rationale: {report.rationale}")
+    print()
+    print(f"  {'Model':<10} {'#ms':>4} {'$avg':>7} {'compliance':>12} {'quality':>9}")
+    for m in report.models:
+        print(
+            f"  {m.model:<10} {m.milestone_count:>4} "
+            f"${m.avg_cost_per_milestone:>5.2f} "
+            f"{m.spec_compliance_rate:>11.1%} {m.quality_score:>9.3f}"
+        )
+
+
 def _cmd_metrics(project_root: Path, json_output: bool = False) -> None:
     from superpower_workflow.telemetry import TelemetryReader
 
