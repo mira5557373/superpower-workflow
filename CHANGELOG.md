@@ -3,6 +3,36 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.0] — 2026-05-30
+
+A SKELETON release for Claude Code integration depth. Ships the assets that ride alongside Claude Code (skills, slash commands, statusline) without yet committing to API-bound work that requires verification I couldn't do unsupervised (MCP server, native statusline registration).
+
+### Added — 4 new skills
+- **`spec-quality-check`** (`_assets/skills/spec-quality-check/SKILL.md`): semantic review on top of `sw lint-spec` — flags vague verbs, implicit assumptions, missing acceptance criteria, hidden NFRs, mixed concerns, over-specification. Structured JSON output ranks findings by impact.
+- **`code-quality-loop`** (`_assets/skills/code-quality-loop/SKILL.md`): invoked when Phase C ends but `quality_gates` still report failures. Loops focused fixes per gate (lint, sast, dep_scan, complexity, type_check) with explicit "do NOT do" guidance.
+- **`cost-investigator`** (`_assets/skills/cost-investigator/SKILL.md`): diagnoses milestones that overshoot projection by >50%. Computes per-phase deltas, identifies the spike phase, classifies cause (context churn, convergence loops, spec change), produces a structured cost-overrun report with concrete config recommendations.
+- **`convergence-coach`** (`_assets/skills/convergence-coach/SKILL.md`): offline analysis of milestones that needed multiple ultrathink passes. Classifies pattern (healthy / slow / no / oscillation) and recommends ONE intervention (spec fix vs model swap vs convergence threshold).
+
+### Added — 4 new slash commands
+- **`/sw-status`** — quick run status surface for any Claude Code session
+- **`/sw-dry-run`** — preview milestones + cost without spending
+- **`/sw-curate`** — manually invoke the curator on an existing gap report (debugging)
+- **`/sw-soak-summary`** — summarize the most recent `soak-archive/` run
+
+### Added — statusline skeleton (T3.0.4)
+- `src/superpower_workflow/statusline.py` with `render_statusline(claude_dir)` and `write_statusline_file()`. Format: `[sw] M2/3 $5.67/$50 implement (1 done)`.
+- Falls back to `[sw] idle` when no run is active. Handles corrupt state files gracefully.
+- **Skeleton-only**: native Claude Code statusline API registration is NOT done because the API contract needs empirical verification first (ODQ-5 from the plan). Until then, users render the `.claude/statusline.txt` file manually via tmux/terminal scripts.
+
+### Deferred to v1.3.1
+- **MCP server** (T3.0.3) — verifying the MCP protocol version Claude Code expects + implementing tool schemas (`sw_status`, `sw_run_milestone`, etc.) needs the API verification I couldn't do unsupervised.
+- **Native statusline API registration** — depends on verifying ODQ-5.
+- **Memory integration** (T3.0.6) — needs design review on what to write into `~/.claude/.../memory/` to avoid polluting it.
+- **Cost-alert hook + quality-gate hook** (T3.0.5) — hook-type specification needs API confirmation.
+
+### Stats
+- Test count: 1224 → **1230** passing (+6 statusline). The new skills + slash commands are markdown, not Python — verified to ship in the wheel via the existing wheel-asset-check CI job.
+
 ## [1.2.0] — 2026-05-30
 
 A LITE refactor release: ships the architectural cleanup that's safe to do without changing orchestrator behavior. The full Phase A/B/C/D class refactor (T2.0.1) is explicitly deferred to v1.2.1 — that needs ~50 integration test migrations + real-soak regression validation that wasn't responsible to land unsupervised.
