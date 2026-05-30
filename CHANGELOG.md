@@ -3,6 +3,31 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.0] — 2026-05-30
+
+A LITE refactor release: ships the architectural cleanup that's safe to do without changing orchestrator behavior. The full Phase A/B/C/D class refactor (T2.0.1) is explicitly deferred to v1.2.1 — that needs ~50 integration test migrations + real-soak regression validation that wasn't responsible to land unsupervised.
+
+### Added — extracted pipelines (T2.0.1 prep)
+- New `src/superpower_workflow/pipelines/` package with `TrustButVerifyPipeline` class. Encapsulates the four-stage trust-but-verify flow (spec compliance → feature verification → strict-mode loop) as a reusable, dependency-injectable component.
+- Dependency-injectable design: takes callables for each stage so the class has no circular dependency on the orchestrator. Aggregates total cost. Exposes `result.converged` (missing+broken == 0).
+- **Behavioral parity contract**: the new class is currently UNUSED by the orchestrator. Its tests pin the trust-but-verify behavior contract so when v1.2.1 swaps the orchestrator to use this class, regressions are caught at unit-test level.
+
+### Added — complexity audit gate (T2.0.3)
+- New `scripts/complexity_audit.py`: AST-based audit of every function/method in `src/superpower_workflow/`. Reports line count, cyclomatic complexity, max nesting depth.
+- New CI step in `.github/workflows/test.yml` runs the audit at v1.2.0 ceilings: **max_lines=510, max_cc=50, max_nesting=7**. These grandfather current code; *new* functions exceeding them block CI.
+- Tightening to target (100/15/4) happens after the Phase refactor (v1.2.1+) reduces `_run_milestone` (currently 502 lines) and `run` (304 lines, cc=41).
+- `--baseline` flag prints top-10 worst offenders without failing — useful for tracking refactor progress.
+
+### Deferred to v1.2.1
+- **Full Phase A/B/C/D class refactor** (T2.0.1). Extracting Phase classes from `_run_milestone` (currently 502 lines) requires migrating ~50 integration tests and verifying byte-equivalent telemetry on a real soak. This is the right call but needs supervised execution.
+- **Plugin extension to custom phases** (T2.0.4). Depends on the refactor above.
+- **Tightening complexity ceilings** to the v2.0.0 targets (100/15/4) after the Phase refactor lands.
+
+### Stats
+- Test count: 1213 → **1224** passing (+11: 8 pipeline contract + 3 complexity audit).
+- Functions audited: 414.
+- Largest function: `_run_milestone` at 502 lines, cc=36. Grandfathered; refactored in v1.2.1.
+
 ## [1.1.9] — 2026-05-30
 
 ### Added — observability & onboarding (T1.9.3, T1.9.5)
