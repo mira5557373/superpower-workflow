@@ -9,6 +9,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Opt in to Node 24 for JS actions before GitHub flips the default on
+# 2026-06-02 and removes Node 20 on 2026-09-16. Without this, CI starts
+# failing in 4 days. Verified via the deprecation notice in run logs.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}

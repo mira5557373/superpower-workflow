@@ -3,6 +3,45 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.7] — 2026-05-30
+
+The "soak harvest" release: ships the v1.1.6 A/B-soak findings as defaults, the planned spec linter, the cache-hit-rate analytics unlocked by the token-extraction fix, and a CI fix for the imminent Node 20 deprecation.
+
+### Added — spec linter (T1.7.1 – T1.7.4)
+- New `sw lint-spec PATH [--strict] [--section X]` command. Zero-LLM-cost rule-based checks on `spec.md`:
+  - `requirements_countable` (FAIL): at least one numbered or bulleted requirement list
+  - `nonfunctional_section` (WARN): present AND ≥3 bullets — empty sections don't pass (G1.7.1)
+  - `quality_gates_declared` (WARN): mentions lint/test/coverage threshold
+  - `out_of_scope_section` (WARN): explicit "Out of scope" or synonym
+  - `no_placeholders` (FAIL): no TBD/TODO/FIXME/XXX/??? markers
+  - `acceptance_criteria` (WARN): supports must/when-then/given-when-then/REQ-NN/AC-NN styles (G1.7.3)
+  - `length_reasonable` (WARN): word count in [200, 5000] — configurable via `validation.spec_{min,max}_words` (G1.7.2)
+  - `code_blocks_balanced` (FAIL): balanced backtick and tilde fences (G1.7.11)
+- Score 0-100 (FAIL = -10 each, WARN = -3 each, floor at 0).
+- Auto-runs during `sw decompose`. Aborts on blockers unless `--force` is passed. Strict mode (`validation.spec_linter_strict`) also blocks on warnings.
+- `--section "Auth"` lints only one markdown section body (G1.7.4) — useful with milestone-level `spec_sections`.
+- New `SpecLintCompleted` telemetry event: `score`, `checks_passed`, `checks_warned`, `checks_failed`, `blocker_count`.
+
+### Changed — defaults flipped per A/B soak data
+- **`validation.gap_curator` default now `true`** (was `false`). Evidence: 2026-05-30 A/B soak measured 36.4% raw-gap attrition with zero false negatives and 33% milestone-cost reduction. See `soak-archive/ab-2026-05-30/REPORT.md`. Internal users can opt out via `validation.gap_curator = false`.
+- `validation.strict_mode` default stays `false` — insufficient soak data (never fired on clean implementations).
+
+### Added — cache-hit-rate analytics in `sw metrics` (T1.7.3)
+- `sw metrics` text output gains a "Tokens (latest run)" section: total input/output, cache_creation/cache_read totals, derived `cache_hit_rate`, `tokens_per_dollar`, and per-phase cache rate breakdown.
+- `sw metrics --json` adds the same data under a new `tokens` key.
+- Made possible by the v1.1.6 token-extraction fix; first time these are visible since v1.0.
+
+### Fixed — CI Node 20 deprecation preempted
+- `.github/workflows/test.yml` now sets `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` at the workflow env level. GitHub's auto-switch lands 2026-06-02; without this env var, all CI runs would have started failing. Verified via the run-log deprecation notice on every prior v1.1.x release.
+
+### Stats
+- Test count: 1121 → **~1170** passing (+33 spec linter unit tests, +8 CLI integration tests, +8 metrics analytics tests, +1 default-flip pin).
+- Spec linter scored **94/100** on `examples/todo-cli/spec.md` (warn-level: acceptance criteria style, length under 200 words). New CI test pins the example to ≥80.
+
+### Internal-only notes
+- `_aggregate_token_stats` helper in `cli.py` is the canonical place to extend token analytics in future releases.
+- The auto-`sw decompose` lint integration is the first time we've gated an LLM-spending operation on a zero-cost check.
+
 ## [1.1.6] — 2026-05-30
 
 ### Fixed — silent bug eliminated (T1.6.1)

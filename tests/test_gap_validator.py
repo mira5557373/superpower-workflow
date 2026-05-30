@@ -33,6 +33,18 @@ class TestValidationConfig:
         assert v["spec_compliance_budget"] == 3.0
         assert v["feature_verification_budget"] == 5.0
 
+    def test_v1_1_7_default_flips(self, tmp_path: Path):
+        """v1.1.7 flipped two defaults: gap_curator True (per A/B soak
+        2026-05-30) and spec_linter True (new feature)."""
+        _cmd_init(tmp_path)
+        config = json.loads((tmp_path / ".claude" / "workflow.json").read_text())
+        v = config["validation"]
+        assert v["gap_curator"] is True, "v1.1.7: gap_curator flipped to True"
+        assert v["spec_linter"] is True, "v1.1.7: spec_linter on by default"
+        assert v["spec_linter_strict"] is False
+        assert v["spec_min_words"] == 200
+        assert v["spec_max_words"] == 5000
+
     def test_validation_package_importable(self):
         import superpower_workflow.validation
 

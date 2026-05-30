@@ -276,6 +276,19 @@ class FeatureVerificationCompleted(TelemetryEvent):
 
 
 @dataclass
+class SpecLintCompleted(TelemetryEvent):
+    """Emitted when `sw lint-spec` or `sw decompose` runs the spec linter."""
+
+    EVENT_TYPE: ClassVar[str] = "spec_lint_completed"
+    spec_path: str = ""
+    score: int = 0
+    checks_passed: int = 0
+    checks_warned: int = 0
+    checks_failed: int = 0
+    blocker_count: int = 0
+
+
+@dataclass
 class GapCurationCompleted(TelemetryEvent):
     """Emitted when the gap curator filters a raw gap report into curated, scoped gaps."""
 

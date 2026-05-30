@@ -57,7 +57,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("init", help="Create .claude/workflow.json")
     sub.add_parser("doctor", help="Pre-flight health checks")
-    sub.add_parser("decompose", help="Spec to milestone breakdown")
+
+    lint_p = sub.add_parser(
+        "lint-spec",
+        help="Lint a spec.md file (zero-LLM rule-based checks)",
+    )
+    lint_p.add_argument("spec_path", help="Path to the spec file (markdown)")
+    lint_p.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit non-zero on WARN findings too (default: only FAIL is non-zero)",
+    )
+    lint_p.add_argument(
+        "--section",
+        default=None,
+        help="Lint only the named section (matches heading text)",
+    )
+
+    decompose_p = sub.add_parser("decompose", help="Spec to milestone breakdown")
+    decompose_p.add_argument(
+        "--force",
+        action="store_true",
+        help="Skip spec linter blockers (use only if you know what you're doing)",
+    )
     sub.add_parser("estimate", help="Cost and duration estimate")
     sub.add_parser("status", help="Show progress")
     sub.add_parser("resume", help="Resume from failure point")
@@ -287,9 +309,20 @@ def _cmd_init(project_root: Path) -> None:
             "strict_mode": False,
             "max_strict_iterations": 2,
             "strict_iteration_budget": 8.0,
-            "gap_curator": False,
+            # Default flipped from False to True in v1.1.7 after the
+            # 2026-05-30 A/B soak: 36.4% raw-gap attrition, zero false
+            # negatives (spec compliance cross-check), 33% cost reduction
+            # on M-all milestone. See soak-archive/ab-2026-05-30/REPORT.md.
+            "gap_curator": True,
             "curator_budget": 1.0,
             "curator_min_gaps": 5,
+            # New in v1.1.7: spec linter runs during `sw decompose`. Pure
+            # text checks, zero LLM cost. Set false to disable; strict makes
+            # WARN-level findings block decompose too.
+            "spec_linter": True,
+            "spec_linter_strict": False,
+            "spec_max_words": 5000,
+            "spec_min_words": 200,
         },
         "notification_webhook": None,
         "milestones": [],
@@ -537,6 +570,7 @@ def _cmd_metrics(project_root: Path, json_output: bool = False) -> None:
         return
 
     if json_output:
+        run_id_for_tokens = reader.latest_run_id()
         metrics = {
             "total_cost": reader.total_cost(),
             "cost_per_task": reader.cost_per_successful_task(),
@@ -548,6 +582,7 @@ def _cmd_metrics(project_root: Path, json_output: bool = False) -> None:
             "defect_density": reader.defect_density(),
             "quality_trend": reader.quality_trend(),
             "total_duration": reader.total_duration(),
+            "tokens": _aggregate_token_stats(events, run_id_for_tokens),
         }
         print(json.dumps(metrics, indent=2))
         return
@@ -574,6 +609,71 @@ def _cmd_metrics(project_root: Path, json_output: bool = False) -> None:
         print("  Cost by phase:")
         for phase, cost in cost_ph.items():
             print(f"    {phase}: ${cost:.2f}")
+
+    # v1.1.7.3 — token analytics, available after the v1.1.6 fix
+    token_stats = _aggregate_token_stats(events, run_id)
+    if token_stats["total_input"] or token_stats["total_output"]:
+        print("  Tokens (latest run):")
+        print(
+            f"    input:           {token_stats['total_input']:>10}  "
+            f"output: {token_stats['total_output']:>10}"
+        )
+        print(
+            f"    cache_creation:  {token_stats['total_cache_creation']:>10}  "
+            f"cache_read: {token_stats['total_cache_read']:>10}"
+        )
+        print(
+            f"    cache_hit_rate:  {token_stats['cache_hit_rate']:>10.3f}  "
+            f"tokens/$: {token_stats['tokens_per_dollar']:>10.0f}"
+        )
+        if token_stats["per_phase"]:
+            print("  Cache hit rate by phase:")
+            for phase, rate in token_stats["per_phase"].items():
+                print(f"    {phase:<10} {rate:.3f}")
+
+
+def _aggregate_token_stats(events: list[dict], run_id: str = "") -> dict:
+    """Aggregate token counts across PhaseCompleted events.
+
+    Cache hit rate = cache_read / (input + cache_creation + cache_read), per the
+    helper in runner.extract_token_usage. tokens_per_dollar = (input + output)
+    / total_cost_usd (proxy for efficiency).
+    """
+    phase_events = [
+        e
+        for e in events
+        if e.get("type") == "phase_completed" and (not run_id or e.get("run_id") == run_id)
+    ]
+    total_input = sum(int(e.get("input_tokens", 0) or 0) for e in phase_events)
+    total_output = sum(int(e.get("output_tokens", 0) or 0) for e in phase_events)
+    total_cc = sum(int(e.get("cache_creation_input_tokens", 0) or 0) for e in phase_events)
+    total_cr = sum(int(e.get("cache_read_input_tokens", 0) or 0) for e in phase_events)
+    total_cost = sum(float(e.get("cost_usd", 0.0) or 0.0) for e in phase_events)
+
+    denom = total_input + total_cc + total_cr
+    cache_hit_rate = round(total_cr / denom, 4) if denom > 0 else 0.0
+    tokens_per_dollar = round((total_input + total_output) / total_cost) if total_cost > 0 else 0
+
+    per_phase: dict[str, float] = {}
+    for phase in ("plan", "implement", "review", "push", "ci_fix"):
+        phase_evs = [e for e in phase_events if e.get("phase") == phase]
+        if not phase_evs:
+            continue
+        i = sum(int(e.get("input_tokens", 0) or 0) for e in phase_evs)
+        cc = sum(int(e.get("cache_creation_input_tokens", 0) or 0) for e in phase_evs)
+        cr = sum(int(e.get("cache_read_input_tokens", 0) or 0) for e in phase_evs)
+        d = i + cc + cr
+        per_phase[phase] = round(cr / d, 4) if d > 0 else 0.0
+
+    return {
+        "total_input": total_input,
+        "total_output": total_output,
+        "total_cache_creation": total_cc,
+        "total_cache_read": total_cr,
+        "cache_hit_rate": cache_hit_rate,
+        "tokens_per_dollar": tokens_per_dollar,
+        "per_phase": per_phase,
+    }
 
 
 def _cmd_dashboard(project_root: Path, host: str | None = None, port: int | None = None) -> None:
@@ -742,15 +842,123 @@ def _cmd_clean(project_root: Path) -> None:
         print(f"  Cleaned {removed} runtime file(s).")
 
 
-def _cmd_decompose(project_root: Path) -> None:
+_FAIL_GLYPH = "x"
+_WARN_GLYPH = "!"
+_PASS_GLYPH = "+"
+
+
+def _print_spec_lint_report(report) -> None:
+    """Pretty-print SpecLintReport to stdout (T1.7.2)."""
+    from superpower_workflow.validation.spec_linter import CheckState
+
+    print(f"\n  Spec lint: {report.spec_path}")
+    print(
+        f"  Score: {report.score}/100  ({report.blocker_count} FAIL, {report.warning_count} WARN)\n"
+    )
+    for c in report.checks:
+        if c.state == CheckState.PASS:
+            glyph = _PASS_GLYPH
+        elif c.state == CheckState.WARN:
+            glyph = _WARN_GLYPH
+        else:
+            glyph = _FAIL_GLYPH
+        print(f"  [{glyph}] {c.state.value:<4} {c.name:<26} {c.reason}")
+        if c.suggestion and c.state != CheckState.PASS:
+            print(f"           hint: {c.suggestion}")
+    print()
+
+
+def _emit_spec_lint_event(claude_dir: Path, report, run_id: str = "") -> None:
+    """Append a SpecLintCompleted event to telemetry.jsonl if it exists."""
+    from superpower_workflow.validation.spec_linter import CheckState
+
+    telemetry_path = claude_dir / "telemetry.jsonl"
+    if not claude_dir.exists():
+        return
+    event = {
+        "type": "spec_lint_completed",
+        "run_id": run_id,
+        "spec_path": report.spec_path,
+        "score": report.score,
+        "checks_passed": sum(1 for c in report.checks if c.state == CheckState.PASS),
+        "checks_warned": report.warning_count,
+        "checks_failed": report.blocker_count,
+        "blocker_count": report.blocker_count,
+    }
+    try:
+        with telemetry_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event) + "\n")
+    except OSError:
+        pass
+
+
+def _cmd_lint_spec(project_root: Path, spec_path: str, strict: bool, section: str | None) -> int:
+    """T1.7.2 — standalone `sw lint-spec` subcommand."""
+    from superpower_workflow.state import load_config
+    from superpower_workflow.validation.spec_linter import lint_spec
+
+    full = (project_root / spec_path).resolve()
+    if not full.is_file():
+        print(f"  Error: spec not found at {full}")
+        return 1
+
+    claude_dir = project_root / ".claude"
+    config: dict = {}
+    if (claude_dir / "workflow.json").exists():
+        try:
+            config = load_config(claude_dir)
+        except (OSError, FileNotFoundError):
+            config = {}
+    validation = config.get("validation", {}) if isinstance(config, dict) else {}
+    min_words = int(validation.get("spec_min_words", 200))
+    max_words = int(validation.get("spec_max_words", 5000))
+
+    report = lint_spec(full, min_words=min_words, max_words=max_words, section=section)
+    _print_spec_lint_report(report)
+    _emit_spec_lint_event(claude_dir, report)
+
+    if report.blocker_count > 0:
+        return 1
+    if strict and report.warning_count > 0:
+        return 1
+    return 0
+
+
+def _cmd_decompose(project_root: Path, force: bool = False) -> None:
     from superpower_workflow.decomposer import decompose
     from superpower_workflow.state import load_config
+    from superpower_workflow.validation.spec_linter import lint_spec
 
-    config = load_config(project_root / ".claude")
+    claude_dir = project_root / ".claude"
+    config = load_config(claude_dir)
     spec_path = config.get("spec", "")
     if not spec_path or not (project_root / spec_path).exists():
         print(f"  Error: spec not found at '{spec_path}'. Update .claude/workflow.json")
         sys.exit(1)
+
+    # T1.7.3: auto-run spec linter before spending decomposition tokens
+    validation = config.get("validation", {})
+    if validation.get("spec_linter", True):
+        report = lint_spec(
+            project_root / spec_path,
+            min_words=int(validation.get("spec_min_words", 200)),
+            max_words=int(validation.get("spec_max_words", 5000)),
+        )
+        _print_spec_lint_report(report)
+        _emit_spec_lint_event(claude_dir, report)
+
+        if report.blocker_count > 0 and not force:
+            print(
+                f"  Decompose aborted: spec has {report.blocker_count} blocker(s). "
+                "Fix them or rerun with --force."
+            )
+            sys.exit(1)
+        if validation.get("spec_linter_strict", False) and report.warning_count > 0 and not force:
+            print(
+                f"  Decompose aborted (strict): {report.warning_count} warning(s). "
+                "Fix them or rerun with --force."
+            )
+            sys.exit(1)
 
     print(f"  Decomposing spec: {spec_path}")
     milestones = decompose(
@@ -1020,8 +1228,11 @@ def main() -> None:
         _cmd_metrics(project_root, json_output=getattr(args, "json_output", False))
         return
 
+    if args.command == "lint-spec":
+        sys.exit(_cmd_lint_spec(project_root, args.spec_path, args.strict, args.section))
+
     if args.command == "decompose":
-        _cmd_decompose(project_root)
+        _cmd_decompose(project_root, force=getattr(args, "force", False))
         return
 
     if args.command == "estimate":
