@@ -107,13 +107,36 @@ def _atomic_write(path: Path, data: dict) -> None:
     to the same destination don't collide on the .tmp suffix. A per-path
     threading.Lock further serializes the write+rename pair so the second
     writer's os.replace doesn't fail with Windows ERROR_SHARING_VIOLATION.
+
+    v1.3.6 hardening: on Windows, even with our per-path lock, os.replace
+    can transiently fail with PermissionError (WinError 5/13/32) when
+    antivirus or the search indexer briefly holds the destination handle
+    just after our previous os.replace. Retry up to 5 times with a small
+    backoff; the lock guarantees we're the only writer, so any failure
+    is from an external process and is genuinely transient.
     """
     suffix = f".json.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex[:8]}.tmp"
     tmp = path.with_suffix(suffix)
     lock = _get_path_lock(path)
     with lock:
         tmp.write_text(json.dumps(data, indent=2))
-        os.replace(str(tmp), str(path))
+        last_err: Exception | None = None
+        for attempt in range(5):
+            try:
+                os.replace(str(tmp), str(path))
+                return
+            except PermissionError as e:
+                last_err = e
+                # Windows transient: antivirus / indexer briefly held the
+                # destination. Brief backoff with jitter from the uuid
+                # suffix avoids thundering herd.
+                time.sleep(0.01 * (attempt + 1))
+        # Clean up the stale tmp so we don't accumulate orphans, then raise.
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise last_err  # type: ignore[misc]
 
 
 def load_state(claude_dir: Path) -> WorkflowState:
