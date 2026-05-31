@@ -3,6 +3,81 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.9] — 2026-05-31
+
+Soak-driven fix. A real $3-bounded soak of v1.3.8 surfaced a money leak
+that none of the synthetic-review workflows had found: `run_claude`'s
+retry loop was discarding the cost of failed attempts.
+
+### Fixed — retry cost accumulation (soak finding)
+
+Real soak observation: `sw run` with `--max-budget-usd 1.5` per phase
+triggered `claude -p`'s built-in budget cap. The first attempt returned
+`is_error: true` with `total_cost_usd: 1.5278`. `run_claude` retried;
+the second attempt succeeded at $0.895. `state.total_cost_usd` recorded
+**only $0.895** — the failed attempt's $1.5278 was lost.
+
+Pre-fix `run_claude` retried on `is_error` via `continue` without
+preserving `parsed.cost_usd`. Multi-retry chains would silently
+understate real spend by hundreds of dollars in extreme cases.
+
+v1.3.4 #15 fixed cost loss across **milestone** retries (the
+`_PhaseError` path); v1.3.9 closes the parallel hole in `run_claude`'s
+own retry loop:
+
+- New `accumulated_cost` counter survives the loop iterations.
+- Every parsed result's `cost_usd` is added to the accumulator on the
+  way to `continue`.
+- All return paths (success / final-error / timeout) emit
+  `ClaudeResult(cost_usd=accumulated_cost)` so the orchestrator's
+  `_accumulate_cost` charges the full real spend to state.
+- Log lines now include both per-attempt cost and running accumulator
+  so failed-retry chains are visible in `.claude/workflow-*.log`.
+
+### Tests
+
+7 new tests in `tests/test_v139_retry_cost_accumulation.py`:
+- `test_failed_then_successful_attempt_sums_costs` — the exact soak
+  case: $1.5278 (fail) + $0.895 (success) = $2.4228.
+- `test_three_failed_attempts_then_success_accumulates_all`
+- `test_all_retries_fail_returns_accumulated_cost`
+- `test_single_success_returns_only_its_cost` (sanity)
+- `test_subprocess_failure_then_success_does_not_accumulate` (synthetic
+  errors with no parseable cost don't fake-add)
+- `test_timeout_exhausted_returns_accumulated_cost_for_earlier_attempts`
+- `test_exact_soak_pattern_returns_correct_total` (reproduces the dollar
+  amounts observed in the real soak end-to-end)
+
+### Stats
+
+- Test count: 1392 → **1399** passing (+7 soak-driven regression tests).
+- Ruff + format clean.
+
+### Soak metadata
+
+- Project: `sw-dogfood-2026-05-31` (fresh v1.3.8 onboard)
+- Spec: 65-word todo CLI spec (synthetic, deliberately small)
+- `audit_trail=true` exercised the AuditTrail v1.3.5 #7/#11 lock under
+  real concurrent writes (gap_curator + Phase A interleaved). Audit
+  chain verified clean with `sw audit verify` post-run.
+- HeartbeatThread refreshed throughout (multiple `sw lock status` checks
+  showed `heartbeat ~30s ago`, never stale).
+- v1.3.6 #1 stale-lock detection correctly identified the orphaned lock
+  when the process was force-killed (`Status: STALE (PID dead or reused)`).
+- v1.3.5 telemetry sequence emitted cleanly: spec_lint_completed,
+  run_started, milestone_started, phase_started, gap_curation_completed,
+  gap_report, gap_validation, phase_completed (with cost), phase_started.
+- All the previously-reviewed fixes (heartbeat, telemetry lock, audit
+  lock, signal handlers, atomic_write retry, engine disposal, savepoints)
+  behaved correctly in vivo — the retry-cost leak is the only new
+  finding.
+
+### Safety qualification
+
+v1.3.9 is safe for every documented configuration AND budget accounting
+now reflects real spend. Operators relying on `max_total_budget_usd`
+caps will see accurate state under retry-heavy workloads.
+
 ## [1.3.8] — 2026-05-31
 
 Edit A — the real worktree-isolation fix that v1.3.5 #6 falsely advertised

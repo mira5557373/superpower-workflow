@@ -168,6 +168,21 @@ def run_claude(
     Returns:
         ClaudeResult with parsed output, cost, session ID, duration, and error flags
     """
+    # v1.3.9 fix (soak finding): accumulate cost across retries.
+    # Pre-fix, when claude -p hit `--max-budget-usd` and returned
+    # is_error=true with a non-zero cost (the cost up to the cap), the
+    # outer retry loop simply discarded `parsed` and tried again. A
+    # successful retry's cost overwrote the failed attempt's accounting,
+    # so `state.total_cost_usd` only reflected the LAST attempt — and a
+    # 4-retry chain of failures could spend many * budget while showing
+    # ~0 in state. Real-world soak observed $1.5 lost on one retry alone.
+    #
+    # Now: track `accumulated_cost` across all attempts. Every return
+    # path that has a parsed cost adds it to the accumulator and returns
+    # that total. Synthetic error returns (no parsed result) keep the
+    # accumulator unchanged.
+    accumulated_cost = 0.0
+
     for attempt in range(len(RETRY_DELAYS) + 1):
         try:
             cmd = _build_command(
@@ -190,29 +205,39 @@ def run_claude(
 
             if result.returncode == 0 and result.stdout.strip():
                 parsed = _parse_json_output(result.stdout)
+                # v1.3.9: always credit this attempt's cost to the running
+                # total, even when is_error=true (cost was real spend).
+                accumulated_cost += parsed.cost_usd
                 if parsed.is_error:
                     upstream = ""
                     if parsed.raw:
                         upstream = parsed.raw.get("result") or parsed.raw.get("error") or ""
                     logger.warning(
-                        "claude -p returned is_error=true (attempt %d/%d). model=%s upstream=%r",
+                        "claude -p returned is_error=true (attempt %d/%d). "
+                        "model=%s cost_this_attempt=$%.4f accumulated=$%.4f upstream=%r",
                         attempt + 1,
                         len(RETRY_DELAYS) + 1,
                         model,
+                        parsed.cost_usd,
+                        accumulated_cost,
                         upstream[:300],
                     )
                     if attempt < len(RETRY_DELAYS):
                         time.sleep(RETRY_DELAYS[attempt])
                         continue
+                # Successful (or final error) return: include accumulated cost.
+                parsed.cost_usd = accumulated_cost
                 return parsed
 
             stderr_msg = (result.stderr or "")[:300]
             stdout_msg = (result.stdout or "")[:300]
             logger.warning(
-                "claude -p subprocess failed (attempt %d/%d). returncode=%d stderr=%r stdout=%r",
+                "claude -p subprocess failed (attempt %d/%d). returncode=%d "
+                "accumulated_cost=$%.4f stderr=%r stdout=%r",
                 attempt + 1,
                 len(RETRY_DELAYS) + 1,
                 result.returncode,
+                accumulated_cost,
                 stderr_msg,
                 stdout_msg,
             )
@@ -220,15 +245,15 @@ def run_claude(
                 time.sleep(RETRY_DELAYS[attempt])
                 continue
 
-            return ClaudeResult(is_error=True)
+            return ClaudeResult(is_error=True, cost_usd=accumulated_cost)
 
         except subprocess.TimeoutExpired:
             if attempt < len(RETRY_DELAYS):
                 time.sleep(RETRY_DELAYS[attempt])
                 continue
-            return ClaudeResult(is_error=True, timed_out=True)
+            return ClaudeResult(is_error=True, timed_out=True, cost_usd=accumulated_cost)
 
-    return ClaudeResult(is_error=True)
+    return ClaudeResult(is_error=True, cost_usd=accumulated_cost)
 
 
 def _build_command(
