@@ -7,7 +7,9 @@ import logging
 import os
 import shutil
 import socket
+import threading
 import time
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -63,10 +65,55 @@ class PhaseState:
     previous_gap_summaries: list[str] = field(default_factory=list)
 
 
+# v1.3.5 #5 + #14 fix: per-writer-unique tmp filename + per-path lock.
+#
+# Pre-fix: every caller wrote to `<path>.json.tmp` — a single deterministic
+# suffix. Two concurrent writers (the v1.3.4 heartbeat daemon + the
+# orchestrator; or N parallel milestone workers; or sw watch + sw run)
+# would race: first writer's tmp gets unlinked by os.replace, second
+# writer's tmp.write_text might land on a partially-deleted file or
+# `os.replace(src, dst)` would fail with `PermissionError: [WinError 32]`
+# on Windows because the dst file is being held by another process.
+#
+# Now: each writer gets a uniquely-suffixed tmp file (pid + thread id +
+# 8 random hex). A module-level `dict[Path, threading.Lock]` serializes
+# concurrent writers to the SAME destination path, eliminating the
+# rename collision on Windows.
+#
+# Orphaned `.tmp.*` files from crashed writers are cleaned up by callers
+# that walk `.claude/` at startup (acquire_lock, sw clean) — not by
+# _atomic_write itself, because (a) the writer can't safely delete its
+# own siblings without risking another writer's in-flight tmp, and
+# (b) the orphans are harmless beyond cosmetic clutter.
+_PATH_LOCKS: dict[str, threading.Lock] = {}
+_PATH_LOCKS_GUARD = threading.Lock()
+
+
+def _get_path_lock(path: Path) -> threading.Lock:
+    """Return a process-wide lock for serializing writes to `path`."""
+    key = str(path.resolve())
+    with _PATH_LOCKS_GUARD:
+        lock = _PATH_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _PATH_LOCKS[key] = lock
+        return lock
+
+
 def _atomic_write(path: Path, data: dict) -> None:
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2))
-    os.replace(str(tmp), str(path))
+    """Atomic write of JSON `data` to `path`.
+
+    v1.3.5 #5: uses a per-writer unique tmp filename so concurrent writers
+    to the same destination don't collide on the .tmp suffix. A per-path
+    threading.Lock further serializes the write+rename pair so the second
+    writer's os.replace doesn't fail with Windows ERROR_SHARING_VIOLATION.
+    """
+    suffix = f".json.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex[:8]}.tmp"
+    tmp = path.with_suffix(suffix)
+    lock = _get_path_lock(path)
+    with lock:
+        tmp.write_text(json.dumps(data, indent=2))
+        os.replace(str(tmp), str(path))
 
 
 def load_state(claude_dir: Path) -> WorkflowState:

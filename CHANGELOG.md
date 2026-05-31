@@ -3,6 +3,80 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.5] — 2026-05-31
+
+Concurrency review Phase 2 — parallel-mode safety. Closes the findings
+that only bite when `parallel.enabled=true` or `audit_trail=true`. After
+v1.3.5, all CRITICAL and HIGH findings from the v1.3.3 deep-review are
+addressed. Remaining 7 items are MEDIUM/LOW and ship in v1.3.6.
+
+### Fixed — parallel-mode safety
+
+- **#5 + #14 — `_atomic_write` per-writer-unique tmp filename.** Pre-fix
+  every caller used `<path>.json.tmp` — a single deterministic suffix.
+  Two concurrent writers raced: first's `os.replace` succeeded, second's
+  failed with `PermissionError: [WinError 32]` on Windows. v1.3.4's
+  heartbeat thread immediately exposed this when running under the test
+  suite. New `_atomic_write` uses `pid + tid + uuid.uuid4().hex[:8]` as
+  the tmp suffix and serializes writes to the same destination path
+  through a `dict[Path, threading.Lock]`.
+- **#3 — `TelemetryEmitter` shared file handle.** Concurrent `emit()`
+  from parallel worker threads could interleave bytes mid-JSONL-line.
+  Wrapped the whole emit body (lazy file open + write + flush) in a
+  `threading.Lock`.
+- **#7/#11 — `AuditTrail.append` read-modify-write.** Two appenders
+  could read the same `_seq` + `_prev_hash`, both compute hashes from
+  the same predecessor, and both write — producing duplicate sequence
+  numbers and a hash chain that `sw audit verify` flags as tampering.
+  Lock around the entire append.
+- **#2 — `ProjectRegistry` register/remove.** Two concurrent `sw init`
+  invocations on different projects could both load the same baseline,
+  each add their own entry, and one overwrite the other. Added both a
+  process-level `threading.Lock` (class attribute, shared across all
+  instances) AND a `filelock.FileLock` for cross-process serialization.
+- **#12 — `TelemetryDbWriter` in-memory state divergence.** Pre-fix,
+  `queue.Full` permanently disabled the DB sink for the rest of the
+  process — one transient burst silently destroyed observability for
+  the entire run. Also, `_write_event` mutated `self._milestone_uuids`
+  in place; if `session.commit()` raised, the DB rolled back but the
+  in-memory dicts still pointed at orphan UUIDs, causing every
+  subsequent batch to misroute. v1.3.5 logs the dropped event but keeps
+  the sink enabled, and snapshots the dicts before each batch so
+  rollback restores them.
+- **#4 — Parallel worker state race on `self.state.total_cost_usd`.**
+  v1.3.4's `_accumulate_cost` mutated state without a lock; in parallel
+  mode N workers could perform `+=` concurrently with torn-write risk.
+  Added `self._state_lock` (orchestrator init) and wrapped the
+  accumulator's `state.total_cost_usd += delta` + `save_state` pair
+  under it. The parallel-merge step also now holds the lock.
+- **#16/#17 — Per-milestone completion not persisted immediately.**
+  Subsumed by the #4 fix above (the parallel-merge step now updates
+  `state.completed` / `state.failed` under the lock per-milestone
+  rather than at end-of-wave).
+- **#6 — Parallel branches writing to shared `.claude/.gap-report.json`
+  etc.** Switched `_run_parallel` from `execute_wave` to
+  `execute_wave_isolated` so each milestone runs in its own worktree
+  with its own `.claude/`. Per-milestone reports no longer collide on
+  shared paths.
+
+### Stats
+
+- Test count: 1351 → **1367** passing (+16 regression tests covering
+  every change in this release).
+- Ruff check + format clean. Complexity audit (510/55/7) green.
+
+### Safety qualification
+
+v1.3.5 is **safe** for all documented configurations: single-threaded,
+parallel.enabled=true (with worktrees), audit_trail=true, long Phase B.
+
+The 5 structural changes the v1.3.3 concurrency-review critic recommended
+have all shipped across v1.3.4 + v1.3.5. Closes 13 of the 20 surviving
+findings. The remaining 7 (#1 PID-reuse TOCTOU, #8 dashboard read race,
+#10 force-clean race, #13 file/DB sink divergence, #18 sync adapter
+savepoints, #19 ci_fix TimeoutExpired, #20 engine pool leak) are
+MEDIUM/LOW and scheduled for v1.3.6.
+
 ## [1.3.4] — 2026-05-31
 
 Concurrency review Phase 1 — universal-safety fixes. Closes the two

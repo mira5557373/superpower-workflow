@@ -47,8 +47,12 @@ class TelemetryDbWriter:
         try:
             self._queue.put_nowait(event)
         except queue.Full:
-            logger.warning("DB write queue full, disabling DB writes")
-            self._db_enabled = False
+            # v1.3.5 #12: pre-fix, queue.Full permanently disabled DB writes
+            # for the rest of the process — one transient burst would
+            # destroy observability silently. Now: log the drop but keep
+            # the sink enabled so a subsequent emit can land once the
+            # flush thread drains the queue.
+            logger.warning("DB write queue full; dropping event (sink stays enabled)")
 
     def close(self) -> None:
         self._stop.set()
@@ -77,6 +81,18 @@ class TelemetryDbWriter:
         if not batch:
             return
 
+        # v1.3.5 #12: snapshot the UUID dicts before the flush so a
+        # mid-batch failure can roll back the in-memory state in lockstep
+        # with session.rollback(). Pre-fix, _write_event mutated
+        # self._milestone_uuids / self._phase_uuids / self._run_uuid in
+        # place; on rollback the DB lost those rows but the dicts still
+        # pointed at the orphan UUIDs — every subsequent batch that
+        # references those milestones would silently misroute or fail.
+        ms_snapshot = dict(self._milestone_uuids)
+        ph_snapshot = dict(self._phase_uuids)
+        run_snapshot = self._run_uuid
+        proj_snapshot = self._project_uuid
+
         try:
             from superpower_workflow.db.engine import get_session_factory
 
@@ -88,7 +104,13 @@ class TelemetryDbWriter:
                 session.commit()
             except Exception:
                 session.rollback()
-                logger.warning("DB flush failed", exc_info=True)
+                # Restore in-memory state to the pre-batch snapshot so
+                # the next attempt starts from a consistent baseline.
+                self._milestone_uuids = ms_snapshot
+                self._phase_uuids = ph_snapshot
+                self._run_uuid = run_snapshot
+                self._project_uuid = proj_snapshot
+                logger.warning("DB flush failed; in-memory state rolled back", exc_info=True)
             finally:
                 session.close()
         except Exception:

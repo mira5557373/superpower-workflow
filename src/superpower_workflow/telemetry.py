@@ -319,29 +319,45 @@ class StrictModeIteration(TelemetryEvent):
 
 
 class TelemetryEmitter:
+    """v1.3.5 #3 fix: thread-safe writes for parallel orchestrator branches.
+
+    Pre-fix: `emit` opened the file lazily and called `self._file.write` +
+    `.flush` without any lock. When `parallel.enabled=true`, all worker
+    threads shared `self._telemetry` and concurrent emit() calls could
+    interleave bytes mid-line, producing un-parseable JSONL.
+
+    Now: a `threading.Lock` serializes the entire emit() body — lazy file
+    open + write + flush — so a single event always lands atomically.
+    """
+
     def __init__(self, path: Path | None, run_id: str) -> None:
+        import threading
+
         self._path = path
         self._run_id = run_id
         self._file: IO[str] | None = None
         self._enabled = path is not None
+        self._lock = threading.Lock()
 
     def emit(self, event: TelemetryEvent) -> None:
         if not self._enabled:
             return
         event.run_id = self._run_id
-        try:
-            if self._file is None:
-                self._path.parent.mkdir(parents=True, exist_ok=True)
-                self._file = open(self._path, "a", encoding="utf-8")  # noqa: SIM115
-            self._file.write(event.to_json_line() + "\n")
-            self._file.flush()
-        except OSError:
-            pass
+        with self._lock:
+            try:
+                if self._file is None:
+                    self._path.parent.mkdir(parents=True, exist_ok=True)
+                    self._file = open(self._path, "a", encoding="utf-8")  # noqa: SIM115
+                self._file.write(event.to_json_line() + "\n")
+                self._file.flush()
+            except OSError:
+                pass
 
     def close(self) -> None:
-        if self._file is not None:
-            self._file.close()
-            self._file = None
+        with self._lock:
+            if self._file is not None:
+                self._file.close()
+                self._file = None
 
     @classmethod
     def disabled(cls) -> TelemetryEmitter:

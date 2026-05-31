@@ -133,6 +133,15 @@ class Orchestrator:
         else:
             self._plugins = []
 
+        # v1.3.5 #4 fix: serialize mutations to self.state when parallel
+        # worker threads share it. The state cost-accumulator
+        # (`_accumulate_cost`) and the parallel-wave merge step both take
+        # this lock. Sequential mode is unaffected (lock acquisition on
+        # an uncontended lock is ~50ns).
+        import threading as _threading
+
+        self._state_lock = _threading.Lock()
+
     def run(
         self,
         dry_run: bool = False,
@@ -694,12 +703,17 @@ class Orchestrator:
         if delta:
             import contextlib
 
-            self.state.total_cost_usd += delta
-            # Transient I/O hiccup tolerated — cost still in memory; the
-            # next _accumulate_cost call (or save_state at milestone end)
-            # will retry. Charging must not abort the milestone.
-            with contextlib.suppress(OSError):
-                save_state(self.claude_dir, self.state)
+            # v1.3.5 #4: protect concurrent workers from torn writes to
+            # the shared state.total_cost_usd float and the save_state
+            # disk write. Uncontended acquire is ~50ns; contended workers
+            # block briefly but no correctness loss.
+            with self._state_lock:
+                self.state.total_cost_usd += delta
+                # Transient I/O hiccup tolerated — cost still in memory;
+                # the next _accumulate_cost call will retry. Charging
+                # must not abort the milestone.
+                with contextlib.suppress(OSError):
+                    save_state(self.claude_dir, self.state)
         return local_acc + delta
 
     def _call_pre_phase(self, phase: str, milestone: dict) -> None:
@@ -1406,29 +1420,42 @@ class Orchestrator:
                         milestone=name, success=False, error=str(e), worktree=run_cwd
                     )
 
+            # v1.3.5 #6 fix: switch from execute_wave (shared cwd → shared
+            # .claude/.gap-report.json, .spec-compliance.json, etc. across
+            # parallel branches → torn writes and cross-milestone report
+            # contamination) to execute_wave_isolated (per-milestone
+            # worktree → per-milestone .claude/ → no shared files).
+            #
+            # On success, each worktree is merged back to main; on failure,
+            # the worktree is removed cleanly. Cost telemetry / state
+            # mutations remain consolidated post-wave via _state_lock (#4).
             try:
-                results = executor.execute_wave(wave, run_fn=run_fn, cwd=self.cwd)
+                results = executor.execute_wave_isolated(wave, run_fn=run_fn)
             except Exception:
                 wt_mgr.cleanup_all()
                 raise
 
-            self.state.current_step = "parallel_merge"
-            save_state(self.claude_dir, self.state)
+            # v1.3.5 #4: merge wave results under self._state_lock so the
+            # final list append + save_state happens atomically. Workers
+            # themselves can't append to self.state.completed concurrently
+            # — they return a ParallelResult, and the orchestrator merges
+            # post-wave. The lock guards against any other thread (e.g.,
+            # the heartbeat daemon's lock-meta save, dashboard polling)
+            # that may snapshot state during this critical section.
+            with self._state_lock:
+                self.state.current_step = "parallel_merge"
+                save_state(self.claude_dir, self.state)
 
-            for result in results:
-                if result.success:
-                    self.state.completed.append(result.milestone)
-                    # v1.3.4 #15: cost was already charged incrementally
-                    # inside _run_milestone via _accumulate_cost. Adding
-                    # result.cost_usd here would double-count.
-                    # NOTE: parallel mode still has the v1.3.5 #4 race on
-                    # state.total_cost_usd (workers contend on the same
-                    # float); v1.3.5 fixes that with proper locking and
-                    # per-milestone local accumulators.
-                else:
-                    self.state.failed.append(result.milestone)
-                    failed_set.add(result.milestone)
-            save_state(self.claude_dir, self.state)
+                for result in results:
+                    if result.success:
+                        self.state.completed.append(result.milestone)
+                        # v1.3.4 #15: cost was already charged incrementally
+                        # inside _run_milestone via _accumulate_cost. Adding
+                        # result.cost_usd here would double-count.
+                    else:
+                        self.state.failed.append(result.milestone)
+                        failed_set.add(result.milestone)
+                save_state(self.claude_dir, self.state)
 
             if self._telemetry:
                 from superpower_workflow.telemetry import ParallelWaveCompleted

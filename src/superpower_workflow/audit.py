@@ -52,12 +52,35 @@ def derive_key(env_var: str = "SW_AUDIT_KEY") -> bytes | None:
 
 
 class AuditTrail:
+    """v1.3.5 #7/#11 fix: thread-safe append for parallel orchestrator branches.
+
+    Pre-fix: `append` read `self._seq` + `self._prev_hash`, computed the
+    next entry's hash from those values, wrote the entry to the file, then
+    updated `self._seq` += 1 and `self._prev_hash`. Two concurrent
+    callers could both read the same seq/prev_hash, both compute hashes
+    against the same predecessor, and both write — producing duplicate
+    seq numbers AND a broken hash chain that `sw audit verify` would
+    flag as tampering. For a compliance feature, "tamper detection
+    produces false-positives under legitimate concurrent load" is a
+    show-stopper.
+
+    Now: a `threading.Lock` serializes the entire read-modify-write inside
+    `append`. The file open + write is also inside the lock so a third
+    party reading the file via `verify()` doesn't race the writer (the
+    file is opened in append mode, so the OS gives us atomic append for
+    the single-line write — but the hash-chain state is in-memory and
+    must be protected).
+    """
+
     def __init__(self, path: Path, key: bytes | None = None) -> None:
+        import threading
+
         self._path = path
         self._key = key
         self._seq = 0
         self._prev_hash = ""
         self._enabled = key is not None
+        self._lock = threading.Lock()
         if self._enabled:
             self._load_last()
 
@@ -96,22 +119,25 @@ class AuditTrail:
     ) -> None:
         if not self._enabled:
             return
-        entry = {
-            "seq": self._seq,
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "event": event,
-            "run_id": run_id,
-            "milestone": milestone,
-            "data": data or {},
-            "prev_hash": self._prev_hash,
-        }
-        canonical = _canonical_json(entry)
-        entry["hash"] = _compute_hash(canonical, self._key)
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self._path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, separators=(",", ":")) + "\n")
-        self._prev_hash = entry["hash"]
-        self._seq += 1
+        # v1.3.5 #7/#11: read-modify-write of _seq/_prev_hash must be atomic
+        # so the hash chain stays linear under parallel orchestrator branches.
+        with self._lock:
+            entry = {
+                "seq": self._seq,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "event": event,
+                "run_id": run_id,
+                "milestone": milestone,
+                "data": data or {},
+                "prev_hash": self._prev_hash,
+            }
+            canonical = _canonical_json(entry)
+            entry["hash"] = _compute_hash(canonical, self._key)
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+            self._prev_hash = entry["hash"]
+            self._seq += 1
 
     def verify(self) -> tuple[bool, int]:
         if not self._path.exists():
