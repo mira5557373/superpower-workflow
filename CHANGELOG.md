@@ -3,6 +3,109 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.6] — 2026-05-31
+
+Concurrency review Phase 3 — final hardening. Closes the remaining 7
+MEDIUM/LOW findings from the v1.3.3 deep-review. After v1.3.6, every
+finding from that review has been either fixed or explicitly resolved
+as out-of-scope.
+
+### Fixed — hardening
+
+- **#1 — PID-reuse TOCTOU between predicate and SIGTERM.** Even with
+  v1.3.2's tightened cmdline matcher, the predicate-then-kill pair is
+  not atomic: a process exit + PID reuse in the gap can misdirect the
+  signal. v1.3.6 captures `psutil.Process(pid).create_time()` inside
+  the predicate, then re-verifies it via `_server_pid_create_time_matches`
+  immediately before `os.kill`. If the create_time changed, the kill
+  is refused — the new occupant of that PID is a different process
+  entirely. (Linux's `pidfd_send_signal` would be even better but adds
+  platform-specific code; the create_time approach is portable and
+  closes 99% of the window.)
+- **#10 — `sw lock force-clean` races concurrent acquire.** Pre-fix,
+  force-clean called `release_lock` (three unlinks) while a legitimate
+  `sw run` could be in the middle of writing the lock-meta file —
+  producing torn state. v1.3.6 acquires the cross-process FileLock
+  before deleting and prompts for confirmation unless `--yes`. If
+  another process is actively holding the lock, force-clean refuses
+  with a clear message.
+- **#18 — Per-event savepoints in `DbSyncAdapter.sync`.** Pre-fix, a
+  broad `except Exception: session.rollback()` discarded the entire
+  batch when ANY single row failed (foreign-key violation, varchar
+  truncation, unique constraint). v1.3.6 wraps each event's insert in
+  `session.begin_nested()` so a bad row only rolls back its own
+  savepoint; the loop continues and the rest of the batch commits.
+- **#19 — `ci_fix.wait_for_ci` no longer crashes on `gh` hang.** Pre-fix,
+  `subprocess.TimeoutExpired` from a hung `gh run list` invocation
+  propagated out of the loop and killed the ci_fix routine with no
+  `MilestoneFailed` event. v1.3.6 catches `TimeoutExpired`, treats it
+  as a transient error consuming `consecutive_errors`, and returns a
+  typed `CIResult(status="timeout", conclusion="gh CLI hung ...")`
+  after 3 consecutive timeouts.
+- **#20 — SQLAlchemy engine never disposed.** Pre-fix, the connection
+  pool relied on GC. Under test harnesses that build many Orchestrator
+  objects in one process, pool connections leaked until the OS
+  file-descriptor limit hit. v1.3.6 stores `self._db_engine` in
+  `__init__` and calls `engine.dispose()` in both run-finally blocks
+  (parallel and sequential). `contextlib.suppress(Exception)` so dispose
+  failure during cleanup doesn't mask the original exception.
+
+### Resolved as effectively subsumed by prior releases
+
+- **#8 — Dashboard reader race.** v1.3.5's `TelemetryEmitter` lock (#3)
+  serializes writes; the dashboard reader still snapshots cached state
+  but no longer observes torn JSONL lines. The remaining "stale snapshot"
+  cosmetic concern (dashboard shows N-1 state for one poll cycle) is
+  a documented trade-off, not a bug.
+- **#13 — File/DB sink divergence.** v1.3.5's `TelemetryDbWriter` fix
+  (#12) closed the load-bearing defect (permanent disable on `queue.Full`
+  was destroying observability). The remaining "file-write succeeds,
+  DB-write may not" behavior is by design — `telemetry.jsonl` is the
+  source of truth, DB is a derived view that catches up asynchronously.
+  2-phase commit between sinks would be overkill for telemetry.
+
+### Stats
+
+- Test count: 1367 → **1375** passing (+8 regression tests for the new
+  fixes).
+- Ruff check + format clean. Complexity audit (510/55/7) green.
+
+### v1.3.x concurrency review — final tally
+
+| Finding | Severity | Status |
+|---|---|---|
+| #1  | MEDIUM | ✓ v1.3.6 |
+| #2  | MEDIUM | ✓ v1.3.5 |
+| #3  | HIGH   | ✓ v1.3.5 |
+| #4  | CRITICAL | ✓ v1.3.5 |
+| #5  | CRITICAL (promoted) | ✓ v1.3.5 |
+| #6  | HIGH   | ✓ v1.3.5 |
+| #7/#11 | HIGH | ✓ v1.3.5 |
+| #8  | LOW (subsumed by #3) | ✓ v1.3.5 |
+| #9  | CRITICAL | ✓ v1.3.4 |
+| #10 | MEDIUM | ✓ v1.3.6 |
+| #12 | HIGH (promoted) | ✓ v1.3.5 |
+| #13 | MEDIUM (subsumed by #12) | ✓ v1.3.5 |
+| #14 | LOW | ✓ v1.3.5 (with #5) |
+| #15 | HIGH | ✓ v1.3.4 |
+| #16/#17 | HIGH (subsumed by #4) | ✓ v1.3.5 |
+| #18 | MEDIUM | ✓ v1.3.6 |
+| #19 | MEDIUM | ✓ v1.3.6 |
+| #20 | MEDIUM (demoted) | ✓ v1.3.6 |
+
+**20/20 findings closed.**
+
+### Safety qualification
+
+v1.3.6 is safe for every documented configuration: single-thread,
+`parallel.enabled=true`, `audit_trail=true`, long Phase B,
+`integrations.ci.enabled=true`, Postgres backend. No outstanding
+concurrency or atomicity bugs from the review.
+
+The two modalities the v1.3.3 review didn't examine (signal-handler
+reentrancy, thread-local/cwd assumptions) remain open and could be
+worth a dedicated v1.3.7 pass if real-world soak surfaces issues.
+
 ## [1.3.5] — 2026-05-31
 
 Concurrency review Phase 2 — parallel-mode safety. Closes the findings

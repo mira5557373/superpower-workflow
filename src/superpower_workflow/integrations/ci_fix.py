@@ -33,6 +33,18 @@ def wait_for_ci(
             )
         except FileNotFoundError:
             return CIResult(status="timeout", conclusion="gh CLI not found")
+        except subprocess.TimeoutExpired:
+            # v1.3.6 #19 fix: pre-fix this propagated up and killed the
+            # ci_fix_loop with no MilestoneFailed event. Now treat a
+            # `gh` hang as a transient error and back off; after enough
+            # consecutive errors, give up cleanly with a typed result.
+            consecutive_errors += 1
+            if consecutive_errors >= 3:
+                return CIResult(status="timeout", conclusion="gh CLI hung 3 times in a row")
+            if time.monotonic() >= deadline:
+                return CIResult(status="timeout", conclusion="overall ci wait deadline")
+            time.sleep(poll_interval_seconds)
+            continue
         if result.returncode == 0 and result.stdout.strip():
             try:
                 runs = json.loads(result.stdout)

@@ -173,6 +173,13 @@ class TestCmdServerStopWiring:
         kills = []
         monkeypatch.setattr("os.kill", lambda pid, sig: kills.append((pid, sig)))
         monkeypatch.setattr(cli_mod, "_server_pid_belongs_to_sw", lambda pid: True)
+        # v1.3.6 #1: _cmd_server_stop now also calls _server_pid_create_time
+        # both before and after the predicate. Mock both helpers to make
+        # this happy-path test pass.
+        monkeypatch.setattr(cli_mod, "_server_pid_create_time", lambda pid: 1000.0)
+        monkeypatch.setattr(
+            cli_mod, "_server_pid_create_time_matches", lambda pid, expected: True
+        )
 
         cli_mod._cmd_server_stop()
         assert kills and kills[0][0] == 42

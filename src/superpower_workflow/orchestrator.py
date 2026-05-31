@@ -217,6 +217,12 @@ class Orchestrator:
         else:
             self._telemetry = TelemetryEmitter.disabled()
 
+        # v1.3.6 #20 fix: hold engine reference for explicit disposal in
+        # the run-finally blocks. Pre-fix, the SQLAlchemy engine + its
+        # connection pool relied on garbage collection — under test
+        # harnesses that instantiate many Orchestrator objects per process,
+        # the pool leaked connections until the OS file-descriptor limit hit.
+        self._db_engine = None
         url_env_name = self.config.get("database", {}).get("url_env", "SW_DATABASE_URL")
         db_url = os.environ.get(url_env_name, "")
         if db_url:
@@ -227,6 +233,7 @@ class Orchestrator:
 
                 engine = create_engine_from_url(db_url)
                 Base.metadata.create_all(engine)
+                self._db_engine = engine
                 self._telemetry = TelemetryDbWriter(
                     emitter=self._telemetry,
                     engine=engine,
@@ -294,6 +301,12 @@ class Orchestrator:
                 logger.close()
                 if self._telemetry:
                     self._telemetry.close()
+                # v1.3.6 #20: dispose SQLAlchemy engine to release pool conns.
+                if getattr(self, "_db_engine", None) is not None:
+                    import contextlib as _contextlib
+
+                    with _contextlib.suppress(Exception):
+                        self._db_engine.dispose()
             return
 
         milestone_retry_delays = [120, 300, 600]
@@ -481,6 +494,12 @@ class Orchestrator:
             logger.close()
             if self._telemetry:
                 self._telemetry.close()
+            # v1.3.6 #20: dispose SQLAlchemy engine to release pool conns.
+            if getattr(self, "_db_engine", None) is not None:
+                import contextlib as _contextlib
+
+                with _contextlib.suppress(Exception):
+                    self._db_engine.dispose()
 
     def _notify(self, event: str, payload: dict) -> None:
         if self._slack_config:

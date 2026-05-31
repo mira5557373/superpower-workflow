@@ -222,14 +222,29 @@ class DbSyncAdapter:
                         run_obj.skipped_count = event.get("skipped_count", 0)
                         run_obj.duration_seconds = event.get("duration_seconds", 0.0)
 
-                evt = SwEvent(
-                    id=uuid.uuid4(),
-                    run_id=run_uuid,
-                    milestone_name=event.get("milestone"),
-                    event_type=event_type,
-                    data_json=event,
-                )
-                session.add(evt)
+                # v1.3.6 #18: per-event savepoint so one bad row doesn't
+                # rollback the entire batch. Pre-fix, a single integrity
+                # violation (foreign key, unique constraint, varchar
+                # truncation) caused session.rollback() to discard 999
+                # good events with it. With savepoints, the bad row's
+                # insert is reverted in isolation; the loop continues.
+                try:
+                    with session.begin_nested():
+                        evt = SwEvent(
+                            id=uuid.uuid4(),
+                            run_id=run_uuid,
+                            milestone_name=event.get("milestone"),
+                            event_type=event_type,
+                            data_json=event,
+                        )
+                        session.add(evt)
+                except Exception:
+                    logger.warning(
+                        "Sync: dropped one bad event (%s); continuing batch",
+                        event_type,
+                        exc_info=True,
+                    )
+                    continue
 
             session.commit()
         except Exception:

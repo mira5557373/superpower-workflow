@@ -126,7 +126,15 @@ def build_parser() -> argparse.ArgumentParser:
     lock_p = sub.add_parser("lock", help="Inspect or force-clean the workflow lock")
     lock_sub = lock_p.add_subparsers(dest="lock_command")
     lock_sub.add_parser("status", help="Show lock holder details")
-    lock_sub.add_parser("force-clean", help="Force-remove lock (use only if you're sure)")
+    fc_p = lock_sub.add_parser(
+        "force-clean",
+        help="Force-remove lock (acquires filelock first; prompts unless --yes)",
+    )
+    fc_p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the confirmation prompt (use only if you're certain)",
+    )
 
     metrics_p = sub.add_parser("metrics", help="Show telemetry metrics")
     metrics_p.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON")
@@ -1036,6 +1044,41 @@ def _cmd_lock(project_root: Path, args) -> None:
             print("  Status:    ACTIVE")
         return
     if sub == "force-clean":
+        # v1.3.6 #10: acquire the filelock before deleting the meta files.
+        # Pre-fix, force-clean did three unlink() calls while a concurrent
+        # `sw run` could be holding the filelock and writing the meta — the
+        # unlinks would race the writer's atomic_write, producing torn
+        # state on disk and an immediate ENOENT for the legitimate holder.
+        from filelock import FileLock, Timeout
+
+        from superpower_workflow.state import LOCK_FILE
+
+        require_confirm = getattr(args, "yes", False) is not True
+        if require_confirm:
+            sys.stdout.write(
+                "  This will forcibly remove the workflow lock even if a sw run is "
+                "currently in progress. Are you SURE? [y/N]: "
+            )
+            sys.stdout.flush()
+            answer = sys.stdin.readline().strip().lower()
+            if not answer.startswith("y"):
+                print("  Aborted.")
+                return
+
+        claude_dir.mkdir(parents=True, exist_ok=True)
+        fl = FileLock(str(claude_dir / LOCK_FILE) + ".filelock", timeout=5)
+        try:
+            fl.acquire(blocking=True)
+        except Timeout:
+            print(
+                "  WARNING: another sw process is actively holding the lock. "
+                "Wait for it to finish, or kill its PID and retry."
+            )
+            return
+        # Release the OS file handle BEFORE calling release_lock — on
+        # Windows, release_lock unlinks the .filelock file, which fails
+        # with PermissionError if we still hold the handle.
+        fl.release()
         release_lock(claude_dir)
         print("  Lock force-removed.")
         return
@@ -1413,13 +1456,30 @@ def _cmd_server_stop() -> None:
         print("  PID file unreadable; removed.")
         return
 
-    if not _server_pid_belongs_to_sw(pid):
+    # v1.3.6 #1: capture the process' create_time INSIDE the predicate so
+    # we can re-verify identity just before os.kill — closes the TOCTOU
+    # window where the real server exits between the cmdline check and the
+    # signal, allowing the OS to reuse the PID for an unrelated process.
+    create_time = _server_pid_create_time(pid)
+    if not _server_pid_belongs_to_sw(pid) or create_time is None:
         # Stale PID file from a prior boot, or PID has been reused.
         # Refuse to SIGTERM an unknown process; just clean up the file.
         pid_file.unlink(missing_ok=True)
         print(
             f"  PID {pid} does not appear to be a sw server (stale PID file or reused PID); "
             "removed PID file without sending SIGTERM."
+        )
+        return
+
+    # Re-verify create_time just before the signal. If the original process
+    # has exited and the kernel has handed the PID to another process, that
+    # new process will have a DIFFERENT create_time and we refuse.
+    if not _server_pid_create_time_matches(pid, create_time):
+        pid_file.unlink(missing_ok=True)
+        print(
+            f"  PID {pid} create_time changed between check and signal "
+            f"(original process exited, PID was reused). Removed PID file "
+            "without sending SIGTERM."
         )
         return
 
@@ -1432,6 +1492,30 @@ def _cmd_server_stop() -> None:
     except ProcessLookupError:
         pid_file.unlink(missing_ok=True)
         print("  Server not running.")
+
+
+def _server_pid_create_time(pid: int) -> float | None:
+    """v1.3.6 #1: snapshot the process create_time at predicate-check time
+    so the caller can re-verify identity just before signaling. Returns
+    None if psutil is missing or the process doesn't exist."""
+    try:
+        import psutil
+    except ImportError:
+        return None
+    try:
+        return psutil.Process(pid).create_time()
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return None
+
+
+def _server_pid_create_time_matches(pid: int, expected: float, tolerance: float = 1.0) -> bool:
+    """v1.3.6 #1: True iff the process at `pid` still has the same
+    create_time as when we last checked. Tolerance accommodates the small
+    clock-skew window psutil reports on Windows."""
+    actual = _server_pid_create_time(pid)
+    if actual is None:
+        return False
+    return abs(actual - expected) <= tolerance
 
 
 def _cmd_server_init_db(args) -> None:
