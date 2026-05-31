@@ -101,7 +101,7 @@ class TestRunClaudeReturnsParseResult:
             }
         )
 
-        with patch("superpower_workflow.runner.subprocess.run") as mock_run:
+        with patch("superpower_workflow.runner._invoke_claude") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout=mock_output, stderr="")
 
             result = run_claude(
@@ -126,7 +126,7 @@ class TestRunClaudeBuildsCommand:
 
     def test_run_claude_builds_correct_command(self):
         """Command includes all expected flags."""
-        with patch("superpower_workflow.runner.subprocess.run") as mock_run:
+        with patch("superpower_workflow.runner._invoke_claude") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0,
                 stdout=json.dumps({"result": "ok", "total_cost_usd": 0.0}),
@@ -185,7 +185,7 @@ class TestRunClaudeRetriesOnNetworkError:
         )
 
         with (
-            patch("superpower_workflow.runner.subprocess.run") as mock_run,
+            patch("superpower_workflow.runner._invoke_claude") as mock_run,
             patch("superpower_workflow.runner.time.sleep") as mock_sleep,
         ):
             # Fail twice, succeed third time
@@ -218,7 +218,7 @@ class TestRunClaudeFailsAfterMaxRetries:
     def test_run_claude_fails_after_max_retries(self):
         """run_claude returns is_error=True after all retries exhausted."""
         with (
-            patch("superpower_workflow.runner.subprocess.run") as mock_run,
+            patch("superpower_workflow.runner._invoke_claude") as mock_run,
             patch("superpower_workflow.runner.time.sleep") as mock_sleep,
         ):
             # Always fail
@@ -249,7 +249,7 @@ class TestRunClaudeLogsUpstreamErrors:
             '"total_cost_usd":0,"session_id":"abc"}'
         )
         with (
-            patch("superpower_workflow.runner.subprocess.run") as mock_run,
+            patch("superpower_workflow.runner._invoke_claude") as mock_run,
             patch("superpower_workflow.runner.time.sleep"),
             caplog.at_level("WARNING", logger="superpower_workflow.runner"),
         ):
@@ -265,7 +265,7 @@ class TestRunClaudeLogsUpstreamErrors:
     def test_run_claude_logs_subprocess_stderr(self, caplog):
         """When claude exits non-zero, log returncode + stderr + stdout."""
         with (
-            patch("superpower_workflow.runner.subprocess.run") as mock_run,
+            patch("superpower_workflow.runner._invoke_claude") as mock_run,
             patch("superpower_workflow.runner.time.sleep"),
             caplog.at_level("WARNING", logger="superpower_workflow.runner"),
         ):
@@ -286,7 +286,10 @@ class TestRunClaudeHandlesTimeout:
 
     def test_run_claude_handles_timeout(self):
         """run_claude returns timed_out=True on TimeoutExpired."""
-        with patch("superpower_workflow.runner.subprocess.run") as mock_run:
+        with (
+            patch("superpower_workflow.runner._invoke_claude") as mock_run,
+            patch("superpower_workflow.runner.time.sleep"),  # skip retry delays
+        ):
             mock_run.side_effect = subprocess.TimeoutExpired("claude", TIMEOUT_SECONDS)
 
             result = run_claude(

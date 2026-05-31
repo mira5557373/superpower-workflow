@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -164,9 +163,15 @@ def _increment_iteration(
         phase["previous_important_gaps"] = current_important
     if current_summaries is not None:
         phase["previous_gap_summaries"] = current_summaries
-    tmp = phase_path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(phase, indent=2), encoding="utf-8")
-    os.replace(str(tmp), str(phase_path))
+    # v1.3.7 #9 fix: route through the per-writer-unique-tmp `_atomic_write`
+    # helper. Pre-fix this hook used a bare `.json.tmp` suffix + os.replace
+    # — the same race that v1.3.5 #5 fixed for the rest of the codebase.
+    # The hook runs in a separate subprocess that the v1.3.5 atomic-write
+    # lock cannot reach, so the deterministic-suffix race was still open
+    # via the convergence loop on Windows.
+    from superpower_workflow.state import _atomic_write
+
+    _atomic_write(phase_path, phase)
 
 
 def main() -> None:

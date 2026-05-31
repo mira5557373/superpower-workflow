@@ -26,7 +26,7 @@ class TestAgentTeamsFlag:
         assert "--num-agents" not in cmd
 
     def test_run_claude_passes_num_agents(self):
-        with patch("superpower_workflow.runner.subprocess.run") as mock:
+        with patch("superpower_workflow.runner._invoke_claude") as mock:
             mock.return_value = CompletedProcess(
                 args=[],
                 returncode=0,

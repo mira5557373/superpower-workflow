@@ -4,11 +4,37 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import signal
 import subprocess
 import time
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+
+def _terminate_process_group(proc: subprocess.Popen) -> None:
+    """v1.3.7 #2: send SIGTERM to the entire process group so claude -p
+    sub-agents are killed too. Falls back to plain terminate() if the
+    OS-specific call fails.
+    """
+    try:
+        if os.name == "posix":
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        elif os.name == "nt":
+            # CREATE_NEW_PROCESS_GROUP allows CTRL_BREAK_EVENT
+            proc.send_signal(signal.CTRL_BREAK_EVENT)
+        else:
+            proc.terminate()
+    except (ProcessLookupError, OSError):
+        # Process already exited — nothing to do.
+        return
+    except Exception:
+        # Fall back to plain terminate so we never leak the child
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            proc.terminate()
 
 
 @dataclass
@@ -75,6 +101,47 @@ RETRY_DELAYS = [30, 120, 300]
 TIMEOUT_SECONDS = 7200
 
 
+def _invoke_claude(cmd: list[str], cwd: str, timeout: int) -> subprocess.CompletedProcess:
+    """v1.3.7 #2: subprocess invocation isolated as a single mockable function.
+
+    Pre-fix `subprocess.run` was called inline; tests mocked it directly,
+    which couples test code to an implementation detail. Now both tests
+    and runtime call `_invoke_claude` — switching to Popen + process-group
+    signal forwarding is internal.
+
+    Uses `Popen` + platform-specific new-process-group flags so SIGINT
+    and SIGTERM in the parent propagate to the claude -p child (and its
+    grandchildren). On `KeyboardInterrupt` or `subprocess.TimeoutExpired`,
+    sends SIGTERM to the entire child process group before re-raising.
+    """
+    popen_kwargs: dict = {
+        "cwd": cwd,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+    }
+    if os.name == "posix":
+        popen_kwargs["preexec_fn"] = os.setsid
+    elif os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+    child = subprocess.Popen(cmd, **popen_kwargs)
+    try:
+        stdout, stderr = child.communicate(timeout=timeout)
+        returncode = child.returncode
+    except subprocess.TimeoutExpired:
+        _terminate_process_group(child)
+        child.wait(timeout=5)
+        raise
+    except KeyboardInterrupt:
+        _terminate_process_group(child)
+        child.wait(timeout=10)
+        raise
+    return subprocess.CompletedProcess(
+        args=cmd, returncode=returncode, stdout=stdout, stderr=stderr
+    )
+
+
 def run_claude(
     prompt: str,
     model: str,
@@ -114,13 +181,12 @@ def run_claude(
                 num_agents,
             )
 
-            result = subprocess.run(
-                cmd,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=TIMEOUT_SECONDS,
-            )
+            # v1.3.7 #2 fix: route through `_invoke_claude` which uses Popen
+            # + new-process-group flags so SIGINT/SIGTERM in the parent
+            # propagates to the claude -p child and its grandchildren.
+            # Centralizing the call site here lets tests mock `_invoke_claude`
+            # as one stable function instead of subprocess internals.
+            result = _invoke_claude(cmd, cwd, TIMEOUT_SECONDS)
 
             if result.returncode == 0 and result.stdout.strip():
                 parsed = _parse_json_output(result.stdout)

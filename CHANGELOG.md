@@ -3,6 +3,104 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.7] — 2026-05-31
+
+Signal-handling + shutdown hardening. Closes 5 of the 19 findings from
+the v1.3.6 absent-modalities review (signal-handler reentrancy,
+thread-local/cwd, shutdown-sequence). The remaining 14 findings + the
+large parameterize-`_run_milestone` refactor (Edit A) are scheduled
+for v1.3.8 — until then, **parallel mode is gated** behind an env var.
+
+### Important — retraction of a v1.3.5 changelog claim
+
+The v1.3.6 deep-review found that v1.3.5's #6 fix ("Switched
+`_run_parallel` from `execute_wave` to `execute_wave_isolated` so each
+milestone runs in its own worktree") was **incomplete**. The executor
+was switched, but `_run_milestone` and its helpers still pass
+`self.cwd` (the parent repo) to ~40 subprocess call sites. The result:
+every git/test/claude command in a parallel-mode milestone runs in the
+PARENT repo, not the worktree. Cross-milestone report contamination
+and `.git/index.lock` races on the happy path.
+
+v1.3.7 does NOT ship the full Edit A refactor (it touches 100+ sites
+and needs proper integration testing). Instead, v1.3.7 **gates parallel
+mode** behind `SW_ALLOW_BROKEN_PARALLEL=1` so no user invokes the
+broken-isolation path by accident. The proper fix lands in v1.3.8.
+
+### Fixed — signal handling and shutdown
+
+- **#1 — `state.completed.append` + `save_state` pair now atomic under
+  `self._state_lock`.** Pre-fix, a SIGINT landing between them left the
+  milestone "completed" in memory but absent from disk → re-billing on
+  resume. The signal handler installed by `_install_shutdown_handlers`
+  also calls `save_state` so a signal that does interrupt this region
+  still flushes.
+- **#2 — `run_claude` switched to `Popen` with new-process-group flags
+  + signal forwarding.** Pre-fix `subprocess.run` held the child as a
+  foreground subprocess; `Ctrl-C` in the parent raised
+  `KeyboardInterrupt` locally but `claude -p` kept running, leaking
+  API spend per invocation × N orphaned retries. v1.3.7 uses
+  `Popen(preexec_fn=os.setsid)` on POSIX and
+  `CREATE_NEW_PROCESS_GROUP` on Windows, and forwards `SIGTERM`/
+  `CTRL_BREAK_EVENT` to the child group on `KeyboardInterrupt` or
+  `TimeoutExpired`.
+- **#3 — FastAPI server registers an `on_event("shutdown")` that
+  disposes the engine.** Pre-fix, SIGTERM (k8s rolling deploy, docker
+  stop, `sw server stop`) left DB pool connections leaked; over many
+  redeploys this exhausts the Postgres connection cap.
+- **#4 — Orchestrator installs SIGINT + SIGTERM handlers in
+  `_install_shutdown_handlers()`** (called immediately after preflight
+  succeeds). Handler saves state, stops the heartbeat, releases the
+  lock, then raises `SystemExit(130|143)` so finally blocks still run.
+  Idempotent and main-thread-only.
+- **#9 — `convergence_gate._increment_iteration` now routes through
+  `state._atomic_write`.** Pre-fix the hook used a bare `.json.tmp`
+  suffix + `os.replace` — the same race v1.3.5 #5 fixed for the rest
+  of the codebase. The hook runs in a separate subprocess that v1.3.5's
+  per-path lock cannot reach, so the deterministic-suffix race was
+  still open via the convergence loop on Windows.
+
+### Gated — parallel mode
+
+`sw run --parallel` and `parallel.enabled=true` now require the env
+var `SW_ALLOW_BROKEN_PARALLEL=1` until v1.3.8 ships proper worktree
+isolation. Without it, the run aborts with a clear error pointing at
+v1.3.8 and the known-issue note in this CHANGELOG.
+
+### Deferred to v1.3.8 (will need a focused 2-3 day patch)
+
+- **Edit A**: parameterize `_run_milestone(ms, logger, *, cwd, claude_dir,
+  model)`; route every internal subprocess call through the worker's
+  worktree path. ~100 internal references to migrate.
+- #5 (cost-ledger separate file), #7 (cross-worker state mutation),
+  #8 (per-worker `.claude/` reports — falls out of Edit A),
+  #10 (ExitStack-based cleanup so resources unwind in reverse order),
+  #11 (orphaned grandchildren via Popen process-group cleanup at the
+  parent level), #12 (telemetry atexit flush + synchronous flush for
+  terminal events), #13 (heartbeat resurrection — gated by ExitStack),
+  #14 (orphan `.tmp` cleanup at lock acquire), #15 (sub-agent process
+  reaping at orchestrator exit), #16 (ThreadPoolExecutor cancel_futures),
+  #17 (WorkflowLogger cleanup in ExitStack), #18 (engine leak on
+  `create_all` failure), #19 (`_completion_notification` masking errors).
+
+### Stats
+
+- Test count: 1375 → **1382** passing (+7 lifecycle tests).
+- Ruff check + format clean. Complexity audit (510/55/7) green.
+
+### Safety qualification
+
+v1.3.7 is **safe** for single-threaded mode with the new signal lifecycle.
+Specifically:
+- Ctrl-C in the orchestrator no longer leaks `claude -p` API spend (#2)
+- SIGTERM (k8s/Docker/systemd) flushes state + releases lock (#4)
+- The completed-state pair is no longer interruptible (#1)
+- The convergence-loop hook no longer races on Windows (#9)
+- FastAPI server cleanly disposes DB engine on SIGTERM (#3)
+
+v1.3.7 is **not safe** for parallel mode (gated behind env var). Use
+single-thread mode until v1.3.8 lands Edit A.
+
 ## [1.3.6] — 2026-05-31
 
 Concurrency review Phase 3 — final hardening. Closes the remaining 7

@@ -43,6 +43,19 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
         except Exception:
             logger.warning("Failed to initialize database", exc_info=True)
 
+    # v1.3.7 #3 fix: shutdown handler so SIGTERM (sw server stop, k8s
+    # rolling deploy, docker stop) gets a graceful close — DB connections
+    # disposed, idle pool conns released. Pre-fix, the engine + its pool
+    # leaked on every server lifecycle.
+    @app.on_event("shutdown")
+    async def _on_shutdown() -> None:
+        engine = getattr(app.state, "engine", None)
+        if engine is not None:
+            try:
+                engine.dispose()
+            except Exception:
+                logger.warning("engine.dispose() failed", exc_info=True)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.cors_origins,

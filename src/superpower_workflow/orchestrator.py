@@ -194,6 +194,14 @@ class Orchestrator:
         self._heartbeat_thread = HeartbeatThread(self.claude_dir, interval=60.0)
         self._heartbeat_thread.start()
 
+        # v1.3.7 #4 fix: install SIGTERM handler so container orchestrators
+        # (Kubernetes / Docker / systemd) get a clean shutdown — state saved,
+        # lock released, heartbeat stopped. Without this, SIGTERM kills the
+        # process with no chance to persist progress; the next pod sees a
+        # stale lock for HEARTBEAT_STALE_SECONDS (10 min) and re-runs
+        # already-completed milestones from the on-disk state.
+        self._install_shutdown_handlers()
+
         run_id = time.strftime("%Y%m%d-%H%M%S")
         self.state.run_id = run_id
         self.state.started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -278,6 +286,25 @@ class Orchestrator:
         workers = max_workers or parallel_config.get("max_workers", 4)
         bon_count = best_of_n if best_of_n > 1 else parallel_config.get("best_of_n", 1)
         router = ModelRouter.from_config(self.config)
+
+        # v1.3.7 honesty gate: the v1.3.5 #6 worktree-isolation fix was
+        # incomplete — the executor switched to execute_wave_isolated, but
+        # _run_milestone still passes self.cwd (parent repo) to ~40 subprocess
+        # call sites, so every git/test/claude command runs in the parent
+        # repo instead of the worktree. Full isolation (Edit A from the
+        # v1.3.7 review) is scheduled for v1.3.8 with proper integration
+        # testing. Until then, parallel mode is GUARDED: requires explicit
+        # opt-in via env var to acknowledge the known issue. The CHANGELOG
+        # entry for v1.3.5 #6 has been corrected to reflect this.
+        if use_parallel and not os.environ.get("SW_ALLOW_BROKEN_PARALLEL"):
+            print(
+                "  ERROR: parallel mode is currently gated. The v1.3.5 worktree-isolation\n"
+                "  fix was incomplete (every subprocess in _run_milestone still uses the\n"
+                "  parent repo cwd); v1.3.8 ships the proper fix. To run in parallel mode\n"
+                "  with the known cross-contamination issue, set SW_ALLOW_BROKEN_PARALLEL=1.\n"
+                "  For now, run sequentially (omit --parallel and set parallel.enabled=false)."
+            )
+            return
 
         if use_parallel and len(milestones) > 1:
             try:
@@ -386,9 +413,20 @@ class Orchestrator:
                         # MilestoneCompleted telemetry event below; do NOT
                         # add it to state.total_cost_usd here — that would
                         # double-count.
-                        self.state.completed.append(name)
-                        self.state.current_step = None
-                        save_state(self.claude_dir, self.state)
+                        #
+                        # v1.3.7 #1 fix: the append + save_state pair must be
+                        # atomic with respect to SIGINT. Pre-fix, a Ctrl-C
+                        # landing between them left the milestone completed
+                        # in memory but absent from disk → re-billing on
+                        # resume. The state lock serializes other threads;
+                        # the signal handler installed by
+                        # _install_shutdown_handlers performs its own
+                        # save_state so a signal that interrupts here will
+                        # still flush the state.
+                        with self._state_lock:
+                            self.state.completed.append(name)
+                            self.state.current_step = None
+                            save_state(self.claude_dir, self.state)
                         logger.log("MILESTONE_COMPLETE", name=name, total_cost=round(cost, 2))
                         self._audit.append(
                             "MILESTONE_COMPLETE",
@@ -504,6 +542,46 @@ class Orchestrator:
     def _notify(self, event: str, payload: dict) -> None:
         if self._slack_config:
             send_notification(self._slack_config, event, payload)
+
+    def _install_shutdown_handlers(self) -> None:
+        """v1.3.7 #4 fix: install SIGINT + SIGTERM handlers that flush state
+        + release the lock + stop the heartbeat before letting the signal
+        propagate. Without these, container orchestrators (k8s/Docker/systemd)
+        leave the lock-file stranded for 10 min and silently re-bill already-
+        completed milestones on the next pod start.
+
+        Idempotent: re-installation is a no-op. Only installs on the main
+        thread (signal handlers can only be set from the main thread).
+        """
+        import signal
+        import threading as _threading
+
+        if _threading.current_thread() is not _threading.main_thread():
+            return  # only main thread can set handlers
+
+        if getattr(self, "_shutdown_handlers_installed", False):
+            return
+
+        def _handler(signum, frame):
+            # Best-effort cleanup. Don't raise; let the OS terminate naturally.
+            import contextlib as _contextlib
+
+            with _contextlib.suppress(Exception):
+                save_state(self.claude_dir, self.state)
+            with _contextlib.suppress(Exception):
+                if getattr(self, "_heartbeat_thread", None):
+                    self._heartbeat_thread.stop()
+            with _contextlib.suppress(Exception):
+                release_lock(self.claude_dir)
+            # Re-raise as SystemExit so finally blocks still get a chance.
+            # 130 = SIGINT, 143 = SIGTERM (per UNIX convention).
+            code = 130 if signum == signal.SIGINT else 143
+            raise SystemExit(code)
+
+        signal.signal(signal.SIGINT, _handler)
+        if hasattr(signal, "SIGTERM"):
+            signal.signal(signal.SIGTERM, _handler)
+        self._shutdown_handlers_installed = True
 
     def _print_dry_run(self, milestones: list[dict]) -> None:
         from superpower_workflow.estimator import estimate

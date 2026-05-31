@@ -1981,6 +1981,12 @@ class TestModelRouting:
 
 
 class TestParallelMode:
+    @pytest.fixture(autouse=True)
+    def _allow_broken_parallel(self, monkeypatch):
+        """v1.3.7 gate: parallel mode requires SW_ALLOW_BROKEN_PARALLEL until
+        v1.3.8 ships Edit A. Tests deliberately exercising the parallel path opt in."""
+        monkeypatch.setenv("SW_ALLOW_BROKEN_PARALLEL", "1")
+
     def test_run_accepts_parallel_params(self, tmp_path):
         config = _config(tmp_path)
         config["milestones"] = [{"name": "m1", "depends_on": []}]
