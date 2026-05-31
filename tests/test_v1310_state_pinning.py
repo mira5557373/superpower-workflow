@@ -75,9 +75,7 @@ class TestAccumulateCostPinsToParentState:
         # Worker's state file must NOT have been created/modified by
         # _accumulate_cost (the soak's bug was that this received the cost)
         worker_state_path = worker_claude / "workflow-state.json"
-        assert not worker_state_path.exists() or load_state(
-            worker_claude
-        ).total_cost_usd == 0.0, (
+        assert not worker_state_path.exists() or load_state(worker_claude).total_cost_usd == 0.0, (
             "Worker worktree's state must NOT receive the cost"
         )
 
