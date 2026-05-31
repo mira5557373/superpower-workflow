@@ -167,6 +167,29 @@ class Orchestrator:
         self._in_flight_cost: float = 0.0
         self._in_flight_lock = threading.Lock()
 
+        # v1.3.13 fix #10 (audit finding): track all live `claude -p` Popen
+        # children so the SIGTERM/SIGINT shutdown handler can terminate
+        # them before SystemExit propagates. v1.3.7 #2 added process-group
+        # flags so signals propagate via the OS group, but a SIGTERM
+        # delivered to the parent that triggers the shutdown handler
+        # raised SystemExit which slipped past runner's `except
+        # KeyboardInterrupt`. The shutdown handler now walks this set
+        # and calls _terminate_process_group on each registered child.
+        self._live_children: set = set()
+        self._live_children_lock = threading.Lock()
+
+        # v1.3.13 fix #3 (audit finding): canonical path for run-scoped state.
+        # v1.3.10 narrow-fixed `_accumulate_cost`'s save_state to write to
+        # parent's .claude/ but left 18 other state-writing sites routing
+        # through `self.claude_dir` — which v1.3.8 Edit A's property
+        # resolves to the WORKER's worktree inside `_worker_context`.
+        # `_state_dir` is set once at __init__ and NEVER moves. Every site
+        # that persists run-scoped state (workflow-state.json, lock files,
+        # audit trail, heartbeat) routes through this. `self.claude_dir`
+        # (the property) remains for per-milestone artifacts that genuinely
+        # belong in the worker's worktree.
+        self._state_dir: Path = project_root / ".claude"
+
     # v1.3.8 Edit A: properties that route reads through thread-local
     # override (set by `_worker_context` in parallel branches). Every
     # existing `self.cwd` / `self.claude_dir` read site automatically gets
@@ -260,7 +283,7 @@ class Orchestrator:
         # longer than HEARTBEAT_STALE_SECONDS (default 600s) — a second
         # orchestrator can decide the first is hung and force-clean the lock.
         # The background thread refreshes every 60s independent of phase work.
-        self._heartbeat_thread = HeartbeatThread(self.claude_dir, interval=60.0)
+        self._heartbeat_thread = HeartbeatThread(self._state_dir, interval=60.0)
         self._heartbeat_thread.start()
 
         # v1.3.7 #4 fix: install SIGTERM handler so container orchestrators
@@ -378,7 +401,7 @@ class Orchestrator:
                 # about to be unlinked.
                 if getattr(self, "_heartbeat_thread", None):
                     self._heartbeat_thread.stop()
-                release_lock(self.claude_dir)
+                release_lock(self._state_dir)
                 logger.close()
                 if self._telemetry:
                     self._telemetry.close()
@@ -414,7 +437,7 @@ class Orchestrator:
                 ]
                 if deps_failed:
                     self.state.skipped.append(name)
-                    save_state(self.claude_dir, self.state)
+                    save_state(self._state_dir, self.state)
                     logger.log(
                         "MILESTONE_SKIPPED",
                         name=name,
@@ -480,7 +503,7 @@ class Orchestrator:
                         with self._state_lock:
                             self.state.completed.append(name)
                             self.state.current_step = None
-                            save_state(self.claude_dir, self.state)
+                            save_state(self._state_dir, self.state)
                         logger.log("MILESTONE_COMPLETE", name=name, total_cost=round(cost, 2))
                         self._audit.append(
                             "MILESTONE_COMPLETE",
@@ -561,7 +584,7 @@ class Orchestrator:
                                 f"Skipping to next."
                             )
                             self.state.failed.append(name)
-                            save_state(self.claude_dir, self.state)
+                            save_state(self._state_dir, self.state)
 
                 if not success:
                     consecutive_failures += 1
@@ -582,7 +605,7 @@ class Orchestrator:
             # v1.3.4 #9: stop heartbeat before releasing the lock.
             if getattr(self, "_heartbeat_thread", None):
                 self._heartbeat_thread.stop()
-            release_lock(self.claude_dir)
+            release_lock(self._state_dir)
             logger.close()
             if self._telemetry:
                 self._telemetry.close()
@@ -620,13 +643,26 @@ class Orchestrator:
             # Best-effort cleanup. Don't raise; let the OS terminate naturally.
             import contextlib as _contextlib
 
+            # v1.3.13 fix #10: terminate any in-flight `claude -p` children
+            # BEFORE state save / lock release. Pre-v1.3.13, SystemExit
+            # raised below slipped past runner's `except KeyboardInterrupt`,
+            # orphaning the child and leaking API spend until init(1)
+            # reaped it.
+            from superpower_workflow.runner import _terminate_process_group
+
+            with self._live_children_lock:
+                children_snapshot = list(self._live_children)
+            for child in children_snapshot:
+                with _contextlib.suppress(Exception):
+                    _terminate_process_group(child)
+
             with _contextlib.suppress(Exception):
-                save_state(self.claude_dir, self.state)
+                save_state(self._state_dir, self.state)
             with _contextlib.suppress(Exception):
                 if getattr(self, "_heartbeat_thread", None):
                     self._heartbeat_thread.stop()
             with _contextlib.suppress(Exception):
-                release_lock(self.claude_dir)
+                release_lock(self._state_dir)
             # Re-raise as SystemExit so finally blocks still get a chance.
             # 130 = SIGINT, 143 = SIGTERM (per UNIX convention).
             code = 130 if signum == signal.SIGINT else 143
@@ -696,7 +732,7 @@ class Orchestrator:
         print("  No claude -p calls will be made. Drop --dry-run to execute.")
 
     def _preflight_checks(self) -> bool:
-        if not acquire_lock(self.claude_dir):
+        if not acquire_lock(self._state_dir):
             print("  FATAL: Another orchestration is running.")
             print("  Run 'sw lock status' to inspect, or 'sw lock force-clean' to release.")
             return False
@@ -708,7 +744,7 @@ class Orchestrator:
             cwd=self.cwd,
         )
         if git_status.stdout.strip():
-            release_lock(self.claude_dir)
+            release_lock(self._state_dir)
             print("  FATAL: Uncommitted changes detected. Commit or stash before running.")
             return False
 
@@ -718,13 +754,13 @@ class Orchestrator:
                 continue
             result = subprocess.run(cmd, shell=True, capture_output=True, cwd=self.cwd)
             if result.returncode != 0:
-                release_lock(self.claude_dir)
+                release_lock(self._state_dir)
                 print(f"  FATAL: Verify command '{name}' failed: {cmd}")
                 return False
 
         milestones = self.config.get("milestones", [])
         if not milestones:
-            release_lock(self.claude_dir)
+            release_lock(self._state_dir)
             print("  FATAL: No milestones in workflow.json. Run: sw decompose")
             return False
 
@@ -734,13 +770,13 @@ class Orchestrator:
                 if (
                     dep not in names or names.index(dep) >= names.index(ms["name"])
                 ) and dep not in self.state.completed:
-                    release_lock(self.claude_dir)
+                    release_lock(self._state_dir)
                     print(f"  FATAL: Dependency '{dep}' for '{ms['name']}' not satisfied.")
                     return False
 
         max_budget = self.config.get("max_total_budget_usd", float("inf"))
         if self.state.total_cost_usd >= max_budget:
-            release_lock(self.claude_dir)
+            release_lock(self._state_dir)
             print(
                 f"  FATAL: Budget already exceeded "
                 f"(${self.state.total_cost_usd:.2f} >= ${max_budget})"
@@ -873,8 +909,20 @@ class Orchestrator:
                 self._in_flight_cost += per_attempt_cost
             my_charged[0] += per_attempt_cost
 
+        # v1.3.13 fix #10: register Popen children with the live-children
+        # registry so the shutdown handler can SIGTERM them on SIGINT/SIGTERM.
+        def _on_started(child):
+            with self._live_children_lock:
+                self._live_children.add(child)
+
+        def _on_ended(child):
+            with self._live_children_lock:
+                self._live_children.discard(child)
+
         kwargs.setdefault("budget_check_fn", _ok)
         kwargs.setdefault("charge_cost_fn", _charge)
+        kwargs.setdefault("on_child_started", _on_started)
+        kwargs.setdefault("on_child_ended", _on_ended)
         try:
             return run_claude(*args, **kwargs)
         finally:
@@ -909,23 +957,16 @@ class Orchestrator:
             # block briefly but no correctness loss.
             with self._state_lock:
                 self.state.total_cost_usd += delta
-                # v1.3.10 fix (parallel soak finding): always write state
-                # to the PARENT project's .claude/, never to the worker's
-                # worktree. v1.3.8 made `self.claude_dir` a thread-local
-                # property that resolves to the worktree inside a
-                # `_worker_context`; that's correct for per-milestone
-                # report paths (.gap-report.json etc.) but wrong for
-                # run-scoped state (workflow-state.json). The parallel
-                # soak proved this: parent state showed $0 while worker
-                # worktrees held $1.10 + $1.65 = $2.76 of real spend.
-                # Bypass the property by computing the parent path from
-                # self.root directly.
-                parent_claude_dir = Path(self.root) / ".claude"
-                # Transient I/O hiccup tolerated — cost still in memory;
-                # the next _accumulate_cost call will retry. Charging
-                # must not abort the milestone.
+                # v1.3.10 + v1.3.13: write state to the PARENT project's
+                # .claude/ via `self._state_dir` (set once in __init__,
+                # never thread-local). v1.3.8's `self.claude_dir` property
+                # resolves to the worker's worktree inside a
+                # `_worker_context`; using it here would route run-scoped
+                # state to the wrong place. v1.3.10 narrow-fixed this site
+                # by computing the parent path inline; v1.3.13 unifies all
+                # save_state sites under `_state_dir`.
                 with contextlib.suppress(OSError):
-                    save_state(parent_claude_dir, self.state)
+                    save_state(self._state_dir, self.state)
         return local_acc + delta
 
     def _call_pre_phase(self, phase: str, milestone: dict) -> None:
@@ -1061,7 +1102,7 @@ class Orchestrator:
         except PluginVetoError as e:
             raise _PhaseError("plan", str(e)) from e
         self.state.current_step = "plan"
-        save_state(self.claude_dir, self.state)
+        save_state(self._state_dir, self.state)
         save_phase_state(
             self.claude_dir,
             PhaseState(phase="ultrathink", max_iterations=convergence.get("max_iterations", 5)),
@@ -1112,7 +1153,7 @@ class Orchestrator:
         )
         self.state.plan_commit_sha = sha_result.stdout.strip()
         self.state.last_phase_session_id = r.session_id
-        save_state(self.claude_dir, self.state)
+        save_state(self._state_dir, self.state)
 
         subprocess.run(["git", "tag", f"pre-impl/{name}"], capture_output=True, cwd=self.cwd)
 
@@ -1122,7 +1163,7 @@ class Orchestrator:
         except PluginVetoError as e:
             raise _PhaseError("implement", str(e)) from e
         self.state.current_step = "implement"
-        save_state(self.claude_dir, self.state)
+        save_state(self._state_dir, self.state)
         plan_path = self._find_plan_path(name)
         logger.log("PHASE_B_START")
         self._telemetry.emit(PhaseStarted(milestone=name, phase="implement"))
@@ -1159,7 +1200,7 @@ class Orchestrator:
 
         # Quality Gates Checkpoint #1
         self.state.current_step = "quality_check_b"
-        save_state(self.claude_dir, self.state)
+        save_state(self._state_dir, self.state)
         passed, failures = self._verify_quality_gates(
             logger, milestone=name, checkpoint="quality_check_b"
         )
@@ -1237,7 +1278,7 @@ class Orchestrator:
         except PluginVetoError as e:
             raise _PhaseError("review", str(e)) from e
         self.state.current_step = "review"
-        save_state(self.claude_dir, self.state)
+        save_state(self._state_dir, self.state)
         save_phase_state(
             self.claude_dir,
             PhaseState(phase="review", max_iterations=convergence.get("max_iterations", 5)),
@@ -1291,7 +1332,7 @@ class Orchestrator:
 
         # Quality Gates Checkpoint #2
         self.state.current_step = "quality_check_c"
-        save_state(self.claude_dir, self.state)
+        save_state(self._state_dir, self.state)
         passed, failures = self._verify_quality_gates(
             logger, milestone=name, checkpoint="quality_check_c"
         )
@@ -1366,7 +1407,7 @@ class Orchestrator:
             raise _PhaseError("push", str(e)) from e
         self._call_pre_commit(ms, [])
         self.state.current_step = "push"
-        save_state(self.claude_dir, self.state)
+        save_state(self._state_dir, self.state)
         branch = "main" if self.config.get("git_strategy") == "main" else f"milestone/{name}"
         logger.log("PHASE_D_START")
         self._telemetry.emit(PhaseStarted(milestone=name, phase="push"))
@@ -1437,12 +1478,12 @@ class Orchestrator:
         ci_config = self._integrations.get("ci", {})
         if ci_config.get("enabled", False):
             self.state.current_step = "ci_wait"
-            save_state(self.claude_dir, self.state)
+            save_state(self._state_dir, self.state)
             logger.log("PHASE_E_START")
             self._telemetry.emit(PhaseStarted(milestone=name, phase="ci_fix"))
 
             self.state.current_step = "ci_fix"
-            save_state(self.claude_dir, self.state)
+            save_state(self._state_dir, self.state)
 
             def _on_ci_attempt(attempt: int, max_attempts: int, status: str) -> None:
                 self._notify(
@@ -1470,7 +1511,7 @@ class Orchestrator:
                 logger.log("PHASE_E_COMPLETE", status="passed", cost=round(ci_cost, 2))
             else:
                 self.state.current_step = "ci_fix_failed"
-                save_state(self.claude_dir, self.state)
+                save_state(self._state_dir, self.state)
                 logger.log("PHASE_E_COMPLETE", status="failed", cost=round(ci_cost, 2))
 
             self._telemetry.emit(
@@ -1574,7 +1615,7 @@ class Orchestrator:
 
             wave = ExecutionWave(index=wave.index, milestones=runnable)
             self.state.current_step = "parallel_wait"
-            save_state(self.claude_dir, self.state)
+            save_state(self._state_dir, self.state)
             logger.log("PARALLEL_WAVE_START", wave=wave.index, milestones=str(wave.milestones))
 
             if self._telemetry:
@@ -1662,7 +1703,7 @@ class Orchestrator:
             # that may snapshot state during this critical section.
             with self._state_lock:
                 self.state.current_step = "parallel_merge"
-                save_state(self.claude_dir, self.state)
+                save_state(self._state_dir, self.state)
 
                 for result in results:
                     if result.success:
@@ -1673,7 +1714,7 @@ class Orchestrator:
                     else:
                         self.state.failed.append(result.milestone)
                         failed_set.add(result.milestone)
-                save_state(self.claude_dir, self.state)
+                save_state(self._state_dir, self.state)
 
             if self._telemetry:
                 from superpower_workflow.telemetry import ParallelWaveCompleted
@@ -1963,7 +2004,7 @@ class Orchestrator:
             return None, 0.0
 
         self.state.current_step = "spec_compliance"
-        save_state(self.claude_dir, self.state)
+        save_state(self._state_dir, self.state)
 
         from superpower_workflow.validation.spec_compliance import run_spec_compliance
 
@@ -2012,7 +2053,7 @@ class Orchestrator:
             return None, 0.0
 
         self.state.current_step = "feature_verify"
-        save_state(self.claude_dir, self.state)
+        save_state(self._state_dir, self.state)
 
         from superpower_workflow.validation.feature_tester import run_feature_verification
 

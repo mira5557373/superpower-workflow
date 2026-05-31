@@ -101,7 +101,13 @@ RETRY_DELAYS = [30, 120, 300]
 TIMEOUT_SECONDS = 7200
 
 
-def _invoke_claude(cmd: list[str], cwd: str, timeout: int) -> subprocess.CompletedProcess:
+def _invoke_claude(
+    cmd: list[str],
+    cwd: str,
+    timeout: int,
+    on_child_started=None,
+    on_child_ended=None,
+) -> subprocess.CompletedProcess:
     """v1.3.7 #2: subprocess invocation isolated as a single mockable function.
 
     Pre-fix `subprocess.run` was called inline; tests mocked it directly,
@@ -126,20 +132,53 @@ def _invoke_claude(cmd: list[str], cwd: str, timeout: int) -> subprocess.Complet
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
     child = subprocess.Popen(cmd, **popen_kwargs)
+    # v1.3.13 fix #10: register with the orchestrator's live-children
+    # registry so the shutdown handler can SIGTERM us before raising
+    # SystemExit. Without this, a SIGTERM delivered to sw would
+    # propagate via the signal handler → SystemExit → orphaned
+    # claude -p child → unbounded API spend.
+    if on_child_started is not None:
+        import contextlib as _contextlib
+
+        # Registration must not abort the call.
+        with _contextlib.suppress(Exception):
+            on_child_started(child)
+
+    # v1.3.13 fix #10: catch BaseException (not just KeyboardInterrupt).
+    # Pre-v1.3.13 the runner caught KeyboardInterrupt to forward Ctrl-C
+    # to the child group, but v1.3.7's SIGTERM handler raises SystemExit
+    # — which is NOT a subclass of KeyboardInterrupt OR Exception, so it
+    # slipped past every catch and the claude -p child was orphaned.
+    # v1.3.7's "production-safe SIGTERM" claim was broken by exactly
+    # this gap. Catching BaseException ensures any propagating exit
+    # signal reliably terminates the child process group before re-raising.
     try:
-        stdout, stderr = child.communicate(timeout=timeout)
-        returncode = child.returncode
-    except subprocess.TimeoutExpired:
-        _terminate_process_group(child)
-        child.wait(timeout=5)
-        raise
-    except KeyboardInterrupt:
-        _terminate_process_group(child)
-        child.wait(timeout=10)
-        raise
-    return subprocess.CompletedProcess(
-        args=cmd, returncode=returncode, stdout=stdout, stderr=stderr
-    )
+        try:
+            stdout, stderr = child.communicate(timeout=timeout)
+            returncode = child.returncode
+        except subprocess.TimeoutExpired:
+            _terminate_process_group(child)
+            child.wait(timeout=5)
+            raise
+        except BaseException:
+            # KeyboardInterrupt, SystemExit (from SIGTERM handler), or any
+            # other base exception. Kill the child group THEN re-raise.
+            _terminate_process_group(child)
+            try:
+                child.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                child.kill()
+            raise
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=returncode, stdout=stdout, stderr=stderr
+        )
+    finally:
+        if on_child_ended is not None:
+            import contextlib as _contextlib
+
+            # De-registration must not abort the call.
+            with _contextlib.suppress(Exception):
+                on_child_ended(child)
 
 
 def run_claude(
@@ -154,6 +193,8 @@ def run_claude(
     num_agents: int | None = None,
     budget_check_fn=None,
     charge_cost_fn=None,
+    on_child_started=None,
+    on_child_ended=None,
 ) -> ClaudeResult:
     """Run claude -p command with retry logic, JSON parsing, and timeout handling.
 
@@ -225,7 +266,13 @@ def run_claude(
             # propagates to the claude -p child and its grandchildren.
             # Centralizing the call site here lets tests mock `_invoke_claude`
             # as one stable function instead of subprocess internals.
-            result = _invoke_claude(cmd, cwd, TIMEOUT_SECONDS)
+            result = _invoke_claude(
+                cmd,
+                cwd,
+                TIMEOUT_SECONDS,
+                on_child_started=on_child_started,
+                on_child_ended=on_child_ended,
+            )
 
             if result.returncode == 0 and result.stdout.strip():
                 parsed = _parse_json_output(result.stdout)

@@ -80,11 +80,14 @@ class PhaseState:
 # concurrent writers to the SAME destination path, eliminating the
 # rename collision on Windows.
 #
-# Orphaned `.tmp.*` files from crashed writers are cleaned up by callers
-# that walk `.claude/` at startup (acquire_lock, sw clean) — not by
-# _atomic_write itself, because (a) the writer can't safely delete its
-# own siblings without risking another writer's in-flight tmp, and
-# (b) the orphans are harmless beyond cosmetic clutter.
+# v1.3.13 #11: orphaned `.tmp.*` files from crashed writers are cleaned
+# up by `acquire_lock` (which calls `_cleanup_orphan_tmp_files`) at the
+# top of every `sw run`. `_atomic_write` does NOT clean its own siblings
+# because (a) the writer can't safely delete another writer's in-flight
+# tmp, and (b) the orphans are harmless beyond cosmetic clutter — but
+# unbounded accumulation is still bad, so periodic GC at lock acquire
+# keeps the directory tidy. The v1.3.5 #5 comment claimed this cleanup
+# existed; v1.3.13 actually implemented it.
 _PATH_LOCKS: dict[str, threading.Lock] = {}
 _PATH_LOCKS_GUARD = threading.Lock()
 
@@ -169,6 +172,14 @@ def load_phase_state(claude_dir: Path) -> PhaseState | None:
 
 
 def save_phase_state(claude_dir: Path, phase: PhaseState) -> None:
+    # v1.3.13: ensure the target directory exists, mirroring save_state's
+    # behavior. Pre-v1.3.13, save_phase_state silently relied on a prior
+    # save_state(claude_dir, ...) call to mkdir; v1.3.13's _state_dir
+    # routing made save_state target the parent project while
+    # save_phase_state still targets the per-milestone claude_dir
+    # (worker worktree in parallel). Without the mkdir, the parallel
+    # worker's first save_phase_state fails with FileNotFoundError.
+    claude_dir.mkdir(parents=True, exist_ok=True)
     _atomic_write(claude_dir / PHASE_FILE, asdict(phase))
 
 
@@ -277,13 +288,54 @@ def _is_lock_stale(meta: dict) -> tuple[bool, str]:
     return False, "lock active"
 
 
+def _cleanup_orphan_tmp_files(claude_dir: Path) -> int:
+    """v1.3.13 fix #11: clean up orphan `.tmp.*` files from crashed writers.
+
+    The v1.3.5 #5 fix made `_atomic_write` use per-writer-unique tmp
+    suffixes so concurrent writers don't collide on the rename. A
+    side-effect: if a writer crashes between `tmp.write_text` and
+    `os.replace`, the tmp file is left behind. The v1.3.5 comment
+    claimed "orphaned .tmp.* files from crashed writers are cleaned up
+    by callers that walk .claude/ at startup (acquire_lock, sw clean)"
+    — but the actual implementation never did this cleanup. The audit
+    flagged the lying comment.
+
+    This helper actually walks `claude_dir` for `*.tmp` files older
+    than HEARTBEAT_STALE_SECONDS (10 minutes), unlinks them, and
+    returns the count cleaned. Called from `acquire_lock` so every
+    sw run effectively garbage-collects orphans.
+    """
+    if not claude_dir.exists():
+        return 0
+    threshold = time.time() - HEARTBEAT_STALE_SECONDS
+    cleaned = 0
+    # Use glob with safe iteration; ignore stat errors.
+    for orphan in claude_dir.glob("*.tmp*"):
+        try:
+            if orphan.stat().st_mtime < threshold:
+                orphan.unlink(missing_ok=True)
+                cleaned += 1
+        except OSError:
+            continue
+    if cleaned > 0:
+        _logger.info("Cleaned up %d orphan .tmp file(s) under %s", cleaned, claude_dir)
+    return cleaned
+
+
 def acquire_lock(claude_dir: Path, force: bool = False) -> bool:
     """Acquire the workflow lock atomically.
 
     Uses filelock for O_EXCL semantics + composite identity (pid, start_time,
     hostname) to detect stale locks across PID reuse and machine boundaries.
+
+    v1.3.13 fix #11: also walks claude_dir for orphan .tmp files (from
+    crashed writers in prior runs) and unlinks any older than
+    HEARTBEAT_STALE_SECONDS. The v1.3.5 #5 comment claimed this happened
+    but the code never did it.
     """
     claude_dir.mkdir(parents=True, exist_ok=True)
+    # v1.3.13 #11: opportunistic orphan cleanup at acquire time.
+    _cleanup_orphan_tmp_files(claude_dir)
     lock_path = claude_dir / LOCK_FILE
     file_lock = FileLock(str(lock_path) + ".filelock", timeout=0)
     try:

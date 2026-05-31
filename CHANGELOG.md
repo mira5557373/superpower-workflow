@@ -3,6 +3,122 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.13] — 2026-05-31
+
+Final v1.3.x integration-audit fix. The v1.3.12 verification soak confirmed
+the in-flight gate binds (parent cost $4.0482, 1.2% over a $4 cap with 3
+gate aborts logged). A subsequent multi-agent integration audit then swept
+the entire v1.3.4–v1.3.12 line for surviving classes of failure and
+surfaced 2 CRITICAL + 4 HIGH findings that the per-release patches had
+closed too narrowly. v1.3.13 closes the class for each, retracts the
+v1.3.5 + v1.3.6 entries to forward-link readers to the real fixes, and
+rewrites the structural regression tests as behavior tests.
+
+### Audit verdict (10-agent fan-out, adversarial verify)
+
+Three systematic blind spots in v1.3.x patches:
+- **(A) Fix narrow symptom, leave class open** — v1.3.5 fixed the parallel
+  state-save race for `_run_parallel` but left 11 other `save_state(self.claude_dir, ...)`
+  callsites pointing at the worktree path; in parallel mode those would
+  still race if hit.
+- **(B) Tests assert structure not behavior** — v1.3.6 #18 (savepoint
+  isolation), v1.3.12 (in-flight counter), v1.3.7 #2 (process group kill)
+  all shipped with tests that pass when the kwarg/import/attribute is
+  present, NOT when the bug is actually absent. A refactor that removed
+  the protection while preserving the structure would pass.
+- **(C) CHANGELOG promotes before soak verification** — v1.3.5/v1.3.6
+  entries describe fixes that didn't fully bind until v1.3.7/v1.3.8/v1.3.13.
+
+### Fixed — finding #3 (CRITICAL): state-dir over-routing
+
+- New `self._state_dir: Path = project_root / ".claude"` in
+  `Orchestrator.__init__` — canonical writer for **parent** workflow state
+  in both parallel and serial mode.
+- All 12 `save_state(self.claude_dir, self.state)` callsites → `save_state(self._state_dir, self.state)`.
+- All `release_lock` / `acquire_lock` / `HeartbeatThread` parent-side calls
+  same routing.
+- `clear_phase_state` kept on `self.claude_dir` (phase state is per-worker
+  in parallel mode — must stay per-worktree).
+- Effect: parent state, lock, heartbeat all converge on the project root
+  no matter which worker's worktree the orchestrator was constructed in.
+
+### Fixed — finding #10 (CRITICAL): SystemExit child-process leak
+
+- `runner._invoke_claude` catch broadened from `except KeyboardInterrupt:`
+  to `except BaseException:` so SIGTERM-raised `SystemExit(143)` triggers
+  the `_terminate_process_group` path before propagation.
+- New `on_child_started` / `on_child_ended` callbacks on `run_claude` and
+  `_invoke_claude` so the orchestrator can register live `Popen` handles.
+- New `Orchestrator._live_children: set` + `_live_children_lock`
+  (threading.Lock) — `_run_claude` wrapper auto-registers / deregisters.
+- Effect: a SIGTERM mid-`communicate()` now reliably kills the claude
+  child + its process group before the orchestrator's signal handler
+  raises `SystemExit`.
+
+### Fixed — finding #11 (HIGH): orphan `.tmp` accumulation
+
+- `state.py`: new `_cleanup_orphan_tmp_files(claude_dir)` walks
+  `claude_dir.glob("*.tmp*")` and unlinks files older than
+  `HEARTBEAT_STALE_SECONDS`.
+- Wired into `acquire_lock` so every `sw run` cleans inherited orphans.
+- `save_phase_state` now creates the worker `.claude` dir on demand
+  (previously relied on `save_state` as a side-effect creator, which the
+  finding #3 routing eliminated).
+- Lying `_atomic_write` comment updated to reflect actual behavior.
+
+### Tests rewritten as behavior tests
+
+`tests/test_v1313_behavior_tests.py` (new, 9 tests). Each corresponds to
+one audit finding and exercises the **observable consequence** of the bug
+being absent, not the presence of a mock kwarg / attribute / import:
+
+- `TestSavepointActuallyIsolatesBadRows` — finding #5 (v1.3.6 #18):
+  inserts a row in the middle of a batch + structural fallback test that
+  greps source for `session.begin_nested()`.
+- `TestInFlightCounterObservedDuringCharge` — finding #6 (v1.3.12):
+  wraps `run_claude` with `wrapping_run_claude` that captures
+  `_in_flight_cost` AT the moment of charge_cost_fn (not after the call
+  returned, which always reads 0).
+- `TestProcessGroupActuallyKillsChildren` — finding #7 (v1.3.7 #2): real
+  `subprocess.Popen` of `time.sleep(30)` with `timeout=1`; verifies
+  TimeoutExpired actually raises (child reaped).
+- `TestParallelMergeHoldsStateLock` — finding #8 (v1.3.5 #4): behavioral
+  test that `_accumulate_cost` blocks while a parallel merge holds
+  `_state_lock`.
+- `TestOrphanTmpCleanedOnAcquireLock` — finding #11 (this release).
+- `TestSigtermKillsClaudeChild` — finding #10 (this release): patches
+  `subprocess.Popen.communicate` to raise `SystemExit(143)`; verifies
+  `_terminate_process_group` was called before propagation.
+
+### Retractions (added to CHANGELOG)
+
+- **v1.3.5 entry**: forward-link warning — `_run_parallel` site fixed but
+  11 other `save_state` callsites remained un-routed until v1.3.13 finding
+  #3. Operators must NOT deploy v1.3.5 with `parallel.enabled=true`;
+  upgrade to v1.3.13 or later.
+- **v1.3.6 entry**: forward-link warning — DbSyncAdapter savepoint
+  protection shipped but tested structurally; behavior verification only
+  arrived in v1.3.13. v1.3.7's process-group-kill story similarly
+  required v1.3.13 to be tested end-to-end.
+
+### Stats
+
+- Test count: 1418 → **1427** passing (+9 behavior tests).
+- Ruff + format clean.
+- Deleted leftover `tests/test_repro_systemexit_leak.py` (audit-workflow
+  sentinel designed to FAIL when the bug is fixed; `TestSigtermKillsClaudeChild`
+  is the permanent replacement).
+
+### Verification
+
+Behavior tests run as part of the normal pytest suite; each will FAIL if
+its bug class regresses. No further soak required — v1.3.12 verification
+soak already proved in-flight gate binding; v1.3.13 only closes audit
+findings that don't surface under happy-path soak.
+
+This closes the v1.3.x line. Next release is v1.4.0 per the roadmap
+(intelligence layer — curator self-tune, recipe extractor).
+
 ## [1.3.12] — 2026-05-31
 
 Second parallel-soak iteration. v1.3.11 verification soak proved the
@@ -491,6 +607,19 @@ single-thread mode until v1.3.8 lands Edit A.
 
 ## [1.3.6] — 2026-05-31
 
+> **⚠️ RETRACTION (added in v1.3.13)**: This entry's "Safety qualification"
+> claim that v1.3.6 is "safe for `parallel.enabled=true`" was incorrect.
+> The v1.3.5 #6 worktree-isolation fix was incomplete (see v1.3.7's
+> retraction); v1.3.6 inherited that defect. Full parallel-mode safety
+> arrived in v1.3.8 (Edit A) and was further hardened in v1.3.10
+> (state pinning), v1.3.12 (in-flight counter), and v1.3.13 (audit-driven
+> cleanup of 12 remaining wrong-path save_state sites + SIGTERM child
+> reaping + orphan .tmp cleanup). Operators reading this entry in
+> isolation should NOT deploy v1.3.6 with `parallel.enabled=true`;
+> upgrade to v1.3.13 or later.
+
+
+
 Concurrency review Phase 3 — final hardening. Closes the remaining 7
 MEDIUM/LOW findings from the v1.3.3 deep-review. After v1.3.6, every
 finding from that review has been either fixed or explicitly resolved
@@ -593,6 +722,23 @@ reentrancy, thread-local/cwd assumptions) remain open and could be
 worth a dedicated v1.3.7 pass if real-world soak surfaces issues.
 
 ## [1.3.5] — 2026-05-31
+
+> **⚠️ RETRACTION (added in v1.3.13)**: This entry's #6 ("Switched
+> `_run_parallel` from `execute_wave` to `execute_wave_isolated` so
+> each milestone runs in its own worktree") was overstated. The
+> executor was switched correctly but `_run_milestone` and its 40+
+> subprocess sites still passed `self.cwd` (parent repo), so workers
+> ran in the parent repo, not the worktree. v1.3.7 retracted this
+> claim explicitly; v1.3.8 delivered the proper Edit A fix via the
+> thread-local `claude_dir` property; v1.3.10 fixed `_accumulate_cost`
+> writing to the worker worktree; v1.3.13 closed the remaining 12
+> `save_state` sites under the same pattern. The "Safety qualification"
+> below claiming "safe for `parallel.enabled=true`" was therefore
+> false until v1.3.13. Operators reading this entry in isolation
+> should NOT deploy v1.3.5 with `parallel.enabled=true`; upgrade to
+> v1.3.13 or later.
+
+
 
 Concurrency review Phase 2 — parallel-mode safety. Closes the findings
 that only bite when `parallel.enabled=true` or `audit_trail=true`. After
