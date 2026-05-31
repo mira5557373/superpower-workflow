@@ -191,62 +191,46 @@ def run_onboard(project_root: Path, interactive: bool = True) -> OnboardConfig:
 def build_workflow_config(project_root: Path, choices: OnboardConfig) -> dict:
     """Compose the workflow.json dict from onboard choices.
 
-    Uses project_detect's per-language defaults for verify_commands and
-    (when choices.enable_quality_gates) quality_gates.
+    v1.3.3 #7: routes through the shared `default_workflow_config` so
+    onboard automatically inherits every top-level key init writes. Pre-fix
+    onboard emitted 15 keys vs init's 27, and the 12 missing
+    (dashboard/database/parallel/plugins/policies/secrets/security/server/
+    model_routing/docs/git_strategy/notification_webhook/delay_between_phases_seconds)
+    silently fell back to orchestrator hardcoded defaults.
     """
+    from superpower_workflow.cli import default_workflow_config
     from superpower_workflow.project_detect import detect
 
     profile = detect(project_root)
     size = SIZE_PRESETS[choices.size_preset]
 
-    config: dict = {
-        "schema_version": 1,
-        "spec": choices.spec_path,
-        "model": choices.model,
-        "fallback_model": choices.fallback_model,
-        "effort": {"plan": "max", "implement": "high", "review": "max", "push": "low"},
-        "budgets": {
-            "plan": size["plan"],
-            "implement": size["implement"],
-            "review": size["review"],
-            "push": size["push"],
-        },
-        "max_total_budget_usd": size["max_total_budget_usd"],
-        "verify_commands": dict(profile.verify_commands),
-        "quality_gates": (dict(profile.quality_gates) if choices.enable_quality_gates else {}),
-        "validation": {
-            "gap_validator": True,
-            "gap_validation_mode": "lenient",
-            "spec_compliance": True,
-            "feature_verification": True,
-            "spec_compliance_budget": 3.0,
-            "feature_verification_budget": 5.0,
-            "gap_curator": choices.enable_gap_curator,
-            "curator_budget": 1.0,
-            "curator_min_gaps": 5,
-            "strict_mode": choices.enable_strict_mode,
-            "max_strict_iterations": 2,
-            "strict_iteration_budget": 8.0,
-            "spec_linter": choices.enable_spec_linter,
-            "spec_linter_strict": False,
-            "spec_min_words": 200,
-            "spec_max_words": 5000,
-        },
-        # v1.3.1 HIGH #3 parity fix: _cmd_init writes a full convergence
-        # block with min_gaps_for_substantial + persistent_gap_downgrade_after.
-        # Onboard-created projects were silently using orchestrator hardcoded
-        # fallbacks for the missing keys.
-        "convergence": {
-            "max_iterations": 5,
-            "min_gaps_for_substantial": 20,
-            "persistent_gap_downgrade_after": 3,
-        },
-        "telemetry": {"enabled": True, "path": ".claude/telemetry.jsonl"},
-        "integrations": {"ci": {"enabled": choices.enable_ci_integration}},
-        "milestones": [],
-        # Capture the onboard choices for audit
-        "_onboard": asdict(choices),
+    # Start from the shared default. Then layer onboard's user choices on top.
+    config = default_workflow_config(
+        profile=profile,
+        with_quality_gates=choices.enable_quality_gates,
+        minimal=False,
+    )
+
+    # Apply onboard's user-choice overrides
+    config["spec"] = choices.spec_path
+    config["model"] = choices.model
+    config["fallback_model"] = choices.fallback_model
+    config["budgets"] = {
+        "plan": size["plan"],
+        "implement": size["implement"],
+        "review": size["review"],
+        "push": size["push"],
     }
+    config["max_total_budget_usd"] = size["max_total_budget_usd"]
+    # Toggle validation flags from user choices (other validation keys
+    # already populated by default_workflow_config).
+    config["validation"]["gap_curator"] = choices.enable_gap_curator
+    config["validation"]["strict_mode"] = choices.enable_strict_mode
+    config["validation"]["spec_linter"] = choices.enable_spec_linter
+    # CI integration toggle
+    config["integrations"]["ci"]["enabled"] = choices.enable_ci_integration
+    # Capture the onboard choices for audit
+    config["_onboard"] = asdict(choices)
     return config
 
 

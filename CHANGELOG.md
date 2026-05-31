@@ -3,6 +3,72 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.3] — 2026-05-31
+
+Hygiene patch closing the deferred items from the v1.3.2 deep review, plus
+one cosmetic issue surfaced during the v1.3.2 dogfood soak. v1.3.2's
+fixes are all validated in vivo on a fresh project; v1.3.3 sands the
+remaining rough edges before any v1.4.0 intelligence work begins.
+
+### Fixed
+
+- **#7 — Bidirectional onboard/init parity**. Pre-v1.3.3, `_cmd_init` wrote
+  27 top-level config keys while `build_workflow_config` (onboard) wrote
+  only 15 — onboarded projects silently fell back to orchestrator
+  hardcoded defaults for the 12 missing keys: `dashboard`, `database`,
+  `delay_between_phases_seconds`, `docs`, `git_strategy`, `model_routing`,
+  `notification_webhook`, `parallel`, `plugins`, `policies`, `secrets`,
+  `security`, `server`. v1.3.3 extracts a shared `default_workflow_config()`
+  helper that both surfaces call, then onboard layers user choices on
+  top. Drift is now impossible by construction. New
+  `tests/test_postinit_parity.py::test_top_level_keys_bidirectional_parity`
+  + `test_nested_block_parity_for_every_dict` lock the symmetry.
+- **#11 — `__experimental__` marker actually consumed.** v1.3.1 added
+  `statusline.__experimental__ = True` with a comment claiming
+  `sw doctor` and auto-discovery tools read it; v1.3.2 deep review found
+  zero consumers in the codebase. v1.3.3 adds `doctor._experimental_modules()`
+  that walks the `superpower_workflow.*` namespace and surfaces flagged
+  modules in `sw doctor` output. Three new tests in
+  `tests/test_doctor.py::TestExperimentalModuleSurface` pin the wiring.
+- **#19 — Session reports relocated to `docs/sessions/`.** Three audit
+  files (`REVIEW-REPORT-2026-05-31.md`, `OVERNIGHT-2026-05-30.md`,
+  `OVERNIGHT-REPORT-2026-05-29.md`) had accreted at repo root and were
+  shipping in `git archive` tarballs. Moved under `docs/sessions/` with
+  a README documenting the naming convention. New
+  `tests/test_repo_hygiene.py::TestSessionReportsLiveUnderDocsSessions`
+  fails CI if the pattern reappears.
+- **Cosmetic — ASCII-safe stdout strings.** v1.3.2 dogfood surfaced em-dash
+  (U+2014) characters in `recommender.py`'s `RecommendationReport.rationale`
+  and one `cli.py` print() that rendered as garbage on Windows console
+  (cp1252). Replaced with `--`. New
+  `tests/test_repo_hygiene.py::TestNoEmDashInUserFacingStrings` scans
+  every `print(...)` call and `rationale =` assignment for the literal
+  em-dash and fails CI on regression.
+
+### Stats
+
+- Test count: 1326 → **1337** passing (+11 regression tests).
+- Ruff check + format clean. Complexity audit (510/55/7) green.
+- No behavior changes outside the explicit fixes above; pure hygiene.
+
+### v1.3.x review trail (informational)
+
+v1.3.0 SKELETON → v1.3.1 (10 HIGH fixes from overnight review) →
+v1.3.2 (10 fixes from v1.3.1 deep-review workflow surfacing 22 findings) →
+v1.3.3 (4 deferred items closed). v1.3.2 was validated in vivo via a
+fresh-project dogfood soak; v1.3.3 closes the loop on every deferred
+item from that pass. The 22-finding deep review concluded that the
+dominant pattern was "fixes narrower than docstrings claimed" — v1.3.3
+addresses the residue.
+
+### Known follow-ups
+
+The deep-review critic flagged concurrency / TOCTOU as a "suspiciously
+absent modality" — no review pass has examined the
+`_server_pid_belongs_to_sw(pid)` → `os.kill(pid)` window, parallel-execution
+telemetry races, or EventRelay → Redis → WS atomicity. Recommended for
+a dedicated v1.3.4 review pass before v1.4.0 intelligence layer begins.
+
 ## [1.3.2] — 2026-05-31
 
 Consolidated patch for the 22 findings surfaced by the v1.3.1 deep-review

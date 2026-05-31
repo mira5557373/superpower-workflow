@@ -23,8 +23,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-# v1.3.1 HIGH #10 marker — auto-discovery tools (e.g. `sw plugin list`) and
-# the doctor check use this flag to surface "experimental" status to users.
+# v1.3.1 HIGH #10 marker — `sw doctor` reads this flag via
+# `doctor._experimental_modules()` (added in v1.3.3 #11) and lists the
+# module so operators know the surface isn't production-ready yet.
 __experimental__ = True
 
 DEFAULT_STATUSLINE_PATH = ".claude/statusline.txt"

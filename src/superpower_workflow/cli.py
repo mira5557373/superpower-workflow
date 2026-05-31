@@ -220,28 +220,26 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _cmd_init(
-    project_root: Path,
+def default_workflow_config(
+    profile=None,
+    *,
     with_quality_gates: bool = False,
     minimal: bool = False,
-) -> None:
-    claude_dir = project_root / ".claude"
-    claude_dir.mkdir(parents=True, exist_ok=True)
-    config_path = claude_dir / "workflow.json"
-    if config_path.exists():
-        print(f"  workflow.json already exists at {config_path}")
-        return
+) -> dict:
+    """v1.3.3 #7: the single source of truth for workflow.json defaults.
 
-    # v1.1.8: detect project type for per-language defaults (T1.8.4)
-    profile = None
-    if not minimal:
-        from superpower_workflow.project_detect import detect
+    Both `_cmd_init` and `onboard.build_workflow_config` call this. Before
+    v1.3.3, init wrote 27 top-level keys but build_workflow_config emitted
+    only 15 — onboarded projects silently fell back to orchestrator hard-
+    coded defaults for the missing 12 (dashboard, database, parallel,
+    plugins, etc.). Centralizing the dict here makes drift impossible by
+    construction: any new key automatically reaches both surfaces.
 
-        profile = detect(project_root)
-        if profile.languages:
-            print(f"  Detected language(s): {', '.join(profile.languages)}")
-
-    default_config = {
+    Caller-specific overrides (onboard's model/budgets from user choices,
+    init's verify_commands from project_detect) layer on top via
+    `_shallow_merge` or direct dict update.
+    """
+    return {
         "schema_version": 1,
         "spec": "",
         "model": "opus",
@@ -381,6 +379,34 @@ def _cmd_init(
         "notification_webhook": None,
         "milestones": [],
     }
+
+
+def _cmd_init(
+    project_root: Path,
+    with_quality_gates: bool = False,
+    minimal: bool = False,
+) -> None:
+    claude_dir = project_root / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    config_path = claude_dir / "workflow.json"
+    if config_path.exists():
+        print(f"  workflow.json already exists at {config_path}")
+        return
+
+    # v1.1.8: detect project type for per-language defaults (T1.8.4)
+    profile = None
+    if not minimal:
+        from superpower_workflow.project_detect import detect
+
+        profile = detect(project_root)
+        if profile.languages:
+            print(f"  Detected language(s): {', '.join(profile.languages)}")
+
+    default_config = default_workflow_config(
+        profile=profile,
+        with_quality_gates=with_quality_gates,
+        minimal=minimal,
+    )
     config_path.write_text(json.dumps(default_config, indent=2))
 
     specs_dir = project_root / "docs" / "superpowers" / "specs"
@@ -749,7 +775,7 @@ def _cmd_recommend_model(project_root: Path, json_output: bool = False) -> None:
         return
 
     if not report.models:
-        print("  No model data — run at least one milestone first.")
+        print("  No model data -- run at least one milestone first.")
         return
 
     print()

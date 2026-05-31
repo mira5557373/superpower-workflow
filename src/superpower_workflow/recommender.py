@@ -173,14 +173,16 @@ def recommend(telemetry_path: Path) -> RecommendationReport:
     report = RecommendationReport(models=sorted(stats.values(), key=lambda s: -s.quality_score))
 
     if not report.models:
-        report.rationale = "No model data available — run at least one milestone."
+        # v1.3.3 cosmetic: ASCII-only in user-facing strings so Windows
+        # console (cp1252) renders cleanly without UnicodeEncodeError.
+        report.rationale = "No model data available -- run at least one milestone."
         return report
 
     eligible = [s for s in report.models if s.milestone_count >= 3]
     if not eligible:
         report.recommended = report.models[0].model
         report.rationale = (
-            f"Insufficient data — only one model has >=3 milestones. "
+            f"Insufficient data -- only one model has >=3 milestones. "
             f"Provisional pick: {report.recommended}."
         )
         return report
@@ -194,6 +196,6 @@ def recommend(telemetry_path: Path) -> RecommendationReport:
     report.rationale = (
         f"{best.model} has quality_score={best.quality_score:.3f} at "
         f"${best.avg_cost_per_milestone:.2f}/milestone over {best.milestone_count} "
-        f"milestone(s) — best efficiency ratio."
+        f"milestone(s) -- best efficiency ratio."
     )
     return report

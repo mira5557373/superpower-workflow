@@ -79,6 +79,62 @@ class TestInitOnboardParity:
         missing = self._validation_keys(init) - self._validation_keys(onb)
         assert not missing, f"onboard is missing validation keys: {missing}"
 
+    def test_top_level_keys_bidirectional_parity(self, git_inited):
+        """v1.3.3 #7: bidirectional parity check across all top-level keys.
+
+        Pre-v1.3.3, the test only checked `init - onb` (one direction).
+        Now assert symmetric difference is empty except for the explicit
+        `_onboard` audit key onboard adds. A future contributor adding a
+        new top-level key to ONE surface but not the other will fail this
+        test loudly.
+        """
+        _cmd_onboard(git_inited, interactive=False)
+        onb = json.loads((git_inited / ".claude" / "workflow.json").read_text())
+
+        sib = git_inited.parent / (git_inited.name + "-init2")
+        sib.mkdir()
+        subprocess.run(["git", "init"], cwd=sib, check=True, capture_output=True)
+        _cmd_init(sib)
+        init = json.loads((sib / ".claude" / "workflow.json").read_text())
+
+        init_keys = set(init)
+        onb_keys = set(onb)
+        # Onboard adds `_onboard` (audit trail) — that's the only allowed delta.
+        allowed_onb_extras = {"_onboard"}
+
+        missing_in_onb = init_keys - onb_keys
+        extra_in_onb = onb_keys - init_keys - allowed_onb_extras
+        assert not missing_in_onb, (
+            f"onboard missing top-level keys that init writes: {sorted(missing_in_onb)}"
+        )
+        assert not extra_in_onb, (
+            f"onboard writes unexpected top-level keys that init doesn't: "
+            f"{sorted(extra_in_onb)} (add to allowed_onb_extras if intentional)"
+        )
+
+    def test_nested_block_parity_for_every_dict(self, git_inited):
+        """v1.3.3 #7: for every nested dict block init writes, onboard's
+        equivalent block must contain the same sub-keys. Catches drift one
+        level deeper than the top-level test.
+        """
+        _cmd_onboard(git_inited, interactive=False)
+        onb = json.loads((git_inited / ".claude" / "workflow.json").read_text())
+
+        sib = git_inited.parent / (git_inited.name + "-init3")
+        sib.mkdir()
+        subprocess.run(["git", "init"], cwd=sib, check=True, capture_output=True)
+        _cmd_init(sib)
+        init = json.loads((sib / ".claude" / "workflow.json").read_text())
+
+        # Compare every shared key whose value is a dict.
+        offenders = []
+        for k in set(init) & set(onb):
+            if isinstance(init[k], dict) and isinstance(onb[k], dict):
+                missing = set(init[k]) - set(onb[k])
+                if missing:
+                    offenders.append(f"  {k}.{sorted(missing)}")
+        assert not offenders, "nested-block drift:\n" + "\n".join(offenders)
+
     def test_onboard_runs_postinit(self, git_inited):
         """Onboard must trigger the gitignore+install side effects."""
         _cmd_onboard(git_inited, interactive=False)

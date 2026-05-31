@@ -137,3 +137,40 @@ class TestClaudeNotInstalledFails:
             results = run_checks(tmp_project_root)
 
         assert "Claude Code" in results[0].message
+
+
+class TestExperimentalModuleSurface:
+    """v1.3.3 #11: doctor surfaces modules flagged __experimental__ = True."""
+
+    def test_statusline_appears_as_experimental(self, tmp_project_root):
+        """statusline.py declares __experimental__ = True (v1.3.1 #10); doctor must surface it."""
+        config_path = tmp_project_root / ".claude" / "workflow.json"
+        config_path.write_text(json.dumps({"schema_version": 1, "spec": "spec.md"}))
+        with patch("superpower_workflow.doctor.shutil.which", return_value="claude"):
+            results = run_checks(tmp_project_root)
+        msgs = [r.message for r in results]
+        flagged_msgs = [m for m in msgs if "experimental" in m.lower()]
+        assert flagged_msgs, f"doctor must report experimental modules; got: {msgs}"
+        assert any("statusline" in m for m in flagged_msgs)
+
+    def test_experimental_check_is_informational_not_failure(self, tmp_project_root):
+        """The experimental check is ok=True (informational); operators
+        opted into the experimental surface — surface info, don't block."""
+        config_path = tmp_project_root / ".claude" / "workflow.json"
+        config_path.write_text(json.dumps({"schema_version": 1, "spec": "spec.md"}))
+        with patch("superpower_workflow.doctor.shutil.which", return_value="claude"):
+            results = run_checks(tmp_project_root)
+        exp = [r for r in results if "experimental" in r.message.lower()]
+        if exp:
+            assert all(r.ok is True for r in exp), "experimental check must not fail doctor"
+
+    def test_experimental_modules_discovery_robust_to_import_errors(self):
+        """The discovery walk must swallow ImportError per-module so doctor
+        stays usable on partial/broken installs."""
+        from superpower_workflow.doctor import _experimental_modules
+
+        # Just verify the function returns a list and doesn't raise.
+        result = _experimental_modules()
+        assert isinstance(result, list)
+        # statusline ships with the package and is flagged.
+        assert any("statusline" in m for m in result)
