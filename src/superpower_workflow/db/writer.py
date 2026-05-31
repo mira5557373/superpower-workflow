@@ -198,12 +198,30 @@ class TelemetryDbWriter:
                     phase_obj.duration_ms = event_dict.get("duration_ms", phase_obj.duration_ms)
                     # Prefer top-level (post-v1.1.6 events) but fall back to usage.* for
                     # legacy dicts that pass the raw claude envelope through.
+                    # v1.3.14 closes the v1.1.6 silent bug: cache_* fields land here too.
                     usage = event_dict.get("usage") or {}
                     phase_obj.input_tokens = event_dict.get(
                         "input_tokens", usage.get("input_tokens", phase_obj.input_tokens)
                     )
                     phase_obj.output_tokens = event_dict.get(
                         "output_tokens", usage.get("output_tokens", phase_obj.output_tokens)
+                    )
+                    phase_obj.cache_creation_input_tokens = event_dict.get(
+                        "cache_creation_input_tokens",
+                        usage.get(
+                            "cache_creation_input_tokens",
+                            phase_obj.cache_creation_input_tokens,
+                        ),
+                    )
+                    phase_obj.cache_read_input_tokens = event_dict.get(
+                        "cache_read_input_tokens",
+                        usage.get(
+                            "cache_read_input_tokens",
+                            phase_obj.cache_read_input_tokens,
+                        ),
+                    )
+                    phase_obj.cache_hit_rate = event_dict.get(
+                        "cache_hit_rate", phase_obj.cache_hit_rate
                     )
 
         if event_type == "run_completed" and self._run_uuid:

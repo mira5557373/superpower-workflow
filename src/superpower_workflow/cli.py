@@ -1526,13 +1526,16 @@ def _cmd_server_init_db(args) -> None:
         print("  Error: Set SW_DATABASE_URL or use --database-url")
         return
     try:
-        from superpower_workflow.db.engine import create_engine_from_url
+        from superpower_workflow.db.engine import create_engine_from_url, ensure_schema_current
         from superpower_workflow.db.models import Base
     except ImportError:
         print("  Error: Install server extras: pip install superpower-workflow[server]")
         return
     engine = create_engine_from_url(db_url)
     Base.metadata.create_all(engine)
+    added = ensure_schema_current(engine)
+    if added:
+        print(f"  Schema migration: added {len(added)} column(s): {', '.join(added)}")
     print("  Database schema created.")
 
 
@@ -1544,7 +1547,7 @@ def _cmd_server_sync(project_root: Path, args) -> None:
         print("  Error: Set SW_DATABASE_URL")
         return
     try:
-        from superpower_workflow.db.engine import create_engine_from_url
+        from superpower_workflow.db.engine import create_engine_from_url, ensure_schema_current
         from superpower_workflow.db.models import Base
         from superpower_workflow.db.sync_adapter import DbSyncAdapter
     except ImportError:
@@ -1552,6 +1555,7 @@ def _cmd_server_sync(project_root: Path, args) -> None:
         return
     engine = create_engine_from_url(db_url)
     Base.metadata.create_all(engine)
+    ensure_schema_current(engine)
     adapter = DbSyncAdapter(engine)
 
     if getattr(args, "sync_all", False):

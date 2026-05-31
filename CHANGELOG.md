@@ -3,6 +3,91 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.14] — 2026-05-31
+
+Foundation hotfix surfaced by the v1.3.x post-line integration audit. A
+multi-agent scorecard pass on the v1.1.6 → v2.0.0 roadmap found that the
+v1.1.6 CHANGELOG made a claim about the SwPhase SQLAlchemy model that the
+code never delivered. Telemetry has been emitting `cache_creation_input_tokens`,
+`cache_read_input_tokens`, and `cache_hit_rate` since v1.1.6, but the DB
+persistence path silently dropped them — every `sw metrics --source=db`-style
+query of cache analytics would have read zero forever.
+
+This is a **verified silent bug**, not a deferred-feature gap. The audit's
+independent grep returned 0 matches for cache_* columns in `db/models.py`,
+and `db/writer.py:200-207` confirmed only `input_tokens`/`output_tokens`
+were being read off `PhaseCompleted` and written through to SwPhase.
+
+### Fixed — closes v1.1.6 false claim
+
+- **`db/models.py:SwPhase`** gains three columns:
+  - `cache_creation_input_tokens: int` (default 0)
+  - `cache_read_input_tokens: int` (default 0)
+  - `cache_hit_rate: float` (default 0.0)
+- **`db/writer.py`** `_write_event` `phase_completed` branch now reads and
+  persists all three fields, with the same top-level → `usage.*` → existing-
+  value fallback chain as `input_tokens`/`output_tokens`.
+- **`db/engine.py`** new `ensure_schema_current(engine) -> list[str]`
+  applies additive ALTER TABLE ADD COLUMN migrations idempotently for
+  existing DBs. Inspects table columns first — re-runs are no-ops. Returns
+  the list of `table.column` pairs added in this call so callers can log
+  and tests can assert.
+- **`cli.py`** wires `ensure_schema_current` into both `Base.metadata.create_all`
+  callsites (`sw server init-db` + `sw server sync`). `sw server init-db`
+  reports the number of columns migrated.
+- v1.1.6 CHANGELOG entry annotated with a `⚠️ RETRACTION` block forward-
+  linking readers here. Operators on a pre-v1.3.14 DB should run
+  `sw server init-db` once after upgrading to pick up the columns.
+
+### Tests
+
+5 new tests in `tests/test_db_writer.py`:
+
+- `TestCacheTokenPersistenceV1314`
+  - `test_cache_creation_input_tokens_persisted` — round-trips PhaseStarted
+    + PhaseCompleted (with cache_* values 29000/12000/0.293) through the
+    writer and asserts SwPhase row carries all three fields.
+  - `test_legacy_input_output_still_persist` — input_tokens/output_tokens
+    still land correctly; cache fields default to 0 / 0.0 when absent.
+  - `test_cache_fields_fall_back_to_usage_dict` — legacy event dicts
+    that pass the claude envelope through as `usage` still produce
+    correct DB rows.
+- `TestSchemaMigrationV1314`
+  - `test_create_all_then_ensure_is_noop` — fresh `Base.metadata.create_all`
+    leaves nothing to migrate.
+  - `test_legacy_schema_gets_cache_columns` — handcrafted pre-v1.3.14
+    `sw_phases` table gets all three cache columns added by
+    `ensure_schema_current`; second call is a no-op (idempotent).
+
+### Stats
+
+- Test count: 1427 → **1432** passing (+5).
+- Ruff + format clean.
+- No behavior change to telemetry emission, JSONL writes, or the
+  in-memory analytics path — those have been correct since v1.1.6.
+  Only the DB persistence path is fixed.
+
+### Audit context
+
+A 6-agent workflow surveyed the v1.1.6 → v2.0.0 roadmap against shipped
+code and produced this scorecard:
+
+| Release | Shipped | Status |
+|---|---|---|
+| v1.1.6 Foundation | 85% → **100%** | CHANGELOG/code mismatch closed by v1.3.14 |
+| v1.1.7 Spec linter | 100% | clean |
+| v1.1.8 QA gates | 90% | strict-loop integration deferred to v1.1.8.1 |
+| v1.1.9 Observability | 55% | onboarding shipped, cost-projection deferred |
+| v1.2.0 Phase refactor | 25% | T2.0.1 deferred — `_run_milestone` grew 502→657 lines |
+| v1.3.0 CC integration | 50% | skeleton — MCP server, memory, hooks never landed |
+| v1.4.0 Intelligence | 0% | not started |
+
+The headline takeaway: the parallel-execution hardening line (v1.3.1–v1.3.13)
+was real and important, but the architectural refactor planned for v1.2.0
+remains the keystone the rest of the roadmap is waiting on. **v1.3.14
+closes the only silent bug surfaced by the audit;** the next release line
+(v1.2.0-real, Phase A/B/C/D class refactor) is queued.
+
 ## [1.3.13] — 2026-05-31
 
 Final v1.3.x integration-audit fix. The v1.3.12 verification soak confirmed
@@ -1269,6 +1354,7 @@ The "soak harvest" release: ships the v1.1.6 A/B-soak findings as defaults, the 
 - **Token counts were always 0 in every `PhaseCompleted` event since v1.0.** `r.raw.get("input_tokens")` read at the top level of the claude response envelope, but claude returns tokens under `r.raw["usage"]["input_tokens"]`. Every cost-per-token, cache-hit-rate, and tokens-per-dollar analytic since launch has been broken. Fix: new `extract_token_usage()` helper in `runner.py` canonicalizes extraction across all five phase emission sites (Phase A/B/C/D/E).
 - Added two new fields to `PhaseCompleted`: `cache_creation_input_tokens` and `cache_read_input_tokens`. Computed derived field `cache_hit_rate = cache_read / (input + cache_creation + cache_read)`.
 - Extended `SwPhase` SQLAlchemy model with the same two columns; `db/writer.py` and `db/sync_adapter.py` updated with defensive `usage.*` fallback for legacy event dicts.
+  - **⚠️ RETRACTION (added in v1.3.14):** the SwPhase column claim in the line above is FALSE. v1.1.6 shipped `PhaseCompleted` with the cache fields and updated the JSONL/in-memory paths, but `db/models.py:SwPhase` was never extended — only `input_tokens` and `output_tokens` columns existed through v1.3.13. `db/writer.py` silently dropped the cache fields on every flush, so DB-backed cache analytics (`sw metrics --source=db` if/when exposed) read zero forever. **v1.3.14 closes this by adding the three columns + an idempotent `ensure_schema_current` migration helper.** Operators on a pre-v1.3.14 DB should run `sw server init-db` (or equivalent) once after upgrading; new installs pick up the schema via `Base.metadata.create_all`.
 - Phase E (ci_fix) previously hardcoded tokens to 0 because `ci_fix_loop` didn't surface them. Changed signature to `tuple[bool, float, dict[str, int|float]]` returning aggregated token usage across the loop; orchestrator unpacks via `**ci_tokens`.
 
 ### Added — operational tooling (T1.6.2, T1.6.4)
