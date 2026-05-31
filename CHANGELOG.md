@@ -3,6 +3,65 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.4] — 2026-05-31
+
+Concurrency review Phase 1 — universal-safety fixes. Closes the two
+findings that affect EVERY user regardless of `parallel.enabled` or
+`audit_trail` setting. Parallel-mode-only and audit-trail-only fixes
+are scheduled for v1.3.5; remaining hardening for v1.3.6.
+
+### Fixed — universal safety (must-fix per concurrency-review critic)
+
+- **#9 — Background-timer heartbeat (the single most dangerous finding).**
+  Pre-fix: `update_lock_heartbeat` was called once per milestone iteration.
+  A single Phase B running longer than `HEARTBEAT_STALE_SECONDS` (600s)
+  would let another orchestrator decide the first was hung and force-clean
+  the lock — two orchestrators concurrently rewriting state, double-billing,
+  and corrupting git history. This bug fires regardless of `parallel.enabled`.
+  New `HeartbeatThread` daemon refreshes the heartbeat every 60s independent
+  of phase boundaries. Started in `_run_internal` immediately after preflight
+  succeeds; stopped before `release_lock` in every termination path.
+  Removed the per-milestone redundant heartbeat call (would race with the
+  daemon on `.workflow.lock.json` via the deterministic `.tmp` filename —
+  finding #5, scheduled for v1.3.5).
+- **#15 — Persist cost incrementally (money leak fires regardless of mode).**
+  Pre-fix: `cost` was a local in `_run_milestone`, returned only on
+  success, added to `self.state.total_cost_usd` at the caller. A milestone
+  whose Phase B raised `_PhaseError` threw away every dollar Phase A had
+  already spent; on retry, the budget check at the loop top saw the old
+  total. A runaway spec could spend ~3 × `max_total_budget_usd` before
+  giving up. New `_accumulate_cost` helper charges cost to persistent state
+  AND saves to disk after every Claude call. The outer cost-add at line ~359
+  is now a no-op (state already up-to-date). The parallel-merge cost-add
+  is also dropped to avoid double-counting (the parallel-state-mutation
+  race itself is fixed in v1.3.5).
+
+### Stats
+
+- Test count: 1337 → **1351** passing (+14 regression tests).
+- Ruff check + format clean. Complexity audit (510/55/7) green.
+
+### Known follow-ups (Phase 2 — v1.3.5)
+
+The concurrency review's must-fix list also includes 4 changes that affect
+ONLY `parallel.enabled=true` or `audit_trail=true` users:
+
+- **#5** — Deterministic `.json.tmp` filename in `_atomic_write` collides under parallel.
+- **#3** — `TelemetryEmitter.emit` shares a single file handle across parallel workers without a lock.
+- **#4** — Parallel workers mutate `Orchestrator.state` concurrently.
+- **#7/#11** — `AuditTrail.append` performs unsynchronized read-modify-write of `_seq`/`_prev_hash`.
+- **#6** — Multiple parallel branches write to the same shared `.claude/.gap-report.json` etc.
+- **#2** — `ProjectRegistry` read-modify-write is not atomic.
+- **#12** — `TelemetryDbWriter` in-memory state diverges from DB on flush failure.
+
+Phase 3 — v1.3.6 covers the remaining 7 items (#1, #8, #10, #13, #18, #19, #20).
+
+### Safety qualification
+
+v1.3.4 is **safe** for single-threaded, audit_trail=false workloads.
+Long Phase B (>10 min) is now safe regardless of mode (#9 closed).
+**Not safe** with `parallel.enabled=true` until v1.3.5 lands.
+
 ## [1.3.3] — 2026-05-31
 
 Hygiene patch closing the deferred items from the v1.3.2 deep review, plus

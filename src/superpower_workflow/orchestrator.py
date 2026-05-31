@@ -45,6 +45,7 @@ from superpower_workflow.state import (
     GAP_REPORT_FILE,
     GAP_REPORT_RAW_FILE,
     PHASE_FILE,
+    HeartbeatThread,
     PhaseState,
     acquire_lock,
     archive_reports,
@@ -54,7 +55,6 @@ from superpower_workflow.state import (
     release_lock,
     save_phase_state,
     save_state,
-    update_lock_heartbeat,
 )
 from superpower_workflow.telemetry import (
     CoverageResult,
@@ -177,6 +177,14 @@ class Orchestrator:
         if not self._preflight_checks():
             return
 
+        # v1.3.4 #9 fix: background-timer heartbeat refresh. The per-milestone
+        # heartbeat call below (line ~283) is insufficient when Phase B runs
+        # longer than HEARTBEAT_STALE_SECONDS (default 600s) — a second
+        # orchestrator can decide the first is hung and force-clean the lock.
+        # The background thread refreshes every 60s independent of phase work.
+        self._heartbeat_thread = HeartbeatThread(self.claude_dir, interval=60.0)
+        self._heartbeat_thread.start()
+
         run_id = time.strftime("%Y%m%d-%H%M%S")
         self.state.run_id = run_id
         self.state.started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -268,6 +276,11 @@ class Orchestrator:
                 )
                 self._completion_notification(logger)
             finally:
+                # v1.3.4 #9: stop background heartbeat BEFORE releasing the
+                # lock so the daemon thread doesn't refresh a meta file that's
+                # about to be unlinked.
+                if getattr(self, "_heartbeat_thread", None):
+                    self._heartbeat_thread.stop()
                 release_lock(self.claude_dir)
                 logger.close()
                 if self._telemetry:
@@ -280,7 +293,11 @@ class Orchestrator:
 
         try:
             for i, ms in enumerate(milestones):
-                update_lock_heartbeat(self.claude_dir)
+                # v1.3.4 #9: heartbeat is now refreshed by the background
+                # daemon thread (HeartbeatThread). Removed the redundant
+                # per-milestone call here — keeping it would race with the
+                # daemon on `.workflow.lock.json` (deterministic `.tmp`
+                # filename, finding #5 — scheduled for v1.3.5).
                 name = ms["name"]
                 if name in self.state.completed:
                     continue
@@ -341,8 +358,13 @@ class Orchestrator:
                 for attempt in range(max_retries + 1):
                     try:
                         cost = self._run_milestone(ms, logger, model_override=ms_model)
+                        # v1.3.4 #15: cost is now charged INCREMENTALLY by
+                        # `_accumulate_cost` after every Claude call. The local
+                        # `cost` is the per-milestone roll-up used by the
+                        # MilestoneCompleted telemetry event below; do NOT
+                        # add it to state.total_cost_usd here — that would
+                        # double-count.
                         self.state.completed.append(name)
-                        self.state.total_cost_usd += cost
                         self.state.current_step = None
                         save_state(self.claude_dir, self.state)
                         logger.log("MILESTONE_COMPLETE", name=name, total_cost=round(cost, 2))
@@ -443,6 +465,9 @@ class Orchestrator:
 
             self._completion_notification(logger)
         finally:
+            # v1.3.4 #9: stop heartbeat before releasing the lock.
+            if getattr(self, "_heartbeat_thread", None):
+                self._heartbeat_thread.stop()
             release_lock(self.claude_dir)
             logger.close()
             if self._telemetry:
@@ -650,6 +675,33 @@ class Orchestrator:
         if r.is_error:
             raise _PhaseError(phase, r.text or "claude -p returned an error")
 
+    def _accumulate_cost(self, local_acc: float, delta: float) -> float:
+        """v1.3.4 #15 fix: persist cost INCREMENTALLY after every Claude call.
+
+        Pre-fix: a milestone that retried because Phase B raised _PhaseError
+        threw away every dollar Phase A had already spent (cost was a local
+        variable returned only on success). On retry, the budget check at
+        line ~327 saw the OLD total, so a runaway spec could spend
+        many * max_total_budget_usd before giving up.
+
+        Now: every phase that adds to the milestone accumulator also charges
+        persistent state via this helper. On _PhaseError, the cost is already
+        in self.state.total_cost_usd; the next retry's budget check sees it.
+
+        Returns the new local accumulator so callers can keep using the
+        `cost = self._accumulate_cost(cost, delta)` idiom.
+        """
+        if delta:
+            import contextlib
+
+            self.state.total_cost_usd += delta
+            # Transient I/O hiccup tolerated — cost still in memory; the
+            # next _accumulate_cost call (or save_state at milestone end)
+            # will retry. Charging must not abort the milestone.
+            with contextlib.suppress(OSError):
+                save_state(self.claude_dir, self.state)
+        return local_acc + delta
+
     def _call_pre_phase(self, phase: str, milestone: dict) -> None:
         for plugin in self._plugins:
             plugin.pre_phase(phase, milestone)
@@ -799,9 +851,9 @@ class Orchestrator:
             system_prompt=self.sys_prompt,
             fallback_model=fallback,
         )
-        cost += r.cost_usd
+        cost = self._accumulate_cost(cost, r.cost_usd)
         curator_cost = self._run_gap_curator(name, "plan")
-        cost += curator_cost
+        cost = self._accumulate_cost(cost, curator_cost)
         self._emit_gap_report(name, "plan")
         self._emit_gap_validation(name)
         archive_reports(self.claude_dir, name, "plan")
@@ -857,7 +909,7 @@ class Orchestrator:
             system_prompt=self.sys_prompt,
             fallback_model=fallback,
         )
-        cost += r.cost_usd
+        cost = self._accumulate_cost(cost, r.cost_usd)
         self.state.last_phase_session_id = r.session_id
         self._check_phase_result(r, "Phase B")
         self._telemetry.emit(
@@ -900,7 +952,7 @@ class Orchestrator:
                 system_prompt=self.sys_prompt,
                 fallback_model=fallback,
             )
-            cost += r.cost_usd
+            cost = self._accumulate_cost(cost, r.cost_usd)
             passed, failures = self._verify_quality_gates(
                 logger, milestone=name, checkpoint="quality_check_b"
             )
@@ -925,7 +977,7 @@ class Orchestrator:
                 system_prompt=self.sys_prompt,
                 fallback_model=fallback,
             )
-            cost += r.cost_usd
+            cost = self._accumulate_cost(cost, r.cost_usd)
             policy_passed, remaining = self._check_policies(
                 logger, milestone=name, checkpoint="quality_check_b_recheck"
             )
@@ -933,7 +985,7 @@ class Orchestrator:
                 logger.log("POLICY_FIX_FAILED", violations=len(remaining))
 
         _, cov_cost = self._check_coverage(logger, milestone=name)
-        cost += cov_cost
+        cost = self._accumulate_cost(cost, cov_cost)
         plan_sha = self.state.plan_commit_sha or ""
         self._check_trailers(plan_sha, logger)
 
@@ -947,11 +999,11 @@ class Orchestrator:
 
         # Spec Compliance Check
         compliance_report, compliance_cost = self._run_spec_compliance(name, ms)
-        cost += compliance_cost
+        cost = self._accumulate_cost(cost, compliance_cost)
 
         # Feature Verification
         verification_report, verify_cost = self._run_feature_verification(name)
-        cost += verify_cost
+        cost = self._accumulate_cost(cost, verify_cost)
 
         # Phase C: Review + Fix
         try:
@@ -984,9 +1036,9 @@ class Orchestrator:
             system_prompt=self.sys_prompt,
             fallback_model=fallback,
         )
-        cost += r.cost_usd
+        cost = self._accumulate_cost(cost, r.cost_usd)
         curator_cost = self._run_gap_curator(name, "review")
-        cost += curator_cost
+        cost = self._accumulate_cost(cost, curator_cost)
         self._emit_gap_report(name, "review")
         self._emit_gap_validation(name)
         archive_reports(self.claude_dir, name, "review")
@@ -1032,7 +1084,7 @@ class Orchestrator:
                 system_prompt=self.sys_prompt,
                 fallback_model=fallback,
             )
-            cost += r.cost_usd
+            cost = self._accumulate_cost(cost, r.cost_usd)
             passed, failures = self._verify_quality_gates(
                 logger, milestone=name, checkpoint="quality_check_c"
             )
@@ -1057,7 +1109,7 @@ class Orchestrator:
                 system_prompt=self.sys_prompt,
                 fallback_model=fallback,
             )
-            cost += r.cost_usd
+            cost = self._accumulate_cost(cost, r.cost_usd)
             policy_passed, remaining = self._check_policies(
                 logger, milestone=name, checkpoint="quality_check_c_recheck"
             )
@@ -1065,7 +1117,7 @@ class Orchestrator:
                 logger.log("POLICY_FIX_FAILED", violations=len(remaining))
 
         _, cov_cost = self._check_coverage(logger, milestone=name)
-        cost += cov_cost
+        cost = self._accumulate_cost(cost, cov_cost)
         plan_sha = self.state.plan_commit_sha or ""
         self._check_trailers(plan_sha, logger)
 
@@ -1079,7 +1131,7 @@ class Orchestrator:
             initial_verification=verification_report,
             logger=logger,
         )
-        cost += strict_cost
+        cost = self._accumulate_cost(cost, strict_cost)
 
         # Phase D: Push + Tag
         try:
@@ -1101,7 +1153,7 @@ class Orchestrator:
             system_prompt=self.sys_prompt,
             fallback_model=fallback,
         )
-        cost += r.cost_usd
+        cost = self._accumulate_cost(cost, r.cost_usd)
         self._telemetry.emit(
             PhaseCompleted(
                 milestone=name,
@@ -1186,7 +1238,7 @@ class Orchestrator:
                 fallback_model=self.config.get("fallback_model"),
                 on_attempt=_on_ci_attempt,
             )
-            cost += ci_cost
+            cost = self._accumulate_cost(cost, ci_cost)
 
             if ci_success:
                 logger.log("PHASE_E_COMPLETE", status="passed", cost=round(ci_cost, 2))
@@ -1366,7 +1418,13 @@ class Orchestrator:
             for result in results:
                 if result.success:
                     self.state.completed.append(result.milestone)
-                    self.state.total_cost_usd += result.cost_usd
+                    # v1.3.4 #15: cost was already charged incrementally
+                    # inside _run_milestone via _accumulate_cost. Adding
+                    # result.cost_usd here would double-count.
+                    # NOTE: parallel mode still has the v1.3.5 #4 race on
+                    # state.total_cost_usd (workers contend on the same
+                    # float); v1.3.5 fixes that with proper locking and
+                    # per-milestone local accumulators.
                 else:
                     self.state.failed.append(result.milestone)
                     failed_set.add(result.milestone)

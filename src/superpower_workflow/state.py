@@ -245,6 +245,64 @@ def update_lock_heartbeat(claude_dir: Path) -> None:
     _write_lock_meta(claude_dir, meta)
 
 
+# v1.3.4 #9 fix: background-timer heartbeat. Previously the orchestrator
+# called `update_lock_heartbeat` only at the top of each milestone iteration.
+# A single Phase B running longer than HEARTBEAT_STALE_SECONDS (600s) would
+# let another orchestrator decide the first was hung and force-clean the
+# lock — two orchestrators concurrently rewriting state, double-billing,
+# and corrupting git history.
+#
+# A daemon thread now refreshes the heartbeat independent of phase boundaries.
+
+
+class HeartbeatThread:
+    """Background daemon thread that refreshes the lock heartbeat every
+    `interval` seconds while the orchestrator runs. Stopped via `stop()`
+    or by program exit (daemon=True).
+
+    Safe to call start()/stop() multiple times; idempotent. If the lock
+    meta file is missing or write fails, the thread silently continues —
+    a transient I/O hiccup must not crash the orchestrator.
+    """
+
+    def __init__(self, claude_dir: Path, interval: float = 60.0):
+        import threading
+
+        self._claude_dir = claude_dir
+        self._interval = interval
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        import threading
+
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._loop,
+            name="sw-heartbeat",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+
+    def _loop(self) -> None:
+        import contextlib
+
+        while not self._stop_event.is_set():
+            with contextlib.suppress(Exception):
+                update_lock_heartbeat(self._claude_dir)
+            # wait() returns True if stop_event set; False on timeout.
+            if self._stop_event.wait(self._interval):
+                return
+
+
 def get_lock_status(claude_dir: Path) -> dict | None:
     """Return lock status for inspection (sw lock --status)."""
     meta = _read_lock_meta(claude_dir)
