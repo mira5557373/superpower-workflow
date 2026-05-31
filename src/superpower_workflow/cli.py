@@ -1356,7 +1356,11 @@ def _server_pid_belongs_to_sw(pid: int) -> bool:
         return False
     if not argv:
         return False
-    head_name = Path(argv[0]).name.lower()
+    # Cross-platform basename: Path(...).name on Linux doesn't recognize
+    # backslash separators, so a Windows-style argv[0] read on Linux (e.g.
+    # in CI cross-checks or test fixtures) would not split correctly.
+    # Replace backslashes with forward slashes first, then split.
+    head_name = argv[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
     is_python = head_name.startswith("python") or head_name.startswith("py")
     is_sw_entry = head_name in {"sw", "sw.exe"}
     if not (is_python or is_sw_entry):
