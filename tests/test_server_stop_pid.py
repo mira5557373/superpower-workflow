@@ -177,9 +177,7 @@ class TestCmdServerStopWiring:
         # both before and after the predicate. Mock both helpers to make
         # this happy-path test pass.
         monkeypatch.setattr(cli_mod, "_server_pid_create_time", lambda pid: 1000.0)
-        monkeypatch.setattr(
-            cli_mod, "_server_pid_create_time_matches", lambda pid, expected: True
-        )
+        monkeypatch.setattr(cli_mod, "_server_pid_create_time_matches", lambda pid, expected: True)
 
         cli_mod._cmd_server_stop()
         assert kills and kills[0][0] == 42
