@@ -1981,11 +1981,8 @@ class TestModelRouting:
 
 
 class TestParallelMode:
-    @pytest.fixture(autouse=True)
-    def _allow_broken_parallel(self, monkeypatch):
-        """v1.3.7 gate: parallel mode requires SW_ALLOW_BROKEN_PARALLEL until
-        v1.3.8 ships Edit A. Tests deliberately exercising the parallel path opt in."""
-        monkeypatch.setenv("SW_ALLOW_BROKEN_PARALLEL", "1")
+    # v1.3.8: parallel mode is ungated. Edit A delivers the proper
+    # worker-cwd override; the SW_ALLOW_BROKEN_PARALLEL gate from v1.3.7 is gone.
 
     def test_run_accepts_parallel_params(self, tmp_path):
         config = _config(tmp_path)

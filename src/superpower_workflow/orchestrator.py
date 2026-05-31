@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -92,9 +93,27 @@ def validate_config(config: dict) -> list[str]:
     return errors
 
 
+# v1.3.8 Edit A: thread-local override for cwd / claude_dir.
+#
+# v1.3.5 #6 claimed worktree isolation by switching the parallel executor to
+# `execute_wave_isolated`, but `_run_milestone` and its 40+ subprocess sites
+# still passed `self.cwd` (the parent repo) — so every git/test/claude
+# command ran in the parent repo, not the worktree. The v1.3.7 review
+# confirmed this and v1.3.7 gated parallel mode pending the proper fix.
+#
+# v1.3.8 delivers it. Rather than threading `cwd` through 100+ call sites,
+# `Orchestrator.cwd` and `.claude_dir` are now properties backed by a
+# threading.local override that the parallel branch sets per-worker via
+# `_worker_context`. Sequential mode is unaffected (no override set →
+# property returns the instance default). The 100+ existing read sites
+# automatically resolve to the per-worker worktree without modification.
+_orchestrator_local = threading.local()
+
+
 class Orchestrator:
     def __init__(self, project_root: Path) -> None:
         self.root = project_root
+        # v1.3.8: store via the property setter (which writes to _claude_dir_storage)
         self.claude_dir = project_root / ".claude"
         self.config = load_config(self.claude_dir)
         config_errors = validate_config(self.config)
@@ -138,9 +157,51 @@ class Orchestrator:
         # (`_accumulate_cost`) and the parallel-wave merge step both take
         # this lock. Sequential mode is unaffected (lock acquisition on
         # an uncontended lock is ~50ns).
-        import threading as _threading
+        self._state_lock = threading.Lock()
 
-        self._state_lock = _threading.Lock()
+    # v1.3.8 Edit A: properties that route reads through thread-local
+    # override (set by `_worker_context` in parallel branches). Every
+    # existing `self.cwd` / `self.claude_dir` read site automatically gets
+    # the per-worker worktree value without any code change.
+    @property
+    def cwd(self) -> str:
+        return getattr(_orchestrator_local, "cwd_override", None) or self._cwd_storage
+
+    @cwd.setter
+    def cwd(self, value: str) -> None:
+        self._cwd_storage = value
+
+    @property
+    def claude_dir(self) -> Path:
+        return getattr(_orchestrator_local, "claude_dir_override", None) or self._claude_dir_storage
+
+    @claude_dir.setter
+    def claude_dir(self, value: Path) -> None:
+        self._claude_dir_storage = value
+
+    def _worker_context(self, cwd: str, claude_dir: Path):
+        """v1.3.8 Edit A: per-worker cwd/claude_dir scope.
+
+        Used by `_run_parallel.run_fn` to override `self.cwd` / `self.claude_dir`
+        for the duration of one worker's `_run_milestone` call. Restores the
+        previous values (which may themselves be overrides from an outer
+        context) on exit so nested contexts behave correctly.
+        """
+        import contextlib as _contextlib
+
+        @_contextlib.contextmanager
+        def _ctx():
+            prev_cwd = getattr(_orchestrator_local, "cwd_override", None)
+            prev_cd = getattr(_orchestrator_local, "claude_dir_override", None)
+            _orchestrator_local.cwd_override = cwd
+            _orchestrator_local.claude_dir_override = claude_dir
+            try:
+                yield
+            finally:
+                _orchestrator_local.cwd_override = prev_cwd
+                _orchestrator_local.claude_dir_override = prev_cd
+
+        return _ctx()
 
     def run(
         self,
@@ -287,25 +348,10 @@ class Orchestrator:
         bon_count = best_of_n if best_of_n > 1 else parallel_config.get("best_of_n", 1)
         router = ModelRouter.from_config(self.config)
 
-        # v1.3.7 honesty gate: the v1.3.5 #6 worktree-isolation fix was
-        # incomplete — the executor switched to execute_wave_isolated, but
-        # _run_milestone still passes self.cwd (parent repo) to ~40 subprocess
-        # call sites, so every git/test/claude command runs in the parent
-        # repo instead of the worktree. Full isolation (Edit A from the
-        # v1.3.7 review) is scheduled for v1.3.8 with proper integration
-        # testing. Until then, parallel mode is GUARDED: requires explicit
-        # opt-in via env var to acknowledge the known issue. The CHANGELOG
-        # entry for v1.3.5 #6 has been corrected to reflect this.
-        if use_parallel and not os.environ.get("SW_ALLOW_BROKEN_PARALLEL"):
-            print(
-                "  ERROR: parallel mode is currently gated. The v1.3.5 worktree-isolation\n"
-                "  fix was incomplete (every subprocess in _run_milestone still uses the\n"
-                "  parent repo cwd); v1.3.8 ships the proper fix. To run in parallel mode\n"
-                "  with the known cross-contamination issue, set SW_ALLOW_BROKEN_PARALLEL=1.\n"
-                "  For now, run sequentially (omit --parallel and set parallel.enabled=false)."
-            )
-            return
-
+        # v1.3.8: parallel mode is ungated — Edit A (thread-local
+        # cwd/claude_dir override via `_worker_context`) makes per-worker
+        # worktree isolation actually work. The SW_ALLOW_BROKEN_PARALLEL
+        # gate from v1.3.7 is removed.
         if use_parallel and len(milestones) > 1:
             try:
                 self._run_parallel(
@@ -1491,7 +1537,13 @@ class Orchestrator:
                 ms_start = time.monotonic()
 
                 try:
-                    cost = self._run_milestone(ms, logger, model_override=ms_model)
+                    # v1.3.8 Edit A: set per-worker cwd/claude_dir overrides
+                    # so every subprocess in _run_milestone (and its helpers)
+                    # resolves to the worktree path rather than self.cwd
+                    # (parent repo). The context manager restores the
+                    # previous values on exit so nested overrides compose.
+                    with self._worker_context(run_cwd, Path(run_cwd) / ".claude"):
+                        cost = self._run_milestone(ms, logger, model_override=ms_model)
                     if self._telemetry:
                         self._telemetry.emit(
                             MilestoneCompleted(

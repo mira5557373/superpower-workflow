@@ -5,18 +5,11 @@ from pathlib import Path
 from subprocess import CompletedProcess
 from unittest.mock import patch
 
-import pytest
-
 from superpower_workflow.orchestrator import Orchestrator
 from superpower_workflow.state import load_state
 
-
-@pytest.fixture(autouse=True)
-def _allow_broken_parallel(monkeypatch):
-    """v1.3.7 gates parallel mode behind SW_ALLOW_BROKEN_PARALLEL until v1.3.8.
-    These tests deliberately exercise the (broken-but-acknowledged) parallel
-    path, so opt in."""
-    monkeypatch.setenv("SW_ALLOW_BROKEN_PARALLEL", "1")
+# v1.3.8: parallel mode ungated by Edit A. The SW_ALLOW_BROKEN_PARALLEL
+# env-var workaround from v1.3.7 is no longer needed.
 
 
 def _ok_result(cost: float = 1.0):

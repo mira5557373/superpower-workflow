@@ -3,6 +3,87 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.8] — 2026-05-31
+
+Edit A — the real worktree-isolation fix that v1.3.5 #6 falsely advertised
+and v1.3.7 had to retract. Parallel mode is ungated again.
+
+### Fixed — the v1.3.5 #6 claim, properly this time
+
+- **`Orchestrator.cwd` and `Orchestrator.claude_dir` are now properties**
+  backed by a module-level `threading.local()` override. The property
+  getter checks the thread-local override first, falls back to the
+  instance default. The setter writes to the instance default. Every
+  one of the 100+ existing `self.cwd` / `self.claude_dir` read sites
+  automatically resolves to the per-worker override — zero touch on
+  the existing code.
+- **`Orchestrator._worker_context(cwd, claude_dir)`** is a per-worker
+  scope used by `_run_parallel.run_fn`: sets the thread-local override
+  for the duration of one milestone's `_run_milestone` call, restores
+  the previous values on exit (so nested overrides compose correctly).
+  Exception-safe via try/finally.
+- **`_run_parallel.run_fn` wraps `self._run_milestone(...)`** in
+  `with self._worker_context(run_cwd, Path(run_cwd) / ".claude")` so
+  every subprocess in `_run_milestone` (and every helper it calls)
+  sees the worktree path. The v1.3.5 #6 claim is now true.
+
+### Removed
+
+- **`SW_ALLOW_BROKEN_PARALLEL` env-var gate** from v1.3.7. Parallel mode
+  is ungated again. Tests that opted-in via the env var (autouse fixtures
+  in `test_parallel_integration.py` + `TestParallelMode` in
+  `test_orchestrator.py`) had those fixtures removed.
+
+### How Edit A is minimum-touch
+
+The critic's recommendation in the v1.3.7 review was to parameterize
+`_run_milestone(ms, logger, *, cwd, claude_dir, model)` — a 100+-site
+mechanical refactor estimated at 2-3 engineer-days. v1.3.8 takes a
+different path: convert the two attributes to properties backed by
+thread-local. **Zero existing call sites change.** The parallel branch
+sets the thread-local via a context manager. The fix is ~50 lines of new
+code (the properties + context manager + tests) and behaves identically
+to the explicit-parameter refactor.
+
+### Tests
+
+- New `tests/test_v138_worker_cwd.py` (9 tests):
+  - Sequential mode unchanged (cwd / claude_dir match instance defaults).
+  - `_worker_context` overrides visible inside the block.
+  - Nested contexts compose (inner override → outer restored on inner exit).
+  - Exception inside the body still restores.
+  - Two concurrent worker threads see their own cwds (no leak).
+  - Worker override doesn't pollute the main thread.
+  - End-to-end `_run_milestone` observes the worker cwd at call time.
+- `tests/test_v137_lifecycle.py::TestParallelModeGated` renamed and
+  inverted to `TestParallelModeUngatedAfterV138` — confirms the env-var
+  gate no longer blocks the parallel branch.
+
+### Stats
+
+- Test count: 1383 → **1392** passing (+9 for Edit A verification).
+- Ruff check + format clean.
+
+### Findings still open from the v1.3.7 review
+
+13 of the 19 absent-modality findings remain (#5 cost-ledger, #7 cross-worker
+state, #8 per-worker reports, #10 ExitStack cleanup, #11 grandchild reaping,
+#12 telemetry atexit flush, #13 heartbeat resurrection, #14 orphan .tmp,
+#15 sub-agent reaping, #16 ThreadPoolExecutor cancel, #17 WorkflowLogger
+ExitStack, #18 narrow engine leak, #19 _completion_notification masking).
+None are CRITICAL; v1.3.9 will address the highest-impact subset based
+on real-world signal.
+
+### Safety qualification
+
+v1.3.8 is **safe** for all documented configurations:
+- Single-thread mode ✓
+- `parallel.enabled=true` ✓ (real worktree isolation, no env-var opt-in needed)
+- `audit_trail=true` ✓
+- Long Phase B ✓
+- Ctrl-C / SIGTERM / container shutdown ✓
+- FastAPI server graceful shutdown ✓
+
 ## [1.3.7] — 2026-05-31
 
 Signal-handling + shutdown hardening. Closes 5 of the 19 findings from

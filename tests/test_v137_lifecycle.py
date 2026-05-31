@@ -13,12 +13,13 @@ import os
 from unittest.mock import patch
 
 
-class TestParallelModeGated:
-    """v1.3.7: parallel mode requires SW_ALLOW_BROKEN_PARALLEL until v1.3.8."""
+class TestParallelModeUngatedAfterV138:
+    """v1.3.7 gated parallel mode pending v1.3.8's Edit A. v1.3.8 ships Edit A
+    (thread-local cwd override) so the gate is removed and parallel runs
+    without env-var opt-in."""
 
-    def test_parallel_blocked_without_env_var(self, tmp_path, capsys, monkeypatch):
-        """Without SW_ALLOW_BROKEN_PARALLEL, parallel mode prints an error
-        and returns without invoking _run_parallel."""
+    def test_parallel_runs_without_env_var(self, tmp_path, monkeypatch):
+        """Parallel mode is no longer gated; SW_ALLOW_BROKEN_PARALLEL is a no-op."""
         # Set up a fresh project
         (tmp_path / ".claude").mkdir()
         import json as _json
@@ -48,12 +49,11 @@ class TestParallelModeGated:
         with (
             patch.object(orch, "_preflight_checks", return_value=True),
             patch.object(orch, "_run_parallel") as run_par,
+            patch.object(orch, "_completion_notification"),
         ):
             orch.run()
-        # parallel branch should NOT have been called
-        run_par.assert_not_called()
-        out = capsys.readouterr().out
-        assert "parallel mode is currently gated" in out
+        # Parallel branch should HAVE been invoked.
+        run_par.assert_called_once()
 
 
 class TestRunClaudePopenSignals:
