@@ -132,10 +132,10 @@ def _atomic_write(path: Path, data: dict) -> None:
                 # suffix avoids thundering herd.
                 time.sleep(0.01 * (attempt + 1))
         # Clean up the stale tmp so we don't accumulate orphans, then raise.
-        try:
+        import contextlib as _contextlib
+
+        with _contextlib.suppress(OSError):
             tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
         raise last_err  # type: ignore[misc]
 
 
