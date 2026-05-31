@@ -827,6 +827,31 @@ class Orchestrator:
         if r.is_error:
             raise _PhaseError(phase, r.text or "claude -p returned an error")
 
+    def _run_claude(self, *args, **kwargs):
+        """v1.3.11: wrap `run_claude` with an orchestrator-level
+        budget_check_fn so each retry attempt is gated by the cumulative
+        cap. Without this, parallel-mode workers could each spend
+        max_call_budget per attempt × 4 retries × N workers, totally
+        unbounded by `max_total_budget_usd`.
+
+        The check fn closes over `self.state.total_cost_usd` (the running
+        cumulative across all workers, protected by `self._state_lock`)
+        and the configured max. Returns True if it's safe to make the
+        next call; False if the cap is reached.
+        """
+        max_total = self.config.get("max_total_budget_usd", float("inf"))
+
+        def _ok(extra_this_call: float) -> bool:
+            # Allow the call if cumulative + extra_this_call < cap.
+            # We don't hold the state_lock here — the worst case under
+            # contention is one extra attempt past the line, which is
+            # acceptable since the next charge will surface the breach.
+            current = self.state.total_cost_usd + extra_this_call
+            return current < max_total
+
+        kwargs.setdefault("budget_check_fn", _ok)
+        return run_claude(*args, **kwargs)
+
     def _accumulate_cost(self, local_acc: float, delta: float) -> float:
         """v1.3.4 #15 fix: persist cost INCREMENTALLY after every Claude call.
 
@@ -1011,7 +1036,7 @@ class Orchestrator:
         )
         logger.log("PHASE_A_START")
         self._telemetry.emit(PhaseStarted(milestone=name, phase="plan"))
-        r = run_claude(
+        r = self._run_claude(
             phase_a_prompt(name, context, spec, sections),
             model=model,
             effort=effort.get("plan", "max"),
@@ -1069,7 +1094,7 @@ class Orchestrator:
         plan_path = self._find_plan_path(name)
         logger.log("PHASE_B_START")
         self._telemetry.emit(PhaseStarted(milestone=name, phase="implement"))
-        r = run_claude(
+        r = self._run_claude(
             phase_b_prompt(name, context, plan_path),
             model=model,
             effort=effort.get("implement", "high"),
@@ -1112,7 +1137,7 @@ class Orchestrator:
                 + "\n".join(f"- {f}" for f in failures)
                 + "\nFix ALL issues. Commit the fix."
             )
-            r = run_claude(
+            r = self._run_claude(
                 fix_prompt,
                 model=model,
                 effort="high",
@@ -1137,7 +1162,7 @@ class Orchestrator:
                 + "\n".join(f"- {v}" for v in policy_violations)
                 + "\nFix ALL violations. Commit the fix."
             )
-            r = run_claude(
+            r = self._run_claude(
                 fix_prompt,
                 model=model,
                 effort="high",
@@ -1187,7 +1212,7 @@ class Orchestrator:
         )
         logger.log("PHASE_C_START")
         self._telemetry.emit(PhaseStarted(milestone=name, phase="review"))
-        r = run_claude(
+        r = self._run_claude(
             phase_c_prompt(
                 name,
                 context,
@@ -1244,7 +1269,7 @@ class Orchestrator:
                 + "\n".join(f"- {f}" for f in failures)
                 + "\nFix ALL issues. Commit the fix."
             )
-            r = run_claude(
+            r = self._run_claude(
                 fix_prompt,
                 model=model,
                 effort="high",
@@ -1269,7 +1294,7 @@ class Orchestrator:
                 + "\n".join(f"- {v}" for v in policy_violations)
                 + "\nFix ALL violations. Commit the fix."
             )
-            r = run_claude(
+            r = self._run_claude(
                 fix_prompt,
                 model=model,
                 effort="high",
@@ -1313,7 +1338,7 @@ class Orchestrator:
         branch = "main" if self.config.get("git_strategy") == "main" else f"milestone/{name}"
         logger.log("PHASE_D_START")
         self._telemetry.emit(PhaseStarted(milestone=name, phase="push"))
-        r = run_claude(
+        r = self._run_claude(
             phase_d_prompt(name, branch),
             model=model,
             effort=effort.get("push", "low"),
@@ -1401,7 +1426,7 @@ class Orchestrator:
             ci_success, ci_cost, ci_tokens = ci_fix_loop(
                 cwd=self.cwd,
                 ci_config=ci_config,
-                run_claude_fn=run_claude,
+                run_claude_fn=self._run_claude,
                 model=self.config["model"],
                 system_prompt=self.sys_prompt,
                 fallback_model=self.config.get("fallback_model"),
@@ -1804,7 +1829,7 @@ class Orchestrator:
                     )
                 )
             if attempt < max_attempts - 1:
-                r = run_claude(
+                r = self._run_claude(
                     f"Branch coverage is {coverage}% (threshold: {threshold}%). "
                     f"Write additional tests for uncovered code. "
                     f"Attempt {attempt + 1}/{max_attempts}.",
@@ -1925,7 +1950,7 @@ class Orchestrator:
                 spec_path=spec_path,
                 spec_sections=sections or "all",
                 module_dirs=module_dirs,
-                run_claude_fn=run_claude,
+                run_claude_fn=self._run_claude,
                 model=self.config["model"],
                 budget=budget,
                 cwd=self.cwd,
@@ -1965,7 +1990,7 @@ class Orchestrator:
         try:
             report = run_feature_verification(
                 compliance_path=compliance_path,
-                run_claude_fn=run_claude,
+                run_claude_fn=self._run_claude,
                 model=self.config["model"],
                 budget=budget,
                 cwd=self.cwd,
@@ -2033,7 +2058,7 @@ class Orchestrator:
                 spec_path=spec_path,
                 compliance_path=compliance_path if phase == "review" else None,
                 plan_sha=self.state.plan_commit_sha or "",
-                run_claude_fn=run_claude,
+                run_claude_fn=self._run_claude,
                 model=self.config["model"],
                 budget=budget,
                 cwd=self.cwd,
@@ -2157,7 +2182,7 @@ class Orchestrator:
             )
             fix_prompt = "\n".join(fix_prompt_parts)
 
-            r = run_claude(
+            r = self._run_claude(
                 fix_prompt,
                 model=model,
                 effort="high",

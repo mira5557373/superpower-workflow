@@ -152,6 +152,7 @@ def run_claude(
     fallback_model: str | None = None,
     resume_session: str | None = None,
     num_agents: int | None = None,
+    budget_check_fn=None,
 ) -> ClaudeResult:
     """Run claude -p command with retry logic, JSON parsing, and timeout handling.
 
@@ -168,6 +169,16 @@ def run_claude(
     Returns:
         ClaudeResult with parsed output, cost, session ID, duration, and error flags
     """
+    # v1.3.11 fix (parallel soak finding): orchestrator-level budget cap
+    # was only checked at sequential milestone-loop iterations, not before
+    # each run_claude attempt. In parallel mode, N workers × 4 retries × ~$1
+    # per claude -p call could spend many * max_total_budget_usd before the
+    # orchestrator noticed. Now: callers pass `budget_check_fn` (a closure
+    # capturing self.state.total_cost_usd and max_total_budget_usd). It's
+    # called before each attempt; on False, run_claude returns immediately
+    # with `is_error=True, cost_usd=accumulated_cost` and the orchestrator's
+    # _accumulate_cost charges whatever was spent prior to the abort.
+    #
     # v1.3.9 fix (soak finding): accumulate cost across retries.
     # Pre-fix, when claude -p hit `--max-budget-usd` and returned
     # is_error=true with a non-zero cost (the cost up to the cap), the
@@ -184,6 +195,18 @@ def run_claude(
     accumulated_cost = 0.0
 
     for attempt in range(len(RETRY_DELAYS) + 1):
+        # v1.3.11: budget gate. Check before EACH attempt (including the
+        # first) so a totally-busted-budget orchestrator never even starts
+        # a new claude -p call.
+        if budget_check_fn is not None and not budget_check_fn(accumulated_cost):
+            logger.warning(
+                "claude -p aborted before attempt %d/%d: orchestrator budget cap "
+                "exceeded (accumulated_cost_this_call=$%.4f).",
+                attempt + 1,
+                len(RETRY_DELAYS) + 1,
+                accumulated_cost,
+            )
+            return ClaudeResult(is_error=True, cost_usd=accumulated_cost)
         try:
             cmd = _build_command(
                 prompt,

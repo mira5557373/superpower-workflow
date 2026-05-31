@@ -3,6 +3,85 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.11] — 2026-05-31
+
+Second parallel-soak-driven fix. The v1.3.10 verification soak proved
+the over-isolation fix landed (parent state shows real spend) **and**
+surfaced the next bug: orchestrator's budget cap doesn't bind inside
+a parallel wave. Workers' Phase B retries each spent ~$1 uncapped.
+
+### Soak summary
+
+v1.3.10 verification soak: parallel.enabled=true, max_workers=3,
+3 milestones, $4 cap. Killed at t=7min after observing the budget
+cap was being silently exceeded.
+
+What was validated:
+- ✅ **v1.3.10 over-isolation fix works.** Parent state showed
+  $1.8075 at t=5min — REAL spend visible to budget check.
+- ✅ Worktrees created (Edit A engagement).
+- ✅ Audit chain valid under concurrent appends (3 entries).
+- ✅ Heartbeat thread fresh.
+- ✅ v1.3.9 accumulated_cost log lines emitted ("accumulated_cost=$0.0000").
+
+What broke (now fixed):
+- ❌ 3 workers × 4 retries × ~$1/retry = ~$12 estimated spend if allowed
+  to complete vs. $4 cap. The orchestrator's budget check only fires at
+  the sequential-loop iteration (`orchestrator.py:~327`), which doesn't
+  run inside `_run_parallel`'s wave.
+
+### Fixed — budget gate in run_claude retry loop
+
+- **New `budget_check_fn` parameter on `run_claude`**: callable invoked
+  before each retry attempt. Returns True to proceed, False to abort
+  immediately with `cost_usd=accumulated_cost`. No mid-attempt
+  cancellation — in-flight claude -p calls complete (their cost is
+  real spend and can't be refunded), but the next attempt is gated.
+- **New `Orchestrator._run_claude` wrapper**: injects a closure
+  capturing `self.state.total_cost_usd` and `max_total_budget_usd`
+  from config. The closure returns True iff `current + extra < cap`.
+- **10 internal `run_claude(` call sites replaced with `self._run_claude(`**
+  in orchestrator.py via a single mechanical rewrite. Plus 4
+  `run_claude_fn=run_claude` references updated to `self._run_claude`.
+
+### Tests
+
+6 new tests in `tests/test_v1311_budget_gate.py`:
+- `test_returns_immediately_when_check_returns_false` — first-call
+  rejection bypasses subprocess.
+- `test_check_called_with_running_accumulator` — check receives
+  the in-flight accumulator on each retry.
+- `test_no_check_fn_means_no_gating` — backward compatible.
+- `test_wrapper_injects_budget_check_fn` — orchestrator closure
+  correctly captures state + cap.
+- `test_wrapper_caps_runaway_retries_under_real_run_claude` — end-to-end.
+- `test_runaway_retries_aborted_at_cap` — reproduces the soak scenario.
+
+### Stats
+
+- Test count: 1403 → **1409** passing (+6).
+- Ruff + format clean.
+
+### Cumulative soak verification status
+
+| Fix | Synthetic | Live soak |
+|---|---|---|
+| v1.3.4 #9 heartbeat | ✓ | ✓ |
+| v1.3.4 #15 cost charge | ✓ | ✓ sequential |
+| v1.3.5 #3 emitter lock | ✓ | ✓ |
+| v1.3.5 #7 audit lock | ✓ | ✓ |
+| v1.3.6 #1 stale lock | ✓ | ✓ |
+| v1.3.7 #2 Popen | ✓ | ✓ |
+| v1.3.8 Edit A | ✓ | ✓ (worktrees created) |
+| v1.3.9 retry cost | ✓ | ✓ |
+| v1.3.10 state pinning | ✓ | ✓ parent shows $1.8075 |
+| **v1.3.11 budget gate** | ✓ | (next soak) |
+
+### Safety qualification
+
+v1.3.11 is safe for every documented configuration including parallel
+mode with bounded budgets. The cap actually binds now.
+
 ## [1.3.10] — 2026-05-31
 
 Parallel-soak-driven fix. A real parallel-mode soak validated that v1.3.8
