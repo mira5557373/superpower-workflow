@@ -852,11 +852,23 @@ class Orchestrator:
             # block briefly but no correctness loss.
             with self._state_lock:
                 self.state.total_cost_usd += delta
+                # v1.3.10 fix (parallel soak finding): always write state
+                # to the PARENT project's .claude/, never to the worker's
+                # worktree. v1.3.8 made `self.claude_dir` a thread-local
+                # property that resolves to the worktree inside a
+                # `_worker_context`; that's correct for per-milestone
+                # report paths (.gap-report.json etc.) but wrong for
+                # run-scoped state (workflow-state.json). The parallel
+                # soak proved this: parent state showed $0 while worker
+                # worktrees held $1.10 + $1.65 = $2.76 of real spend.
+                # Bypass the property by computing the parent path from
+                # self.root directly.
+                parent_claude_dir = Path(self.root) / ".claude"
                 # Transient I/O hiccup tolerated — cost still in memory;
                 # the next _accumulate_cost call will retry. Charging
                 # must not abort the milestone.
                 with contextlib.suppress(OSError):
-                    save_state(self.claude_dir, self.state)
+                    save_state(parent_claude_dir, self.state)
         return local_acc + delta
 
     def _call_pre_phase(self, phase: str, milestone: dict) -> None:

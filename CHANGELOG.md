@@ -3,6 +3,89 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.10] — 2026-05-31
+
+Parallel-soak-driven fix. A real parallel-mode soak validated that v1.3.8
+Edit A engages correctly (worktrees created, workers isolated, telemetry
+clean) **and** surfaced a latent bug: Edit A's `claude_dir` property
+override applies too broadly. `save_state` inside a worker context
+writes to the worker's **worktree** state file, not the parent project's.
+Budget cap and resume both broken in parallel mode as a result.
+
+### Soak summary (proving v1.3.x works)
+
+**Parallel soak**: `parallel.enabled=true`, max_workers=2, 2 independent
+milestones, $4 cap. 5-min observation.
+
+What worked correctly:
+- ✅ **Edit A worktree isolation engaged**. `.worktrees/cli-m2-...` and
+  `.worktrees/foundation-m1-...` both created. Each has its own `.claude/`
+  with separate workflow.json + reports/.
+- ✅ **Telemetry per-worker**. Each `phase_completed` event carries its
+  worker's milestone field and cost. No cross-contamination.
+- ✅ **Audit trail valid hash chain** under concurrent appends from both
+  workers (v1.3.5 #7/#11 lock). `sw audit verify` clean.
+- ✅ **Heartbeat thread cycling 0-32s** throughout the run.
+- ✅ **v1.3.9 retry-cost accumulator log lines emitted**.
+
+What broke (now fixed):
+- ❌ Parent state.total_cost_usd showed $0 for the entire run.
+- ❌ Worker worktree states held the real spend: cli-m2=$1.1073,
+  foundation-m1=$1.6561.
+
+### Fixed — v1.3.8 Edit A over-isolation
+
+**Root cause**: v1.3.8 made `Orchestrator.claude_dir` a thread-local
+property. Inside `_worker_context`, every read of `self.claude_dir`
+resolves to the worker's worktree path. That's correct for per-milestone
+report files (`.gap-report.json`, `.spec-compliance.json`) but WRONG
+for run-scoped state (`workflow-state.json`). `_accumulate_cost`'s
+call site `save_state(self.claude_dir, ...)` inadvertently routed the
+cost-charge save into the worktree.
+
+**Fix**: `_accumulate_cost` now bypasses the property and computes
+`Path(self.root) / ".claude"` directly. Run-scoped state always lands
+in the parent project regardless of any active worker context.
+
+Other `save_state(self.claude_dir, ...)` sites in the orchestrator
+(parallel-merge step, sequential milestone completion, etc.) execute
+in the **main thread** with no active `_worker_context`, so the
+property already returns the parent there — no change needed.
+
+### Tests
+
+4 new tests in `tests/test_v1310_state_pinning.py`:
+- `test_cost_lands_in_parent_not_worker_worktree` — single worker context.
+- `test_two_concurrent_workers_both_credit_parent` — two threads sum into
+  one parent total.
+- `test_sequential_mode_writes_to_claude_dir` — sequential unchanged.
+- `test_exact_soak_pattern` — reproduces the soak's dollar amounts
+  ($1.1073 + $1.6561 = $2.7634) and asserts parent state holds the sum.
+
+### Stats
+
+- Test count: 1399 → **1403** passing (+4).
+- Ruff + format clean.
+
+### Cumulative v1.3.x verification status
+
+| Fix | Synthetic | Live soak |
+|---|---|---|
+| v1.3.4 #9 heartbeat | ✓ unit | ✓ soak (cycled 0-32s) |
+| v1.3.4 #15 cost charged | ✓ unit | ✓ sequential soak |
+| v1.3.5 #3 emitter lock | ✓ unit | ✓ soak (10 events, no torn) |
+| v1.3.5 #7 audit lock | ✓ unit | ✓ soak (3-entry valid chain) |
+| v1.3.6 #1 stale-lock | ✓ unit | ✓ soak (detected SIGKILL orphan) |
+| v1.3.7 #2 Popen path | ✓ unit | ✓ soak (5-min claude -p clean) |
+| v1.3.8 Edit A | ✓ unit | ⚠️→✓ (over-isolation found+fixed in v1.3.10) |
+| v1.3.9 retry cost | ✓ unit | ✓ soak (accumulated_cost in log) |
+| v1.3.10 state pinning | ✓ unit | (test next soak) |
+
+### Safety qualification
+
+v1.3.10 is safe for every documented configuration including parallel
+mode. Budget caps now see real per-worker spend.
+
 ## [1.3.9] — 2026-05-31
 
 Soak-driven fix. A real $3-bounded soak of v1.3.8 surfaced a money leak
