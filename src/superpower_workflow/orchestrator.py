@@ -159,6 +159,14 @@ class Orchestrator:
         # an uncontended lock is ~50ns).
         self._state_lock = threading.Lock()
 
+        # v1.3.12: shared in-flight cost counter across parallel workers.
+        # `_run_claude` charges to this BEFORE state is updated so sibling
+        # workers' budget checks see in-flight spend within milliseconds.
+        # Without this, N workers can each blow the cap in parallel before
+        # any of them returns and triggers `_accumulate_cost`.
+        self._in_flight_cost: float = 0.0
+        self._in_flight_lock = threading.Lock()
+
     # v1.3.8 Edit A: properties that route reads through thread-local
     # override (set by `_worker_context` in parallel branches). Every
     # existing `self.cwd` / `self.claude_dir` read site automatically gets
@@ -828,29 +836,53 @@ class Orchestrator:
             raise _PhaseError(phase, r.text or "claude -p returned an error")
 
     def _run_claude(self, *args, **kwargs):
-        """v1.3.11: wrap `run_claude` with an orchestrator-level
-        budget_check_fn so each retry attempt is gated by the cumulative
-        cap. Without this, parallel-mode workers could each spend
-        max_call_budget per attempt × 4 retries × N workers, totally
-        unbounded by `max_total_budget_usd`.
+        """v1.3.11+v1.3.12: wrap `run_claude` with budget gating that
+        actually binds across parallel workers.
 
-        The check fn closes over `self.state.total_cost_usd` (the running
-        cumulative across all workers, protected by `self._state_lock`)
-        and the configured max. Returns True if it's safe to make the
-        next call; False if the cap is reached.
+        v1.3.11 made the budget gate check state, but state.total_cost_usd
+        only updates when run_claude RETURNS — so N parallel workers
+        could each spend `cap` in-flight before any of them returned.
+
+        v1.3.12 adds per-attempt charging via a shared in-flight counter
+        (`self._in_flight_cost`). Each worker's `charge_cost_fn` posts
+        its attempt's cost to the shared counter; sibling workers'
+        `budget_check_fn` reads that counter so the cap binds across
+        workers within milliseconds.
+
+        After `run_claude` returns, the wrapper subtracts this call's
+        contribution from the shared counter — the caller's
+        `_accumulate_cost(cost, r.cost_usd)` then transfers it to state
+        as before. No double-charging.
         """
         max_total = self.config.get("max_total_budget_usd", float("inf"))
+        my_charged = [0.0]  # this call's contribution to the shared counter
 
         def _ok(extra_this_call: float) -> bool:
-            # Allow the call if cumulative + extra_this_call < cap.
-            # We don't hold the state_lock here — the worst case under
-            # contention is one extra attempt past the line, which is
-            # acceptable since the next charge will surface the breach.
-            current = self.state.total_cost_usd + extra_this_call
-            return current < max_total
+            # accumulated_from_runner is this worker's local accumulator;
+            # we already posted it to in_flight_cost via charge_cost_fn.
+            # Subtract my own contribution to avoid double-counting, then
+            # add `extra_this_call` to model the cost of the NEXT attempt.
+            with self._in_flight_lock:
+                others_in_flight = self._in_flight_cost - my_charged[0]
+            return self.state.total_cost_usd + others_in_flight + extra_this_call < max_total
+
+        def _charge(per_attempt_cost: float) -> None:
+            # Make this attempt's spend visible to sibling workers' next
+            # budget check.
+            with self._in_flight_lock:
+                self._in_flight_cost += per_attempt_cost
+            my_charged[0] += per_attempt_cost
 
         kwargs.setdefault("budget_check_fn", _ok)
-        return run_claude(*args, **kwargs)
+        kwargs.setdefault("charge_cost_fn", _charge)
+        try:
+            return run_claude(*args, **kwargs)
+        finally:
+            # Hand off this call's contribution: the caller will charge
+            # `r.cost_usd` to state via `_accumulate_cost`, so the shared
+            # counter must drop by the same amount to keep totals correct.
+            with self._in_flight_lock:
+                self._in_flight_cost -= my_charged[0]
 
     def _accumulate_cost(self, local_acc: float, delta: float) -> float:
         """v1.3.4 #15 fix: persist cost INCREMENTALLY after every Claude call.

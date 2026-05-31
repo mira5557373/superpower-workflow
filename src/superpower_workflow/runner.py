@@ -153,6 +153,7 @@ def run_claude(
     resume_session: str | None = None,
     num_agents: int | None = None,
     budget_check_fn=None,
+    charge_cost_fn=None,
 ) -> ClaudeResult:
     """Run claude -p command with retry logic, JSON parsing, and timeout handling.
 
@@ -231,6 +232,25 @@ def run_claude(
                 # v1.3.9: always credit this attempt's cost to the running
                 # total, even when is_error=true (cost was real spend).
                 accumulated_cost += parsed.cost_usd
+                # v1.3.12 fix (parallel soak finding): charge this attempt's
+                # cost to the orchestrator's shared state IMMEDIATELY, not
+                # at run_claude return. v1.3.11's budget gate only saw
+                # state.total_cost_usd which wasn't updated mid-retry, so
+                # workers' in-flight spend was invisible to the cap check.
+                # Now each attempt's charge is visible to sibling workers'
+                # budget gates within milliseconds.
+                if charge_cost_fn is not None and parsed.cost_usd > 0:
+                    try:
+                        charge_cost_fn(parsed.cost_usd)
+                    except Exception:
+                        # Charge failure must not crash the run; the orchestrator
+                        # has its own _accumulate_cost retry path. Log and continue.
+                        logger.warning(
+                            "charge_cost_fn raised on attempt %d/%d cost $%.4f",
+                            attempt + 1,
+                            len(RETRY_DELAYS) + 1,
+                            parsed.cost_usd,
+                        )
                 if parsed.is_error:
                     upstream = ""
                     if parsed.raw:

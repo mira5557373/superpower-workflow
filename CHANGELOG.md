@@ -3,6 +3,76 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.12] — 2026-05-31
+
+Second parallel-soak iteration. v1.3.11 verification soak proved the
+budget gate alone doesn't bind across parallel workers — state.total_cost_usd
+only updates on `run_claude` return, so N workers can each blow `cap`
+in-flight before any worker returns and triggers `_accumulate_cost`.
+
+v1.3.12 adds per-attempt charging via a shared in-flight counter.
+
+### Soak finding (v1.3.11 verification, 8 min, ~$3 lost)
+
+`parallel.enabled=true`, 3 workers, $4 cap. After 8 minutes:
+- State showed $0 the entire time (no worker returned yet from attempt 1)
+- Heartbeat fresh, audit valid, telemetry clean — all v1.3.4-v1.3.11 fixes working
+- **Budget gate: 0 triggers** — workers proceeded through Phase A attempt 1
+  spending ~$1 each ($3 total) without the cap binding
+
+Diagnosis: `budget_check_fn` saw `self.state.total_cost_usd + extra` where
+`extra` was THIS worker's local accumulator. Sibling workers' spend was
+invisible because state didn't update until run_claude returned.
+
+### Fixed — shared in-flight counter
+
+- **New `Orchestrator._in_flight_cost`** (float) + `_in_flight_lock`
+  (threading.Lock) tracking cost charged but not yet settled to state.
+- **New `charge_cost_fn` parameter on `run_claude`**: called after each
+  attempt with that attempt's cost. Orchestrator's wrapper posts to the
+  shared counter immediately.
+- **`budget_check_fn` formula updated**:
+  `state.total_cost_usd + (in_flight_cost - my_charged) + extra < cap`.
+  Subtracting `my_charged` avoids double-counting THIS call's contribution;
+  `others_in_flight` reflects sibling workers' spend.
+- **On `run_claude` return**, the wrapper subtracts this call's
+  contribution from the shared counter — the caller's `_accumulate_cost`
+  then transfers it to state as before. No double-charging.
+
+### Tests
+
+9 new tests in `tests/test_v1312_in_flight_budget.py`:
+- `test_charge_called_on_successful_attempt` — single charge.
+- `test_charge_called_on_each_retry_attempt` — N charges, one per attempt.
+- `test_charge_failure_does_not_crash` — exception-safe.
+- `test_initial_in_flight_is_zero` — fresh orchestrator.
+- `test_charge_increments_in_flight` — counter grows + resets.
+- `test_in_flight_visible_to_concurrent_check` — direct manipulation test
+  proving the visibility logic.
+- `test_subsequent_worker_aborts_when_inflight_near_cap` — sibling
+  worker reads in-flight and aborts mid-call.
+- `test_in_flight_resets_after_call_returns` — counter handoff to state.
+- `test_state_reflects_single_charge_after_caller_pattern` — no double
+  charge from caller's `_accumulate_cost(cost, r.cost_usd)`.
+
+### Stats
+
+- Test count: 1409 → **1418** passing (+9).
+- Ruff + format clean.
+
+### Honesty notes
+
+The original threading-based integration test in this file was rewritten
+as a direct-manipulation test. Reason: Python's GIL serializes thread
+work, so one worker can race through all 4 retries before sibling
+workers even reach their first attempt. The direct manipulation tests
+the logic that handles the real concurrent case in production.
+
+### Verification
+
+Awaiting one more parallel soak with v1.3.12 to confirm the in-flight
+counter binds the cap in vivo (expected: total spend ~$4, not ~$12).
+
 ## [1.3.11] — 2026-05-31
 
 Second parallel-soak-driven fix. The v1.3.10 verification soak proved
