@@ -14,25 +14,104 @@ import pytest
 from superpower_workflow.cli import _server_pid_belongs_to_sw
 
 
+def _mock_proc(cmdline):
+    p = MagicMock()
+    p.cmdline.return_value = cmdline
+    return p
+
+
 class TestServerPidBelongsToSw:
-    def test_current_process_passes_when_sw_in_cmdline(self):
-        """If psutil is installed and the cmdline mentions sw, accept it."""
-        with patch("psutil.Process") as mock_proc_cls:
-            mock_proc = MagicMock()
-            mock_proc.cmdline.return_value = ["python", "-m", "superpower_workflow.server.app"]
-            mock_proc_cls.return_value = mock_proc
+    """v1.3.2 #1: predicate must accept genuine sw-server launches and reject
+    every false positive the original v1.3.1 predicate let through."""
+
+    # --- POSITIVES: real server launches ---
+
+    def test_accepts_python_dash_m_server_app(self):
+        with patch(
+            "psutil.Process",
+            return_value=_mock_proc(["python", "-m", "superpower_workflow.server.app"]),
+        ):
             assert _server_pid_belongs_to_sw(os.getpid()) is True
 
-    def test_returns_false_when_cmdline_unrelated(self):
-        """Different process (e.g., bash) with same PID → reject."""
-        with patch("psutil.Process") as mock_proc_cls:
-            mock_proc = MagicMock()
-            mock_proc.cmdline.return_value = ["/bin/bash", "-c", "echo hello"]
-            mock_proc_cls.return_value = mock_proc
-            assert _server_pid_belongs_to_sw(12345) is False
+    def test_accepts_python_path_server_app(self):
+        with patch(
+            "psutil.Process",
+            return_value=_mock_proc(
+                ["/usr/bin/python3.12", "/x/superpower_workflow/server/app.py"]
+            ),
+        ):
+            assert _server_pid_belongs_to_sw(99) is True
+
+    def test_accepts_sw_entry_with_server_subcommand(self):
+        with patch(
+            "psutil.Process",
+            return_value=_mock_proc(["/usr/local/bin/sw", "server", "run", "--port", "8080"]),
+        ):
+            assert _server_pid_belongs_to_sw(99) is True
+
+    def test_accepts_sw_exe_with_server_subcommand_windows(self):
+        with patch(
+            "psutil.Process",
+            return_value=_mock_proc(["C:\\Python\\Scripts\\sw.exe", "server", "run"]),
+        ):
+            assert _server_pid_belongs_to_sw(99) is True
+
+    # --- NEGATIVES: v1.3.1's false positives must now be rejected ---
+
+    def test_rejects_unrelated_bash(self):
+        with patch("psutil.Process", return_value=_mock_proc(["/bin/bash", "-c", "echo hello"])):
+            assert _server_pid_belongs_to_sw(99) is False
+
+    def test_rejects_editor_viewing_sw_source(self):
+        """v1.3.2 #1: vim opened on a sw file used to be accepted via the
+        loose substring match. Must now be rejected (head argv is `vim`)."""
+        with patch(
+            "psutil.Process",
+            return_value=_mock_proc(["vim", "/projects/superpower_workflow/src/cli.py"]),
+        ):
+            assert _server_pid_belongs_to_sw(99) is False
+
+    def test_rejects_bash_dash_c_sw(self):
+        """v1.3.2 #1: bare token `sw` no longer flips the predicate true."""
+        with patch("psutil.Process", return_value=_mock_proc(["/bin/bash", "-c", "sw"])):
+            assert _server_pid_belongs_to_sw(99) is False
+
+    def test_rejects_other_sw_subcommand(self):
+        """v1.3.2 #1: `sw run` or `sw watch` running in another terminal must
+        NOT be SIGTERM'd by `sw server stop` after PID reuse."""
+        with patch(
+            "psutil.Process",
+            return_value=_mock_proc(["/usr/local/bin/sw", "run", "--milestone", "M1"]),
+        ):
+            assert _server_pid_belongs_to_sw(99) is False
+
+    def test_rejects_other_sw_module_invocation(self):
+        """python -m superpower_workflow.cli (not the server) must be rejected."""
+        with patch(
+            "psutil.Process",
+            return_value=_mock_proc(["python", "-m", "superpower_workflow.cli", "run"]),
+        ):
+            assert _server_pid_belongs_to_sw(99) is False
+
+    def test_rejects_python_app_sw_arg(self):
+        with patch("psutil.Process", return_value=_mock_proc(["python", "app.py", "sw"])):
+            assert _server_pid_belongs_to_sw(99) is False
+
+    def test_rejects_non_python_non_sw_head(self):
+        """Even with `superpower_workflow.server` in argv, if head argv is
+        not python/sw we should refuse (e.g., a malicious wrapper that
+        spoofs the marker)."""
+        with patch(
+            "psutil.Process",
+            return_value=_mock_proc(
+                ["/usr/bin/curl", "-O", "http://x/superpower_workflow.server.txt"]
+            ),
+        ):
+            assert _server_pid_belongs_to_sw(99) is False
+
+    # --- ERROR PATHS: fail closed ---
 
     def test_returns_false_when_process_missing(self):
-        """psutil.NoSuchProcess → safe refusal."""
         import psutil
 
         with patch("psutil.Process", side_effect=psutil.NoSuchProcess(12345)):
@@ -44,13 +123,59 @@ class TestServerPidBelongsToSw:
         with patch("psutil.Process", side_effect=psutil.AccessDenied(12345)):
             assert _server_pid_belongs_to_sw(12345) is False
 
-    def test_returns_false_when_psutil_missing(self):
-        """No psutil at all → conservative refuse. The function itself
-        handles ImportError internally; we can't easily force one without
-        patching builtins. Behavioral test is covered by the
-        missing-process / unrelated-cmdline cases above."""
-        # Smoke check that the symbol exists and is callable.
-        assert callable(_server_pid_belongs_to_sw)
+    def test_returns_false_when_zombie(self):
+        import psutil
+
+        with patch("psutil.Process", side_effect=psutil.ZombieProcess(12345)):
+            assert _server_pid_belongs_to_sw(12345) is False
+
+    def test_returns_false_on_empty_cmdline(self):
+        """Some kernel-thread / exited processes return empty argv."""
+        with patch("psutil.Process", return_value=_mock_proc([])):
+            assert _server_pid_belongs_to_sw(99) is False
+
+
+class TestCmdServerStopWiring:
+    """v1.3.2 #1: ensure `_cmd_server_stop` actually consults
+    `_server_pid_belongs_to_sw` and refuses to SIGTERM when False.
+    """
+
+    def test_stop_does_not_kill_when_predicate_false(self, tmp_path, monkeypatch):
+        from pathlib import Path
+
+        from superpower_workflow import cli as cli_mod
+
+        pid_file = tmp_path / "sw-server.pid"
+        pid_file.write_text("99999")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path.parent)
+        # Re-point Path.home() / ".claude" / "sw-server.pid" to our file:
+        claude_dir = tmp_path.parent / ".claude"
+        claude_dir.mkdir(exist_ok=True)
+        (claude_dir / "sw-server.pid").write_text("99999")
+
+        kills = []
+        monkeypatch.setattr("os.kill", lambda pid, sig: kills.append((pid, sig)))
+        monkeypatch.setattr(cli_mod, "_server_pid_belongs_to_sw", lambda pid: False)
+
+        cli_mod._cmd_server_stop()
+        assert kills == [], "os.kill must NOT be called when predicate is False"
+
+    def test_stop_kills_when_predicate_true(self, tmp_path, monkeypatch):
+        from pathlib import Path
+
+        from superpower_workflow import cli as cli_mod
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path.parent)
+        claude_dir = tmp_path.parent / ".claude"
+        claude_dir.mkdir(exist_ok=True)
+        (claude_dir / "sw-server.pid").write_text("42")
+
+        kills = []
+        monkeypatch.setattr("os.kill", lambda pid, sig: kills.append((pid, sig)))
+        monkeypatch.setattr(cli_mod, "_server_pid_belongs_to_sw", lambda pid: True)
+
+        cli_mod._cmd_server_stop()
+        assert kills and kills[0][0] == 42
 
 
 class TestSkillsHaveValidConfigKeys:

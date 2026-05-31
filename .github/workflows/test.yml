@@ -45,10 +45,12 @@ jobs:
 
       - name: Complexity audit
         run: |
-          # v1.2.0 ceilings: max_lines=510, max_cc=50, max_nesting=7. These
-          # grandfather current code; new violations are blocked. v1.2.1
-          # tightens toward the target (100/15/4) after the Phase refactor.
-          python scripts/complexity_audit.py --max-lines 510 --max-cc 50 --max-nesting 7
+          # v1.2.0 ceilings: max_lines=510, max_cc=55 (v1.3.2 bumped from 50
+          # to absorb the more accurate CC formula introduced in #21 —
+          # Match/match_case/IfExp/AsyncFor/AsyncWith now count), max_nesting=7.
+          # These grandfather current code; new violations are blocked.
+          # v1.2.1 tightens toward the target (100/15/4) after the Phase refactor.
+          python scripts/complexity_audit.py --max-lines 510 --max-cc 55 --max-nesting 7
 
       - name: Test
         run: pytest -q --tb=short
@@ -67,18 +69,38 @@ jobs:
       - name: Verify assets in wheel
         run: |
           python - <<'PY'
+          # v1.3.2 #22: previously checked `_assets/skills/` as a substring,
+          # which passed as long as ANY single skill file was in the wheel —
+          # silently allowing a packaging regression that drops a named skill
+          # (e.g. one of the v1.3.0 four) to ship. Now each named asset has
+          # its own explicit path check.
           import zipfile, os, sys
           wheel = [f for f in os.listdir('dist') if f.endswith('.whl')][0]
           with zipfile.ZipFile(f'dist/{wheel}') as z:
               names = z.namelist()
-          required = ['_assets/templates/workflow.json',
-                      '_assets/skills/',
-                      '_assets/commands/',
-                      'hooks/convergence_gate.py']
+          required = [
+              '_assets/templates/workflow.json',
+              # All shipped skills, pinned by SKILL.md path
+              '_assets/skills/ultrathink-gap-analysis/SKILL.md',
+              '_assets/skills/post-impl-review/SKILL.md',
+              '_assets/skills/production-readiness-review/SKILL.md',
+              '_assets/skills/spec-quality-check/SKILL.md',
+              '_assets/skills/code-quality-loop/SKILL.md',
+              '_assets/skills/cost-investigator/SKILL.md',
+              '_assets/skills/convergence-coach/SKILL.md',
+              # All shipped slash commands
+              '_assets/commands/ultrathink.md',
+              '_assets/commands/sw-status.md',
+              '_assets/commands/sw-dry-run.md',
+              '_assets/commands/sw-curate.md',
+              '_assets/commands/sw-soak-summary.md',
+              # Stop hook
+              'hooks/convergence_gate.py',
+          ]
           missing = [r for r in required if not any(r in n for n in names)]
           if missing:
-              print(f'MISSING: {missing}'); sys.exit(1)
-          print('All required assets present in wheel.')
+              print(f'MISSING from wheel: {missing}'); sys.exit(1)
+          print(f'All {len(required)} required assets present in wheel.')
           PY
       - uses: actions/upload-artifact@v4
         with:

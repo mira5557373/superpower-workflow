@@ -75,6 +75,40 @@ class TestStandaloneRunIngestion:
         assert len(standalone_runs) == 1, "must reuse standalone run, not create per event"
         session.close()
 
+    def test_standalone_run_id_fits_string20_column(self, db_engine, tmp_path):
+        """v1.3.2 #6 regression: SwRun.run_id is String(20). The previous
+        f"standalone-{proj.id}" produced 47 chars; on Postgres this raised
+        StringDataRightTruncation and the broad except in sync_adapter
+        rolled back the entire flush — dropping not just spec_lint events
+        but every other event in the same JSONL. SQLite ignored the
+        constraint and masked the bug. This test enforces the length cap
+        so the regression cannot reappear silently.
+        """
+        from superpower_workflow.db.models import SwRun
+
+        # Schema must declare String(20) so the assert below is meaningful.
+        column_length = SwRun.__table__.c.run_id.type.length
+        assert column_length == 20, (
+            f"SwRun.run_id column length changed to {column_length}; "
+            "either widen this test or shorten the standalone id helper."
+        )
+
+        path = _write_jsonl(
+            tmp_path,
+            [{"type": "spec_lint_completed", "run_id": "", "score": 80}],
+        )
+        adapter = DbSyncAdapter(db_engine)
+        adapter.sync(project_name="proj-len", project_path="/p", jsonl_path=path)
+
+        session = get_session_factory(db_engine)()
+        runs = session.query(SwRun).filter(SwRun.run_id.like("standalone-%")).all()
+        assert len(runs) == 1
+        assert len(runs[0].run_id) <= column_length, (
+            f"standalone run_id is {len(runs[0].run_id)} chars, "
+            f"exceeds column limit of {column_length}"
+        )
+        session.close()
+
     def test_unknown_event_with_empty_run_id_still_dropped(self, db_engine, tmp_path):
         """Whitelist semantics: only known standalone events get the synthetic run.
         Unknown types still fall through (existing behavior — they're dropped

@@ -148,37 +148,62 @@ class TestPipelineContextShape:
 
 
 class TestSignatureContractWithOrchestrator:
-    """v1.3.1 HIGH #8: pin the orchestrator method signatures the v1.2.1
-    adapter must wrap. If `_run_spec_compliance` gets renamed or its arg
-    list changes, this test fails — forcing PipelineContext / adapter
-    updates in the same PR.
+    """v1.3.1 HIGH #8 + v1.3.2 #8: pin the FULL ordered parameter list of
+    each orchestrator method the v1.2.1 adapter must wrap.
+
+    The v1.3.1 contract used `"name" in params` membership checks — order-
+    agnostic, type-agnostic, return-type-agnostic — so reordering args,
+    adding a new required param, renaming a non-named param, or changing
+    return type would silently pass. v1.3.2 tightens to assert the exact
+    ordered parameter tuple AND the return annotation, so any drift fails
+    at the contract layer.
     """
+
+    def _sig(self, fn):
+        sig = inspect.signature(fn)
+        return list(sig.parameters), sig.return_annotation
 
     def test_orchestrator_spec_compliance_signature(self):
         from superpower_workflow.orchestrator import Orchestrator
 
-        sig = inspect.signature(Orchestrator._run_spec_compliance)
-        params = list(sig.parameters)
-        # Should be (self, name, ms) — what PipelineContext carries.
-        assert params[0] == "self"
-        assert "name" in params
-        assert "ms" in params
+        params, ret = self._sig(Orchestrator._run_spec_compliance)
+        assert params == ["self", "name", "ms"], (
+            f"_run_spec_compliance params drifted: {params}. "
+            "Update PipelineContext / adapter wiring in lockstep."
+        )
+        # Return annotation: tuple[dict | None, float]
+        assert "tuple" in str(ret) and "float" in str(ret), (
+            f"_run_spec_compliance return annotation drifted: {ret!r}"
+        )
 
     def test_orchestrator_feature_verification_signature(self):
         from superpower_workflow.orchestrator import Orchestrator
 
-        sig = inspect.signature(Orchestrator._run_feature_verification)
-        params = list(sig.parameters)
-        assert params[0] == "self"
-        assert "name" in params
+        params, ret = self._sig(Orchestrator._run_feature_verification)
+        assert params == ["self", "name"], (
+            f"_run_feature_verification params drifted: {params}. "
+            "Update PipelineContext / adapter wiring in lockstep."
+        )
+        assert "tuple" in str(ret) and "float" in str(ret), (
+            f"_run_feature_verification return annotation drifted: {ret!r}"
+        )
 
     def test_orchestrator_strict_loop_signature(self):
         from superpower_workflow.orchestrator import Orchestrator
 
-        sig = inspect.signature(Orchestrator._run_strict_mode_loop)
-        params = list(sig.parameters)
-        assert params[0] == "self"
-        assert "name" in params
-        assert "ms" in params
-        assert "model" in params
-        assert "fallback" in params
+        params, ret = self._sig(Orchestrator._run_strict_mode_loop)
+        assert params == [
+            "self",
+            "name",
+            "ms",
+            "model",
+            "fallback",
+            "initial_compliance",
+            "initial_verification",
+            "logger",
+        ], (
+            f"_run_strict_mode_loop params drifted: {params}. "
+            "Update PipelineContext / adapter wiring in lockstep."
+        )
+        # Return annotation: float (cost added by strict iterations)
+        assert "float" in str(ret), f"_run_strict_mode_loop return annotation drifted: {ret!r}"

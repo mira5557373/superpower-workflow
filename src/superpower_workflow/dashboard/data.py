@@ -75,8 +75,17 @@ class DashboardData:
             return {}
 
     def _telemetry_path(self, config: dict) -> Path:
-        rel = config.get("telemetry", {}).get("path", ".claude/telemetry.jsonl")
-        return self._root / rel
+        # v1.3.2 #3: route through shared resolver. Falls back to the safe
+        # default path when the configured value escapes project root.
+        from superpower_workflow.paths import (
+            DEFAULT_TELEMETRY_REL,
+            resolve_telemetry_path,
+        )
+
+        resolved = resolve_telemetry_path(self._root, config, quiet=True)
+        if resolved is None:
+            return (self._root / DEFAULT_TELEMETRY_REL).resolve()
+        return resolved
 
     def _get_watched_paths(self, config: dict | None = None) -> list[Path]:
         if config is None:

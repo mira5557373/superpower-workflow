@@ -58,7 +58,15 @@ class DbSyncAdapter:
                 nonlocal standalone_uuid
                 if standalone_uuid is not None:
                     return standalone_uuid
-                run_id_str = f"standalone-{proj.id}"
+                # v1.3.2 #6 fix: SwRun.run_id is String(20). The previous
+                # f"standalone-{proj.id}" was 47 chars (UUID is 36) and
+                # caused a Postgres StringDataRightTruncation, which the
+                # broad except below rolled back, dropping every event in
+                # the same flush. SQLite ignored the length and masked
+                # the bug. Use the first 8 hex chars of proj.id for a
+                # 19-char id that fits the column; uniqueness is still
+                # scoped by (project_id, run_id).
+                run_id_str = f"standalone-{proj.id.hex[:8]}"
                 existing = get_run_by_run_id(session, proj.id, run_id_str)
                 if existing:
                     standalone_uuid = existing.id

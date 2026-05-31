@@ -183,10 +183,20 @@ class Orchestrator:
         self.state.spec_sha = self._capture_spec_sha()
         logger = WorkflowLogger(self.claude_dir, run_id)
 
-        telemetry_config = self.config.get("telemetry", {})
-        telemetry_path = Path(self.cwd) / telemetry_config.get("path", ".claude/telemetry.jsonl")
-        if telemetry_config.get("enabled", True):
-            self._telemetry = TelemetryEmitter(telemetry_path, run_id)
+        # v1.3.2 #3: route through the shared path resolver instead of
+        # `Path(self.cwd) / config_path` so a malicious `telemetry.path`
+        # (e.g. "../../etc/passwd") cannot direct `TelemetryEmitter.emit`'s
+        # `mkdir(parents=True)+open(..., "a")` write outside the project root.
+        from superpower_workflow.paths import resolve_telemetry_path, telemetry_enabled
+
+        if telemetry_enabled(self.config):
+            telemetry_path = resolve_telemetry_path(Path(self.cwd), self.config)
+            if telemetry_path is None:
+                # Path escaped project root — warning already emitted; fall
+                # back to disabled emitter so the run still proceeds.
+                self._telemetry = TelemetryEmitter.disabled()
+            else:
+                self._telemetry = TelemetryEmitter(telemetry_path, run_id)
         else:
             self._telemetry = TelemetryEmitter.disabled()
 

@@ -37,6 +37,9 @@ _CONTROL_FLOW = (
 )
 
 
+_NESTED_FN = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+
+
 def _max_nesting(node: ast.AST, current: int = 0) -> int:
     """Recursive max-nesting depth for an ast node.
 
@@ -45,10 +48,18 @@ def _max_nesting(node: ast.AST, current: int = 0) -> int:
     depth=4. We walk if-chains iteratively, charging only ONE nesting level
     for the whole chain.
 
-    Nested function bodies are NOT recursed into — they're scored separately
-    by `audit_function`, so the outer function's nesting doesn't inherit
-    inner function depth.
+    v1.3.2 #4 fix: when called on a `FunctionDef`/`AsyncFunctionDef`/`Lambda`
+    we short-circuit — the caller is `audit_function` and the nested body
+    must not be re-counted. Without this, nesting inside an inner helper
+    defined under an `if x: def inner(): ...` block would inflate the
+    outer's depth via `_descend_stmt` (which previously had no nested-fn
+    filter).
     """
+    # v1.3.2 #4: short-circuit at the function boundary so depth doesn't
+    # leak across nested defs, regardless of how the descent arrived here.
+    if isinstance(node, _NESTED_FN) and current > 0:
+        return current
+
     depth = current
 
     # Special-case If chains: drain the elif chain iteratively so the whole
@@ -69,7 +80,7 @@ def _max_nesting(node: ast.AST, current: int = 0) -> int:
 
     for child in ast.iter_child_nodes(node):
         # Skip nested function/lambda bodies — they audit themselves.
-        if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
+        if isinstance(child, _NESTED_FN):
             continue
         depth = max(depth, _descend_stmt(child, current))
     return depth
@@ -77,20 +88,59 @@ def _max_nesting(node: ast.AST, current: int = 0) -> int:
 
 def _descend_stmt(stmt: ast.AST, current: int) -> int:
     """Recurse into one statement, bumping `current` only when stmt is itself
-    a control-flow construct."""
+    a control-flow construct.
+
+    v1.3.2 #4: skip nested function/lambda definitions so their internal
+    depth doesn't roll up to the enclosing scope.
+    """
+    if isinstance(stmt, _NESTED_FN):
+        return current
     if isinstance(stmt, _CONTROL_FLOW):
         return _max_nesting(stmt, current + 1)
     return _max_nesting(stmt, current)
 
 
+# v1.3.2 #21: branch constructs that bump cyclomatic complexity.
+# Match/IfExp/AsyncFor/AsyncWith were missing pre-v1.3.2, causing the audit
+# to under-count modern Python (PEP 634 pattern matching, ternaries, async).
+_CC_BRANCHES = (
+    ast.If,
+    ast.For,
+    ast.While,
+    ast.And,
+    ast.Or,
+    ast.ExceptHandler,
+    ast.IfExp,  # ternary expressions
+    ast.AsyncFor,
+    ast.AsyncWith,
+    ast.Match,  # PEP 634 (3.10+)
+    ast.match_case,  # each case arm is a branch
+)
+
+
 def _cyclomatic_complexity(node: ast.AST) -> int:
-    """Approximate cyclomatic complexity: 1 + count of branch points."""
+    """Approximate cyclomatic complexity: 1 + count of branch points.
+
+    v1.3.2 #21 fix: previously used `ast.walk` which descended into nested
+    `FunctionDef`/`AsyncFunctionDef`/`Lambda` bodies — double-counting their
+    branches against the outer function. Now uses a manual stack that skips
+    nested function bodies (mirroring `_max_nesting`'s behavior). Also adds
+    Match/match_case/IfExp/AsyncFor/AsyncWith to the branch tuple, which
+    were previously silently ignored.
+    """
     count = 1
-    for child in ast.walk(node):
-        if isinstance(child, ast.If | ast.For | ast.While | ast.And | ast.Or | ast.ExceptHandler):
-            count += 1
-        elif isinstance(child, ast.BoolOp):
-            count += len(child.values) - 1
+    # Walk children manually so we can prune nested function bodies.
+    stack: list[ast.AST] = [node]
+    while stack:
+        cur = stack.pop()
+        for child in ast.iter_child_nodes(cur):
+            if isinstance(child, _NESTED_FN) and child is not node:
+                continue  # audited independently
+            if isinstance(child, _CC_BRANCHES):
+                count += 1
+            elif isinstance(child, ast.BoolOp):
+                count += len(child.values) - 1
+            stack.append(child)
     return count
 
 

@@ -397,6 +397,29 @@ def _cmd_init(
     print("  Edit the spec path and verify_commands, then run: sw decompose")
 
 
+def _shallow_merge(existing: dict, overlay: dict) -> dict:
+    """v1.3.2 #5: shallow merge for `sw onboard --accept-existing merge`.
+
+    Overlay's keys win for top-level keys present in both. For nested dicts
+    (one level down — e.g., `validation`, `convergence`, `quality_gates`),
+    overlay's sub-keys merge over existing sub-keys rather than replacing
+    the entire block. Lists and scalars from overlay replace existing
+    wholesale. Keys present only in `existing` are preserved.
+
+    Intent: the user's hand-edited additions survive, while the onboard
+    answers they just typed become the authoritative defaults.
+    """
+    out = dict(existing)
+    for k, v in overlay.items():
+        if k in out and isinstance(out[k], dict) and isinstance(v, dict):
+            sub = dict(out[k])
+            sub.update(v)
+            out[k] = sub
+        else:
+            out[k] = v
+    return out
+
+
 def _postinit_setup(project_root: Path, install_assets: bool = True) -> None:
     """v1.3.1 HIGH #3: shared post-init setup invoked by both `sw init` and
     `sw onboard` so onboard-created projects are not missing the gitignore
@@ -508,38 +531,27 @@ def _install_project_local(claude_dir: Path) -> None:
 
 
 def _resolve_telemetry_path(project_root: Path) -> Path | None:
-    """v1.3.1 HIGH #1/#4: resolve telemetry path safely and centrally.
+    """v1.3.1 HIGH #1/#4 + v1.3.2 #3: resolve telemetry path safely.
 
-    Reads `telemetry.path` from `.claude/workflow.json`. Defaults to
-    `.claude/telemetry.jsonl`. Resolves the result and asserts it stays
-    inside `project_root` — rejecting path-traversal attempts like
-    `"telemetry": {"path": "../../etc/passwd"}` which previously made
-    `sw clean` an arbitrary file-delete primitive.
+    Thin wrapper that loads workflow.json from disk and delegates to the
+    shared `paths.resolve_telemetry_path` helper. v1.3.2 introduced the
+    shared helper so the orchestrator, dashboard, `sw metrics`, and
+    `sw server sync` can all share the same path-traversal guard instead
+    of duplicating the resolve+check logic.
 
     Returns None when the configured path escapes the project root; the
     caller must treat this as a hard error (skip + warn).
     """
-    claude_dir = project_root / ".claude"
-    config_path = claude_dir / "workflow.json"
-    rel = ".claude/telemetry.jsonl"
+    from superpower_workflow.paths import resolve_telemetry_path
+
+    config: dict | None = None
+    config_path = project_root / ".claude" / "workflow.json"
     if config_path.exists():
         try:
             config = json.loads(config_path.read_text(encoding="utf-8"))
-            rel = config.get("telemetry", {}).get("path", rel)
         except (json.JSONDecodeError, OSError):
-            pass
-
-    candidate = (project_root / rel).resolve()
-    root_resolved = project_root.resolve()
-    try:
-        candidate.relative_to(root_resolved)
-    except ValueError:
-        print(
-            f"  WARNING: telemetry.path '{rel}' escapes project root; refusing to use it.",
-            file=sys.stderr,
-        )
-        return None
-    return candidate
+            config = None
+    return resolve_telemetry_path(project_root, config)
 
 
 def _cmd_migrate_gitignore(project_root: Path) -> None:
@@ -669,6 +681,30 @@ def _cmd_onboard(project_root: Path, interactive: bool = True) -> None:
 
     config = build_workflow_config(project_root, choices)
 
+    # v1.3.2 #5: previously `merge` and `replace` behaved identically — both
+    # silently overwrote the existing workflow.json. The `merge` menu option
+    # advertised in the docstring was never implemented, silently dropping
+    # any user customizations (e.g., custom `_onboard` audit, hand-edited
+    # `validation` tweaks, extra `quality_gates`). Now implement merge as a
+    # shallow overlay: the new config's keys overlay the existing file's
+    # keys, but unknown keys in the existing file are preserved.
+    if choices.accept_existing == "merge":
+        existing_path = project_root / ".claude" / "workflow.json"
+        if existing_path.exists():
+            try:
+                existing = json.loads(existing_path.read_text(encoding="utf-8"))
+                if isinstance(existing, dict):
+                    config = _shallow_merge(existing, config)
+                    print(
+                        "  Merging onboard answers onto existing workflow.json "
+                        "(your hand-edited keys are preserved; onboard keys overlay)."
+                    )
+            except (json.JSONDecodeError, OSError):
+                print(
+                    "  WARNING: existing workflow.json unreadable; falling back to replace.",
+                    file=sys.stderr,
+                )
+
     if interactive:
         print()
         print("  Proposed workflow.json:")
@@ -732,15 +768,12 @@ def _cmd_recommend_model(project_root: Path, json_output: bool = False) -> None:
 def _cmd_metrics(project_root: Path, json_output: bool = False) -> None:
     from superpower_workflow.telemetry import TelemetryReader
 
-    telemetry_rel = ".claude/telemetry.jsonl"
-    config_path = project_root / ".claude" / "workflow.json"
-    if config_path.exists():
-        try:
-            config = json.loads(config_path.read_text())
-            telemetry_rel = config.get("telemetry", {}).get("path", telemetry_rel)
-        except (json.JSONDecodeError, OSError):
-            pass
-    path = project_root / telemetry_rel
+    # v1.3.2 #3: route through the central resolver instead of trusting the
+    # raw config string. Returns None on traversal — treat as no telemetry.
+    path = _resolve_telemetry_path(project_root)
+    if path is None:
+        print("  No telemetry data (configured path escapes project root).")
+        return
     reader = TelemetryReader(path)
     events = reader.events()
 
@@ -1285,15 +1318,32 @@ def _cmd_server_start(project_root: Path, args) -> None:
 
 
 def _server_pid_belongs_to_sw(pid: int) -> bool:
-    """v1.3.1 HIGH #2: verify PID-file identity before SIGTERM.
+    """v1.3.1 HIGH #2 + v1.3.2 #1: verify PID-file identity before SIGTERM.
 
     On long-running systems, PIDs are reused. A stale pid file from a prior
     boot would otherwise let `sw server stop` SIGTERM an unrelated process.
 
-    Conservative check: cmdline must contain `superpower_workflow` (the
-    server boots via `python -m superpower_workflow.server.app` or via the
-    sw CLI). If psutil is missing or the process is gone, return False so
-    the caller refuses to kill.
+    The v1.3.1 predicate was too loose: it accepted any cmdline containing
+    `superpower_workflow` (matches editors viewing sw source files, ANY
+    sibling sw subcommand like `sw run`/`sw watch`, etc.) OR any cmdline
+    whose tokens included the bare 2-char token `sw` (matches
+    `bash -c sw`, `git sw`, npm aliases, etc.).
+
+    v1.3.2 tightens to require BOTH:
+      1. argv[0]'s basename is the `sw` entry-point or python interpreter
+      2. a high-specificity server marker is present, EITHER:
+         - `superpower_workflow.server` / `superpower_workflow/server` in argv
+           (when launched as `python -m superpower_workflow.server.app`), OR
+         - the cmdline contains both the `sw` entry-point name AND the
+           `server` subcommand (when launched as `sw server run`).
+
+    This eliminates false positives from:
+      - editors / IDEs whose argv contains a sw source file path
+      - other sw subcommands (sw run/watch/dashboard) — they lack `server`
+      - random argv with token `sw`
+
+    Returns False on every error (psutil missing, NoSuchProcess, AccessDenied,
+    ZombieProcess) so the caller fails closed.
     """
     try:
         import psutil
@@ -1301,10 +1351,24 @@ def _server_pid_belongs_to_sw(pid: int) -> bool:
         return False
     try:
         proc = psutil.Process(pid)
-        cmdline = " ".join(proc.cmdline())
+        argv = proc.cmdline()
     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
         return False
-    return "superpower_workflow" in cmdline or "sw" in cmdline.split()
+    if not argv:
+        return False
+    head_name = Path(argv[0]).name.lower()
+    is_python = head_name.startswith("python") or head_name.startswith("py")
+    is_sw_entry = head_name in {"sw", "sw.exe"}
+    if not (is_python or is_sw_entry):
+        return False
+    # Marker 1: explicit `superpower_workflow.server` / `_workflow/server` token.
+    has_server_module = any(
+        ("superpower_workflow.server" in a) or ("superpower_workflow/server" in a) for a in argv
+    )
+    if has_server_module:
+        return True
+    # Marker 2: `sw server` subcommand wiring (argv[0] is sw entry, argv[1] is `server`).
+    return is_sw_entry and len(argv) >= 2 and argv[1] == "server"
 
 
 def _cmd_server_stop() -> None:
@@ -1394,15 +1458,12 @@ def _cmd_server_sync(project_root: Path, args) -> None:
         print(f"  Synced: {name}")
     else:
         name = project_root.name
-        config_path = project_root / ".claude" / "workflow.json"
-        telemetry_rel = ".claude/telemetry.jsonl"
-        if config_path.exists():
-            try:
-                cfg = json.loads(config_path.read_text())
-                telemetry_rel = cfg.get("telemetry", {}).get("path", telemetry_rel)
-            except (json.JSONDecodeError, OSError):
-                pass
-        jsonl = project_root / telemetry_rel
+        # v1.3.2 #3: route through the central resolver so a malicious
+        # `telemetry.path` cannot redirect the DB sync at arbitrary files.
+        jsonl = _resolve_telemetry_path(project_root)
+        if jsonl is None:
+            print(f"  Skipped: {name} (configured telemetry path escapes project root)")
+            return
         adapter.sync(name, str(project_root), jsonl)
         print(f"  Synced: {name}")
 

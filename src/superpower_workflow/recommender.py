@@ -1,4 +1,4 @@
-"""Model recommender from historical telemetry (T1.9.3).
+"""Model recommender from historical telemetry (T1.9.3 + v1.3.2 #20).
 
 Reads .claude/telemetry.jsonl and produces a per-model quality/cost score so
 internal users can see whether opus/sonnet/haiku is best for their workload.
@@ -6,8 +6,16 @@ internal users can see whether opus/sonnet/haiku is best for their workload.
 Quality score (each in [0,1], higher is better):
   0.4 * spec_compliance_rate   (implemented / total_requirements)
   0.3 * (1 - strict_iter_rate) (1 - normalized strict iterations)
-  0.2 * first_pass_rate        (milestones not needing rework)
+  0.2 * first_pass_rate        (milestones that completed with ZERO strict iters)
   0.1 * curator_health         (1 - excessive attrition penalty)
+
+v1.3.2 #20 fix: previously `first_pass_rate = 1 - strict_iter_rate`, which
+made the 0.3 and 0.2 terms collapse into a single 0.5-weighted signal.
+Now `first_pass_rate` is computed independently as the fraction of
+completed milestones with NO strict_mode_iteration events. The two signals
+disagree when a model converges fast on some milestones but takes many
+strict loops on others — exactly the contour the documented weights are
+supposed to discriminate.
 
 Cost score: simply $ per milestone (lower is better).
 
@@ -29,6 +37,11 @@ class ModelStats:
     avg_cost_per_milestone: float = 0.0
     spec_compliance_rate: float = 0.0
     strict_iter_rate: float = 0.0
+    # v1.3.2 #20: first_pass_rate is now an independent signal — the share
+    # of milestone_completed events with ZERO subsequent strict iterations.
+    # Distinct from strict_iter_rate (which averages normalized iter counts).
+    first_pass_rate: float = 0.0
+    first_pass_milestones: int = 0  # numerator used during accumulation
     curator_attrition_avg: float = 0.0
     quality_score: float = 0.0
 
@@ -103,6 +116,17 @@ def _compute_stats(events: list[dict]) -> dict[str, ModelStats]:
         # Normalize: each strict iter is a small quality penalty
         s.strict_iter_rate += min(len(strict_events) / 4.0, 1.0)
 
+        # v1.3.2 #20: independent first-pass signal. Group strict iters by
+        # milestone, then count milestones whose strict-iter count is zero.
+        strict_by_ms: dict[str, int] = {}
+        for se in strict_events:
+            ms_name = se.get("milestone", "")
+            strict_by_ms[ms_name] = strict_by_ms.get(ms_name, 0) + 1
+        for me in ms_events:
+            ms_name = me.get("milestone", "")
+            if strict_by_ms.get(ms_name, 0) == 0:
+                s.first_pass_milestones += 1
+
         cur_events = [
             e
             for e in events
@@ -117,10 +141,10 @@ def _compute_stats(events: list[dict]) -> dict[str, ModelStats]:
         s.avg_cost_per_milestone = round(s.total_cost / n, 2)
         s.spec_compliance_rate = round(s.spec_compliance_rate / n, 3)
         s.strict_iter_rate = round(s.strict_iter_rate / n, 3)
+        # v1.3.2 #20: independent first-pass rate, not a function of strict_iter_rate.
+        s.first_pass_rate = round(s.first_pass_milestones / n, 3)
         s.curator_attrition_avg = round(s.curator_attrition_avg / n, 1)
 
-        # Composite quality score
-        first_pass_rate = 1.0 if s.strict_iter_rate == 0 else max(0.0, 1.0 - s.strict_iter_rate)
         curator_health = (
             1.0
             if 20.0 <= s.curator_attrition_avg <= 80.0
@@ -129,7 +153,7 @@ def _compute_stats(events: list[dict]) -> dict[str, ModelStats]:
         s.quality_score = round(
             0.4 * s.spec_compliance_rate
             + 0.3 * (1 - s.strict_iter_rate)
-            + 0.2 * first_pass_rate
+            + 0.2 * s.first_pass_rate
             + 0.1 * curator_health,
             3,
         )
