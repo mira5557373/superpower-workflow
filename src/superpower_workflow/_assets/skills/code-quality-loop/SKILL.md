@@ -28,7 +28,7 @@ You are fixing quality-gate failures after Phase C of a milestone.
    - **type_check** (mypy/tsc): add missing annotations or fix existing ones. Don't blanket `# type: ignore`.
 3. **Commit fixes per gate** with conventional-commit messages: `fix(security): remediate bandit B608` etc.
 4. **Re-run the gate command** to verify the fix.
-5. **Cap effort**: stop after `validation.qa_strict_iteration_budget` (default $5) — don't burn the milestone budget chasing edge cases.
+5. **Cap effort**: stop after `validation.strict_iteration_budget` (default $8.0) — don't burn the milestone budget chasing edge cases.
 
 ## What NOT to do
 

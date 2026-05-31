@@ -3,6 +3,85 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.1] — 2026-05-31
+
+Consolidated HIGH-severity fix patch surfaced by the ultrathink review of overnight
+releases v1.1.8 / v1.1.9 / v1.2.0 / v1.3.0. 8 confirmed HIGH findings + 2 forward-compat
+items + 1 failed CLI validation, all shipped with regression tests. No new features.
+
+### Fixed — security
+- **HIGH #1 — path traversal in `sw clean`**: `_resolve_telemetry_path()` now resolves
+  `telemetry.path` against the project root and refuses paths that escape it
+  (returns `None` + stderr warning). Prevents config-driven file deletion outside
+  the project. (`tests/test_clean_path_traversal.py`)
+- **HIGH #2 — PID-reuse SIGTERM in `sw server stop`**: `_server_pid_belongs_to_sw()`
+  verifies via `psutil.Process(pid).cmdline()` that the recorded PID still belongs
+  to a superpower-workflow process before signalling. Falls closed when psutil
+  raises, the process is missing, or the cmdline doesn't match. (`tests/test_server_stop_pid.py`)
+- **HIGH #9 — phantom config key `qa_strict_iteration_budget`**: SKILL.md for
+  `code-quality-loop` referenced a key that never existed in config. Renamed to
+  `strict_iteration_budget` and pinned the default to `$8.0` (matches the canonical
+  validation block). New test enumerates every `validation.<key>` referenced in
+  any shipped SKILL.md against the canonical set; fails CI on drift.
+
+### Fixed — bugs
+- **HIGH #6 — elif over-counting in complexity audit**: `_max_nesting()` previously
+  counted every `elif` as a new nesting level, producing false-positive complexity
+  failures on flat if/elif chains. Rewritten with iterative chain-drain inside
+  the `ast.If` branch + `_descend_stmt()` helper. Nested `FunctionDef`/`Lambda`
+  are now excluded to prevent double-counting. (`tests/test_complexity_audit.py::TestMaxNestingElif`)
+- **HIGH #7 — flaky tautological recommender test**: `test_recommender` asserted
+  `recommended in ("sonnet", "opus")` (always true) and a tautological rationale
+  check. Replaced with deterministic assertion: at the seeded efficiency values
+  (opus 0.95@$7 → 0.136 vs sonnet 0.87@$2 → 0.435) sonnet wins.
+- **Failed validation — `sw onboard --non-interactive` aborted silently**:
+  pre-fix, the default `accept_existing="abort"` early-returned in the
+  non-interactive branch and never wrote `workflow.json`. Existing-file detection
+  now runs BEFORE the early-return; empty sentinel `""` means "no decision needed",
+  `"abort"/"replace"/"merge"` are explicit user choices. Non-interactive mode
+  also auto-picks the first detected spec when none provided. (`tests/test_onboard.py`)
+
+### Fixed — integration
+- **HIGH #3 — `sw onboard` skipped post-init setup**: parity between `_cmd_init`
+  and `_cmd_onboard` was broken. Extracted `_postinit_setup(project_root,
+  install_assets=True)` covering `.gitignore` writes, per-project skill install,
+  and `ProjectRegistry` registration; both commands now route through it. Onboard
+  config also now writes a full `convergence` block (`min_gaps_for_substantial`,
+  `persistent_gap_downgrade_after`) plus `gap_validation_mode` for parity.
+  (`tests/test_postinit_parity.py`)
+- **HIGH #4 — `_emit_spec_lint_event` ignored telemetry config**: previously
+  hard-coded `.claude/telemetry.jsonl` and ignored `telemetry.enabled = false`.
+  Now routes through `TelemetryEmitter` + `SpecLintCompleted` dataclass, respects
+  `telemetry.path` (with path-traversal defense from HIGH #1), and short-circuits
+  when telemetry is disabled. (`tests/test_spec_lint_telemetry_routing.py`)
+- **HIGH #5 — `DbSyncAdapter` dropped project-level events**: events with
+  `run_id=""` (the convention for project-level events like `spec_lint_completed`)
+  were silently dropped because no `SwRun` row existed. New `STANDALONE_EVENTS`
+  whitelist routes known project-level events through a lazy-created synthetic
+  `SwRun` per project (`run_id=f"standalone-{proj.id}"`, `status="standalone"`),
+  reused across events. Unknown empty-run-id events still fall through.
+  (`tests/test_sync_standalone_run.py`)
+
+### Fixed — forward-compat
+- **HIGH #8 — `TrustButVerifyPipeline` signature drift hazard**: callable type
+  aliases were vague (`Callable[..., Any]`), making it impossible to detect when
+  the v1.2.1 adapter would mismatch the orchestrator. Introduced explicit
+  `PipelineContext` dataclass mirroring `_run_spec_compliance(name, ms)`,
+  `_run_feature_verification(name)`, `_run_strict_mode_loop(name, ms, model,
+  fallback, ...)` arguments. New `TestSignatureContractWithOrchestrator` pins
+  the live orchestrator method signatures; refactor that drops a parameter now
+  fails at unit-test level.
+- **HIGH #10 — statusline marketed as production but unwired**: `statusline.py`
+  is now explicitly marked `__experimental__ = True` with a module docstring
+  that warns wiring into the live Claude Code statusline API is DEFERRED to
+  v1.3.2 pending ODQ-5 verification. New `tests/test_statusline_experimental.py`
+  pins the experimental marker.
+
+### Stats
+- Test count: 1230 → **1276** passing (+46 regression tests covering every HIGH).
+- Lint: ruff check + format clean.
+- Zero behavior changes outside the explicit fixes above.
+
 ## [1.3.0] — 2026-05-30
 
 A SKELETON release for Claude Code integration depth. Ships the assets that ride alongside Claude Code (skills, slash commands, statusline) without yet committing to API-bound work that requires verification I couldn't do unsupervised (MCP server, native statusline registration).

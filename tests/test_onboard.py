@@ -29,6 +29,33 @@ class TestRunOnboardNonInteractive:
         cfg = run_onboard(tmp_path, interactive=False)
         assert cfg.project_type == "python"
 
+    def test_non_interactive_empty_dir_accept_existing_blank(self, tmp_path):
+        """v1.3.1 failed-validation fix: empty dir → accept_existing must be
+        '' (empty sentinel) so CLI dispatch proceeds to write."""
+        cfg = run_onboard(tmp_path, interactive=False)
+        assert cfg.accept_existing == ""
+
+    def test_non_interactive_existing_file_returns_abort(self, tmp_path):
+        """v1.3.1: pre-existing workflow.json must trigger abort even non-interactively
+        — never overwrite silently."""
+        cd = tmp_path / ".claude"
+        cd.mkdir()
+        (cd / "workflow.json").write_text("{}")
+        cfg = run_onboard(tmp_path, interactive=False)
+        assert cfg.accept_existing == "abort"
+
+    def test_non_interactive_picks_spec_when_present(self, tmp_path):
+        """v1.3.1: empty spec_path is a downstream footgun; auto-pick from
+        detected specs in non-interactive mode."""
+        (tmp_path / "spec.md").write_text("# my spec")
+        cfg = run_onboard(tmp_path, interactive=False)
+        assert cfg.spec_path == "spec.md"
+
+    def test_non_interactive_spec_default_when_none_found(self, tmp_path):
+        """When no spec exists, default to literal 'spec.md' (user creates it later)."""
+        cfg = run_onboard(tmp_path, interactive=False)
+        assert cfg.spec_path == "spec.md"
+
 
 class TestDetectExistingSpecs:
     def test_finds_root_spec(self, tmp_path):
@@ -95,6 +122,48 @@ class TestWriteConfig:
         path = write_config(tmp_path, config)
         assert path.exists()
         assert json.loads(path.read_text())["spec"] == "x.md"
+
+
+class TestCmdOnboard:
+    """v1.3.1 failed validation: `sw onboard --non-interactive` must write
+    workflow.json in an empty dir (pre-fix it printed 'Aborted' and produced
+    no file)."""
+
+    def test_cli_writes_config_in_empty_dir(self, tmp_path, capsys):
+        from superpower_workflow.cli import _cmd_onboard
+
+        _cmd_onboard(tmp_path, interactive=False)
+        wf = tmp_path / ".claude" / "workflow.json"
+        assert wf.exists(), "non-interactive onboard must produce workflow.json"
+        data = json.loads(wf.read_text())
+        # Sanity: post-v1.1.7 default flips are honored
+        assert data["validation"]["gap_curator"] is True
+        assert data["validation"]["spec_linter"] is True
+        assert data["validation"]["strict_mode"] is False
+        out = capsys.readouterr().out
+        assert "Wrote" in out and "Aborted" not in out
+
+    def test_cli_refuses_to_overwrite_existing(self, tmp_path, capsys):
+        from superpower_workflow.cli import _cmd_onboard
+
+        cd = tmp_path / ".claude"
+        cd.mkdir()
+        sentinel = '{"_marker": "preexisting"}'
+        (cd / "workflow.json").write_text(sentinel)
+        _cmd_onboard(tmp_path, interactive=False)
+        # Existing file untouched
+        assert (cd / "workflow.json").read_text() == sentinel
+        out = capsys.readouterr().out
+        assert "Aborted" in out
+
+    def test_cli_python_project_gets_verify_commands(self, tmp_path):
+        from superpower_workflow.cli import _cmd_onboard
+
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+        _cmd_onboard(tmp_path, interactive=False)
+        data = json.loads((tmp_path / ".claude" / "workflow.json").read_text())
+        assert "ruff" in data["verify_commands"].get("lint", "")
+        assert "pytest" in data["verify_commands"].get("test", "")
 
 
 class TestInteractiveSmoke:

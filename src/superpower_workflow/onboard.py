@@ -100,7 +100,23 @@ def run_onboard(project_root: Path, interactive: bool = True) -> OnboardConfig:
     profile = detect(project_root)
     cfg.project_type = profile.primary_language
 
+    # v1.3.1 — failed validation fix: existing-workflow detection MUST run
+    # before the non-interactive early-return. Pre-fix, `_cmd_onboard` aborted
+    # in non-interactive mode because the default `accept_existing="abort"`
+    # was never cleared. New convention: empty sentinel means "no decision
+    # needed", "abort"/"replace"/"merge" are explicit user choices.
+    existing_path = project_root / ".claude" / "workflow.json"
+    existing_present = existing_path.exists()
+
     if not interactive:
+        # In non-interactive (smoke-test) mode: if a workflow.json already
+        # exists, we MUST NOT overwrite silently — fail closed.
+        cfg.accept_existing = "abort" if existing_present else ""
+        # Also auto-pick a spec when not provided interactively, so downstream
+        # commands don't get an empty spec_path.
+        if not cfg.spec_path:
+            specs = detect_existing_specs(project_root)
+            cfg.spec_path = str(specs[0].relative_to(project_root)) if specs else "spec.md"
         return cfg
 
     print()
@@ -111,8 +127,7 @@ def run_onboard(project_root: Path, interactive: bool = True) -> OnboardConfig:
         print(f"  Detected language(s): {', '.join(profile.languages)}")
     print()
 
-    existing = project_root / ".claude" / "workflow.json"
-    if existing.exists():
+    if existing_present:
         print("  Existing workflow.json detected.")
         action = _ask(
             "  How to handle?",
@@ -201,6 +216,7 @@ def build_workflow_config(project_root: Path, choices: OnboardConfig) -> dict:
         "quality_gates": (dict(profile.quality_gates) if choices.enable_quality_gates else {}),
         "validation": {
             "gap_validator": True,
+            "gap_validation_mode": "lenient",
             "spec_compliance": True,
             "feature_verification": True,
             "spec_compliance_budget": 3.0,
@@ -216,7 +232,15 @@ def build_workflow_config(project_root: Path, choices: OnboardConfig) -> dict:
             "spec_min_words": 200,
             "spec_max_words": 5000,
         },
-        "convergence": {"max_iterations": 5},
+        # v1.3.1 HIGH #3 parity fix: _cmd_init writes a full convergence
+        # block with min_gaps_for_substantial + persistent_gap_downgrade_after.
+        # Onboard-created projects were silently using orchestrator hardcoded
+        # fallbacks for the missing keys.
+        "convergence": {
+            "max_iterations": 5,
+            "min_gaps_for_substantial": 20,
+            "persistent_gap_downgrade_after": 3,
+        },
         "telemetry": {"enabled": True, "path": ".claude/telemetry.jsonl"},
         "integrations": {"ci": {"enabled": choices.enable_ci_integration}},
         "milestones": [],

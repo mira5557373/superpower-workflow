@@ -1,22 +1,31 @@
-"""Claude Code statusline integration (v1.3.0 skeleton, T3.0.4).
+"""Claude Code statusline integration — EXPERIMENTAL (v1.3.0 skeleton, T3.0.4).
 
-Renders a one-line status string from `.claude/workflow-state.json` for use
-in Claude Code's statusline. The exact statusline API is verified empirically
-per release; until confirmed, this module exposes:
+⚠️  EXPERIMENTAL — wiring into the live Claude Code statusline API is DEFERRED
+to v1.3.2 pending ODQ-5 verification of the statusline API contract.
 
-  1. `render_statusline(claude_dir)` — returns the status string
-  2. `write_statusline_file(claude_dir, path=None)` — writes to a known
-     location that the user (or Claude Code) can render
+What this module currently does:
+  1. `render_statusline(claude_dir)` — returns a one-line status string from
+     `.claude/workflow-state.json` (pure function; no Claude Code integration)
+  2. `write_statusline_file(claude_dir, path=None)` — writes that string to
+     a file the user can `cat` or wire into their own shell/tmux statusline
 
-This is a SKELETON. Wiring into the actual Claude Code statusline API
-requires verification of the API contract; once verified, register at
-`.claude/settings.local.json:statusLine`.
+What it does NOT do (yet):
+  - Register itself as `.claude/settings.local.json:statusLine` automatically
+  - Push live updates to a Claude Code session (no observed API for this)
+  - Survive Claude Code statusline schema changes — none verified
+
+Consumers SHOULD treat this as a preview. The render contract may break in
+v1.3.2 once the Claude Code statusline API is empirically confirmed.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+
+# v1.3.1 HIGH #10 marker — auto-discovery tools (e.g. `sw plugin list`) and
+# the doctor check use this flag to surface "experimental" status to users.
+__experimental__ = True
 
 DEFAULT_STATUSLINE_PATH = ".claude/statusline.txt"
 IDLE = "[sw] idle"

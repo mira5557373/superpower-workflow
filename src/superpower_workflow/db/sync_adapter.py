@@ -46,9 +46,52 @@ class DbSyncAdapter:
             milestone_uuids: dict[tuple[uuid.UUID, str], uuid.UUID] = {}
             phase_uuids: dict[tuple[uuid.UUID, str], uuid.UUID] = {}
 
+            # v1.3.1 HIGH #5: project-level events emitted outside a run
+            # (e.g., `sw lint-spec` standalone → spec_lint_completed with
+            # run_id="") were silently dropped because the loop continued
+            # when run_id wasn't recognized. Lazy-create a synthetic
+            # "standalone" SwRun per project so these events persist.
+            standalone_uuid: uuid.UUID | None = None
+            STANDALONE_EVENTS = {"spec_lint_completed"}
+
+            def _get_standalone() -> uuid.UUID:
+                nonlocal standalone_uuid
+                if standalone_uuid is not None:
+                    return standalone_uuid
+                run_id_str = f"standalone-{proj.id}"
+                existing = get_run_by_run_id(session, proj.id, run_id_str)
+                if existing:
+                    standalone_uuid = existing.id
+                else:
+                    standalone_run = SwRun(
+                        id=uuid.uuid4(),
+                        project_id=proj.id,
+                        run_id=run_id_str,
+                        model="",
+                        status="standalone",
+                    )
+                    session.add(standalone_run)
+                    session.flush()
+                    standalone_uuid = standalone_run.id
+                return standalone_uuid
+
             for event in events:
                 run_id = event.get("run_id", "")
                 event_type = event.get("type", "")
+
+                # Route project-level events without a run_id to the synthetic
+                # standalone run, then proceed to event insertion.
+                if not run_id and event_type in STANDALONE_EVENTS:
+                    standalone = _get_standalone()
+                    evt = SwEvent(
+                        id=uuid.uuid4(),
+                        run_id=standalone,
+                        milestone_name=event.get("milestone"),
+                        event_type=event_type,
+                        data_json=event,
+                    )
+                    session.add(evt)
+                    continue
 
                 if event_type == "run_started" and run_id:
                     existing = get_run_by_run_id(session, proj.id, run_id)

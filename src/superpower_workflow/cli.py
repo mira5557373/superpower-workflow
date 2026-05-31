@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -391,36 +392,55 @@ def _cmd_init(
             config_path.write_text(json.dumps(config, indent=2))
             print(f"  Auto-discovered spec: {config['spec']}")
 
+    _postinit_setup(project_root, install_assets=not minimal)
+    print(f"  Created {config_path}")
+    print("  Edit the spec path and verify_commands, then run: sw decompose")
+
+
+def _postinit_setup(project_root: Path, install_assets: bool = True) -> None:
+    """v1.3.1 HIGH #3: shared post-init setup invoked by both `sw init` and
+    `sw onboard` so onboard-created projects are not missing the gitignore
+    safety net, project-local skills/commands, Stop hook, or registry entry.
+
+    `install_assets=False` skips skill/command install + settings.local.json
+    write (use for `--minimal` mode).
+    """
+    claude_dir = project_root / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Gitignore append (always, regardless of minimal)
     gitignore = project_root / ".gitignore"
     existing = gitignore.read_text() if gitignore.exists() else ""
-    sw_new = [e for e in SW_GITIGNORE_ENTRIES if e not in existing]
-    py_new = [e for e in PYTHON_GITIGNORE_ENTRIES if e not in existing]
-    with open(gitignore, "a") as f:
-        if sw_new:
-            f.write("\n# superpower-workflow runtime files\n")
-            for e in sw_new:
-                f.write(f"{e}\n")
-        if py_new:
-            f.write("\n# Python standard ignores\n")
-            for e in py_new:
-                f.write(f"{e}\n")
-    added = len(sw_new) + len(py_new)
-    if added:
-        print(f"  Added {added} entries to .gitignore")
+    existing_lines = set(existing.splitlines())
+    sw_new = [e for e in SW_GITIGNORE_ENTRIES if e not in existing_lines]
+    py_new = [e for e in PYTHON_GITIGNORE_ENTRIES if e not in existing_lines]
+    if sw_new or py_new:
+        with open(gitignore, "a", encoding="utf-8") as f:
+            if sw_new:
+                f.write("\n# superpower-workflow runtime files\n")
+                for e in sw_new:
+                    f.write(f"{e}\n")
+            if py_new:
+                f.write("\n# Python standard ignores\n")
+                for e in py_new:
+                    f.write(f"{e}\n")
+        print(f"  Added {len(sw_new) + len(py_new)} entries to .gitignore")
 
-    # Install skills, commands, and settings project-locally
-    _install_project_local(claude_dir)
+    # 2. Project-local skills/commands/settings (only when not minimal)
+    if install_assets:
+        _install_project_local(claude_dir)
 
+    # 3. Register the project with the unified server (best-effort)
     try:
         from superpower_workflow.server.registry import ProjectRegistry
 
         reg = ProjectRegistry()
         reg.register(project_root.name, str(project_root))
-    except Exception:
-        pass
-
-    print(f"  Created {config_path}")
-    print("  Edit the spec path and verify_commands, then run: sw decompose")
+    except Exception as e:
+        # Server module may not be installed in the user's environment.
+        # Emit a one-line stderr warning so failures aren't fully silent
+        # (per v1.3.1 review: bare except: pass was a footgun).
+        print(f"  (info: project registry not updated: {type(e).__name__})", file=sys.stderr)
 
 
 def _assets_root() -> Path:
@@ -485,6 +505,41 @@ def _install_project_local(claude_dir: Path) -> None:
 
     settings_path.write_text(json.dumps(settings, indent=2))
     print("  Configured settings.local.json (superpowers + hook + permissions)")
+
+
+def _resolve_telemetry_path(project_root: Path) -> Path | None:
+    """v1.3.1 HIGH #1/#4: resolve telemetry path safely and centrally.
+
+    Reads `telemetry.path` from `.claude/workflow.json`. Defaults to
+    `.claude/telemetry.jsonl`. Resolves the result and asserts it stays
+    inside `project_root` — rejecting path-traversal attempts like
+    `"telemetry": {"path": "../../etc/passwd"}` which previously made
+    `sw clean` an arbitrary file-delete primitive.
+
+    Returns None when the configured path escapes the project root; the
+    caller must treat this as a hard error (skip + warn).
+    """
+    claude_dir = project_root / ".claude"
+    config_path = claude_dir / "workflow.json"
+    rel = ".claude/telemetry.jsonl"
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            rel = config.get("telemetry", {}).get("path", rel)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    candidate = (project_root / rel).resolve()
+    root_resolved = project_root.resolve()
+    try:
+        candidate.relative_to(root_resolved)
+    except ValueError:
+        print(
+            f"  WARNING: telemetry.path '{rel}' escapes project root; refusing to use it.",
+            file=sys.stderr,
+        )
+        return None
+    return candidate
 
 
 def _cmd_migrate_gitignore(project_root: Path) -> None:
@@ -638,6 +693,11 @@ def _cmd_onboard(project_root: Path, interactive: bool = True) -> None:
 
     path = write_config(project_root, config)
     print(f"  Wrote {path}")
+    # v1.3.1 HIGH #3: also run the shared post-init setup so onboard-created
+    # projects get the gitignore safety net, project-local skills/commands/
+    # Stop hook, and ProjectRegistry registration. Pre-fix, onboarded projects
+    # were missing all of these.
+    _postinit_setup(project_root, install_assets=True)
     print("  Next: edit your spec, then run `sw lint-spec` and `sw decompose`.")
 
 
@@ -942,16 +1002,8 @@ def _cmd_clean(project_root: Path) -> None:
         path.unlink()
         removed += 1
         print(f"  Removed .claude/{path.name}")
-    telemetry_path = claude_dir / "telemetry.jsonl"
-    config_path = claude_dir / "workflow.json"
-    if config_path.exists():
-        try:
-            config = json.loads(config_path.read_text())
-            rel = config.get("telemetry", {}).get("path", ".claude/telemetry.jsonl")
-            telemetry_path = project_root / rel
-        except (json.JSONDecodeError, OSError):
-            pass
-    if telemetry_path.exists():
+    telemetry_path = _resolve_telemetry_path(project_root)
+    if telemetry_path is not None and telemetry_path.exists():
         telemetry_path.unlink()
         removed += 1
         print(f"  Removed {telemetry_path.name}")
@@ -987,28 +1039,54 @@ def _print_spec_lint_report(report) -> None:
     print()
 
 
-def _emit_spec_lint_event(claude_dir: Path, report, run_id: str = "") -> None:
-    """Append a SpecLintCompleted event to telemetry.jsonl if it exists."""
-    from superpower_workflow.validation.spec_linter import CheckState
+def _emit_spec_lint_event(project_root: Path, report, run_id: str = "") -> None:
+    """Emit a SpecLintCompleted event through the proper TelemetryEmitter.
 
-    telemetry_path = claude_dir / "telemetry.jsonl"
+    v1.3.1 HIGH #4 fix: pre-fix this wrote raw JSON directly to
+    `.claude/telemetry.jsonl`, bypassing `TelemetryEmitter`/`TelemetryDbWriter`.
+    The unified server's DB writer therefore never saw spec-lint events. Also
+    hardcoded the path, ignoring `config.telemetry.path`.
+
+    Now: resolve the path via `_resolve_telemetry_path` (path-traversal safe),
+    construct a `SpecLintCompleted` dataclass, and emit through
+    `TelemetryEmitter` which also feeds `TelemetryDbWriter` when configured.
+    Respects `config.telemetry.enabled`.
+    """
+    claude_dir = project_root / ".claude"
     if not claude_dir.exists():
         return
-    event = {
-        "type": "spec_lint_completed",
-        "run_id": run_id,
-        "spec_path": report.spec_path,
-        "score": report.score,
-        "checks_passed": sum(1 for c in report.checks if c.state == CheckState.PASS),
-        "checks_warned": report.warning_count,
-        "checks_failed": report.blocker_count,
-        "blocker_count": report.blocker_count,
-    }
+
+    # Respect telemetry.enabled when set to false (per-project opt-out)
+    config_path = claude_dir / "workflow.json"
+    if config_path.exists():
+        try:
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
+            if cfg.get("telemetry", {}).get("enabled", True) is False:
+                return
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    telemetry_path = _resolve_telemetry_path(project_root)
+    if telemetry_path is None:
+        return  # Path traversal — already warned by the resolver
+
+    from superpower_workflow.telemetry import SpecLintCompleted, TelemetryEmitter
+    from superpower_workflow.validation.spec_linter import CheckState
+
+    event = SpecLintCompleted(
+        spec_path=report.spec_path,
+        score=report.score,
+        checks_passed=sum(1 for c in report.checks if c.state == CheckState.PASS),
+        checks_warned=report.warning_count,
+        checks_failed=report.blocker_count,
+        blocker_count=report.blocker_count,
+    )
+
+    emitter = TelemetryEmitter(telemetry_path, run_id)
     try:
-        with telemetry_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(event) + "\n")
-    except OSError:
-        pass
+        emitter.emit(event)
+    finally:
+        emitter.close()
 
 
 def _cmd_lint_spec(project_root: Path, spec_path: str, strict: bool, section: str | None) -> int:
@@ -1034,7 +1112,7 @@ def _cmd_lint_spec(project_root: Path, spec_path: str, strict: bool, section: st
 
     report = lint_spec(full, min_words=min_words, max_words=max_words, section=section)
     _print_spec_lint_report(report)
-    _emit_spec_lint_event(claude_dir, report)
+    _emit_spec_lint_event(project_root, report)
 
     if report.blocker_count > 0:
         return 1
@@ -1064,7 +1142,7 @@ def _cmd_decompose(project_root: Path, force: bool = False) -> None:
             max_words=int(validation.get("spec_max_words", 5000)),
         )
         _print_spec_lint_report(report)
-        _emit_spec_lint_event(claude_dir, report)
+        _emit_spec_lint_event(project_root, report)
 
         if report.blocker_count > 0 and not force:
             print(
@@ -1206,21 +1284,58 @@ def _cmd_server_start(project_root: Path, args) -> None:
         pid_file.unlink(missing_ok=True)
 
 
+def _server_pid_belongs_to_sw(pid: int) -> bool:
+    """v1.3.1 HIGH #2: verify PID-file identity before SIGTERM.
+
+    On long-running systems, PIDs are reused. A stale pid file from a prior
+    boot would otherwise let `sw server stop` SIGTERM an unrelated process.
+
+    Conservative check: cmdline must contain `superpower_workflow` (the
+    server boots via `python -m superpower_workflow.server.app` or via the
+    sw CLI). If psutil is missing or the process is gone, return False so
+    the caller refuses to kill.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return False
+    try:
+        proc = psutil.Process(pid)
+        cmdline = " ".join(proc.cmdline())
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return False
+    return "superpower_workflow" in cmdline or "sw" in cmdline.split()
+
+
 def _cmd_server_stop() -> None:
     pid_file = Path.home() / ".claude" / "sw-server.pid"
     if not pid_file.exists():
         print("  No server PID file found.")
         return
     try:
-        import signal
-
         pid = int(pid_file.read_text().strip())
-        import os as _os
+    except (OSError, ValueError):
+        pid_file.unlink(missing_ok=True)
+        print("  PID file unreadable; removed.")
+        return
 
-        _os.kill(pid, signal.SIGTERM)
+    if not _server_pid_belongs_to_sw(pid):
+        # Stale PID file from a prior boot, or PID has been reused.
+        # Refuse to SIGTERM an unknown process; just clean up the file.
+        pid_file.unlink(missing_ok=True)
+        print(
+            f"  PID {pid} does not appear to be a sw server (stale PID file or reused PID); "
+            "removed PID file without sending SIGTERM."
+        )
+        return
+
+    try:
+        import signal as _signal
+
+        os.kill(pid, _signal.SIGTERM)
         pid_file.unlink(missing_ok=True)
         print(f"  Stopped server (PID {pid})")
-    except (ProcessLookupError, ValueError):
+    except ProcessLookupError:
         pid_file.unlink(missing_ok=True)
         print("  Server not running.")
 

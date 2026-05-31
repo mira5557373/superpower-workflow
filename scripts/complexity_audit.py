@@ -26,15 +26,61 @@ DEFAULT_MAX_NESTING = 4
 PACKAGE_DIR = Path(__file__).resolve().parent.parent / "src" / "superpower_workflow"
 
 
+_CONTROL_FLOW = (
+    ast.If,
+    ast.For,
+    ast.While,
+    ast.With,
+    ast.Try,
+    ast.AsyncFor,
+    ast.AsyncWith,
+)
+
+
 def _max_nesting(node: ast.AST, current: int = 0) -> int:
-    """Recursive max-nesting depth for an ast node."""
+    """Recursive max-nesting depth for an ast node.
+
+    v1.3.1 HIGH #6 fix: Python's AST models `elif` as a nested `If` inside
+    `If.orelse`. A flat `if/elif/elif/else` would otherwise be counted as
+    depth=4. We walk if-chains iteratively, charging only ONE nesting level
+    for the whole chain.
+
+    Nested function bodies are NOT recursed into — they're scored separately
+    by `audit_function`, so the outer function's nesting doesn't inherit
+    inner function depth.
+    """
     depth = current
+
+    # Special-case If chains: drain the elif chain iteratively so the whole
+    # chain counts as ONE nesting level. Genuine nested If inside a body
+    # still bumps because the body recursion goes through `_descend_stmt`.
+    if isinstance(node, ast.If):
+        for stmt in node.body:
+            depth = max(depth, _descend_stmt(stmt, current))
+        orelse = node.orelse
+        while len(orelse) == 1 and isinstance(orelse[0], ast.If):
+            elif_node = orelse[0]
+            for stmt in elif_node.body:
+                depth = max(depth, _descend_stmt(stmt, current))
+            orelse = elif_node.orelse
+        for stmt in orelse:
+            depth = max(depth, _descend_stmt(stmt, current))
+        return depth
+
     for child in ast.iter_child_nodes(node):
-        if isinstance(child, ast.If | ast.For | ast.While | ast.With | ast.Try):
-            depth = max(depth, _max_nesting(child, current + 1))
-        else:
-            depth = max(depth, _max_nesting(child, current))
+        # Skip nested function/lambda bodies — they audit themselves.
+        if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
+            continue
+        depth = max(depth, _descend_stmt(child, current))
     return depth
+
+
+def _descend_stmt(stmt: ast.AST, current: int) -> int:
+    """Recurse into one statement, bumping `current` only when stmt is itself
+    a control-flow construct."""
+    if isinstance(stmt, _CONTROL_FLOW):
+        return _max_nesting(stmt, current + 1)
+    return _max_nesting(stmt, current)
 
 
 def _cyclomatic_complexity(node: ast.AST) -> int:

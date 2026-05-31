@@ -15,6 +15,10 @@ current implementation when called with the same arguments.
 
 from __future__ import annotations
 
-from superpower_workflow.pipelines.trust_but_verify import TrustButVerifyPipeline
+from superpower_workflow.pipelines.trust_but_verify import (
+    PipelineContext,
+    TrustButVerifyPipeline,
+    TrustButVerifyResult,
+)
 
-__all__ = ["TrustButVerifyPipeline"]
+__all__ = ["PipelineContext", "TrustButVerifyPipeline", "TrustButVerifyResult"]

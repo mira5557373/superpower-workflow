@@ -89,9 +89,16 @@ class TestRecommend:
             )
         p = _write(tmp_path, events)
         report = recommend(p)
-        # Sonnet has lower quality but vastly cheaper -> higher efficiency ratio
-        assert report.recommended in ("sonnet", "opus")  # accept either; depends on weights
-        assert "efficiency" in report.rationale.lower() or "milestone" in report.rationale.lower()
+        # v1.3.1 HIGH #7: tautological assertion replaced with deterministic check.
+        # With the documented weights (0.4 compliance + 0.3*(1-strict) + 0.2*first_pass
+        # + 0.1*curator_health), opus quality_score=0.95 at $7/ms → efficiency 0.136.
+        # Sonnet quality_score=0.87 at $2/ms → efficiency 0.435. Sonnet wins.
+        assert report.recommended == "sonnet", (
+            f"sonnet has efficiency 0.435 vs opus 0.136; expected sonnet, got {report.recommended}"
+        )
+        # Rationale must name the winning model (non-tautological — production code
+        # could change to omit the model name and this would catch it).
+        assert "sonnet" in report.rationale
 
     def test_empty_telemetry_returns_empty(self, tmp_path):
         p = tmp_path / "telemetry.jsonl"
