@@ -6,9 +6,10 @@ Phase C review) into its own class.
 
 Rationale: keeping PhaseB at "implement + QG#1 + coverage + trailers +
 context refresh" preserves the original Phase B conceptual boundary
-and makes the v1.2.1 wire-up of pipelines/trust_but_verify.py
-(`TrustButVerifyPipeline`, currently dead code per CHANGELOG line 1168)
-a 1-line driver swap rather than a re-extraction from PhaseB.
+and gives spec_compliance + feature_verification their own home
+without conflating them with strict-mode (which lives inside PhaseC).
+The v1.2.0-lite TrustButVerifyPipeline (which conflated those two
+concerns) was retired in Task 9 of the v1.2.0-real refactor.
 
 PhaseTbV is unusual:
 

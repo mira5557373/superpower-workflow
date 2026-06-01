@@ -3,12 +3,13 @@
 Tasks 4-7 extract Phase A/B/C/D/E from Orchestrator._run_milestone into
 PhaseA/PhaseB/PhaseTbV/PhaseC/PhaseD/PhaseE subclasses of PhaseBase.
 Task 8 wires them into a thin _run_milestone driver. Task 9 retires the
-unused TrustButVerifyPipeline (or wires it).
+old TrustButVerifyPipeline (the v1.2.0-lite extraction that shipped as
+dead code per CHANGELOG line 1168; its design conflated PhaseTbV
+stages with strict-mode which lives inside PhaseC).
 
 This package's __init__ exports the three contracts (PhaseBase,
-PhaseContext, PhaseResult) so callers can import from
-`superpower_workflow.phases` without reaching into submodules. The
-concrete phase classes are added in Tasks 4-7.
+PhaseContext, PhaseResult) plus the six concrete phase classes
+(PhaseA/B/TbV/C/D/E).
 """
 
 from __future__ import annotations

@@ -7,8 +7,10 @@ fix-loop fixture from Task 1.3 remain valid through Task 8 wire-up.
 PhaseB ends with the context refresh (build_context_summary applied to
 whatever Phase B's claude call produced). The downstream stages
 (spec_compliance + feature_verification) split out into PhaseTbV per
-Finding 3 resolution so the v1.2.1 TrustButVerifyPipeline wire-up
-becomes a 1-line driver swap rather than a re-extraction from PhaseB.
+Finding 3 resolution — keeping a clean phase boundary between
+implement/QG and the trust-but-verify stages so future evolution
+(custom validation pipelines, alternate compliance backends) drops
+into PhaseTbV without re-extracting from PhaseB.
 
 Critical invariants preserved (pinned by tests/test_phase_b.py):
 
