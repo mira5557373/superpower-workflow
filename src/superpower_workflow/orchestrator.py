@@ -630,14 +630,13 @@ class Orchestrator:
                             )
                             time.sleep(delay)
                         else:
-                            self._telemetry.emit(
-                                MilestoneFailed(
-                                    milestone=name,
-                                    phase=e.phase,
-                                    reason=str(e),
-                                    attempts=max_retries + 1,
-                                )
+                            ms_failed_event = MilestoneFailed(
+                                milestone=name,
+                                phase=e.phase,
+                                reason=str(e),
+                                attempts=max_retries + 1,
                             )
+                            self._telemetry.emit(ms_failed_event)
                             self._notify(
                                 "milestone_failed",
                                 {"milestone": name, "phase": e.phase, "reason": str(e)},
@@ -648,6 +647,8 @@ class Orchestrator:
                                 phase=e.phase,
                                 reason=str(e),
                             )
+                            # v1.3.21 — best-effort failure triage hook.
+                            self._triage_milestone_failure(ms_failed_event)
                             print(
                                 f"  FAILED: {name} after {max_retries + 1} attempts. "
                                 f"Skipping to next."
@@ -938,7 +939,53 @@ class Orchestrator:
 
     def _check_phase_result(self, r: ClaudeResult, phase: str) -> None:
         if r.is_error:
+            # v1.3.21 — emit typed ClaudeInvocationFailed BEFORE raising.
+            # Triage rules 08/09 read this typed event instead of regex-on-
+            # MilestoneFailed.reason (verdict revision #5 — load-bearing).
+            self._emit_claude_invocation_failed(r, phase)
             raise _PhaseError(phase, r.text or "claude -p returned an error")
+
+    def _emit_claude_invocation_failed(self, r: ClaudeResult, phase: str) -> None:
+        """v1.3.21 — best-effort typed error event for triage rules 08/09.
+
+        Distills the heterogenous claude -p failure modes (timeout, is_error,
+        non-zero exit, MCP crash, auth) into a single event with a stable
+        `error_kind` field. Triage rules read this instead of regex on the
+        free-text MilestoneFailed.reason — the load-bearing fix that lets
+        the classifier survive SDK / model phrasing changes.
+        """
+        try:
+            if self._telemetry is None:
+                return
+            from superpower_workflow.telemetry import ClaudeInvocationFailed
+
+            if getattr(r, "timed_out", False):
+                kind = "timeout"
+            else:
+                msg = (r.text or "").lower()
+                if "auth" in msg or "unauthorized" in msg or "401" in msg:
+                    kind = "auth"
+                elif "mcp" in msg or "stdio" in msg:
+                    kind = "mcp_crash"
+                elif "is_error" in msg or "is error" in msg:
+                    kind = "is_error"
+                else:
+                    kind = "nonzero_exit"
+            message = (r.text or "")[:300]
+            self._telemetry.emit(
+                ClaudeInvocationFailed(
+                    milestone=self._current_milestone_name or "",
+                    phase=phase,
+                    error_kind=kind,
+                    timed_out=bool(getattr(r, "timed_out", False)),
+                    returncode=int(getattr(r, "returncode", 0) or 0),
+                    message=message,
+                    attempt=0,
+                    max_attempts=0,
+                )
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     def _run_claude(self, *args, **kwargs):
         """v1.3.11+v1.3.12: wrap `run_claude` with budget gating that
@@ -1223,6 +1270,67 @@ class Orchestrator:
                         recommendation=a.recommendation,
                     )
                 )
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _triage_milestone_failure(self, ms_failed_event) -> None:
+        """v1.3.21 — classify a MilestoneFailed via the Failure Triage hook.
+
+        Best-effort. Catches everything. Triage never blocks the run loop;
+        worst case the FailureTriaged event is missing from telemetry.
+
+        Skips if `triage.enabled=false` in config OR if SW_TRIAGE_OFF=1
+        environment variable is set.
+        """
+        try:
+            triage_cfg = self.config.get("triage", {})
+            if not triage_cfg.get("enabled", True):
+                return
+            if os.environ.get("SW_TRIAGE_OFF") == "1":
+                return
+            if self._telemetry is None:
+                return
+
+            from superpower_workflow.hooks.triage_hook import on_milestone_failed
+
+            anchor = {
+                "type": "milestone_failed",
+                "run_id": self.state.run_id,
+                "milestone": ms_failed_event.milestone,
+                "phase": ms_failed_event.phase,
+                "reason": ms_failed_event.reason,
+                "attempts": ms_failed_event.attempts,
+            }
+            telemetry_path = self.claude_dir / "sw-telemetry.jsonl"
+            audit_path = self.claude_dir / "audit-trail.jsonl"
+            state_snapshot = {"current_step": getattr(self.state, "current_step", "")}
+
+            def _emit(payload: dict) -> None:
+                # Synthesize a FailureTriaged event from the payload + emit.
+                from superpower_workflow.telemetry import FailureTriaged
+
+                ev = FailureTriaged(
+                    milestone=payload.get("milestone", ""),
+                    phase=payload.get("phase", ""),
+                    primary_class=payload.get("primary_class", "unknown"),
+                    secondary_classes=list(payload.get("secondary_classes", [])),
+                    confidence=float(payload.get("confidence", 0.4)),
+                    evidence=list(payload.get("evidence", [])),
+                    recommendation=payload.get("recommendation", ""),
+                    anchor_seq=int(payload.get("anchor_seq", 0)),
+                    anchor_type=payload.get("anchor_type", ""),
+                    triage_version=int(payload.get("triage_version", 1)),
+                    raw_reason=payload.get("raw_reason", ""),
+                )
+                self._telemetry.emit(ev)
+
+            on_milestone_failed(
+                anchor=anchor,
+                telemetry_path=telemetry_path,
+                audit_path=audit_path if audit_path.exists() else None,
+                state_snapshot=state_snapshot,
+                emit=_emit,
+            )
         except Exception:  # noqa: BLE001
             pass
 
@@ -1749,14 +1857,15 @@ class Orchestrator:
                     )
                 except Exception as e:
                     if self._telemetry:
-                        self._telemetry.emit(
-                            MilestoneFailed(
-                                milestone=name,
-                                phase="parallel",
-                                reason=str(e),
-                                attempts=1,
-                            )
+                        ms_failed_event = MilestoneFailed(
+                            milestone=name,
+                            phase="parallel",
+                            reason=str(e),
+                            attempts=1,
                         )
+                        self._telemetry.emit(ms_failed_event)
+                        # v1.3.21 — triage in parallel mode too (best-effort).
+                        self._triage_milestone_failure(ms_failed_event)
                     return ParallelResult(
                         milestone=name, success=False, error=str(e), worktree=run_cwd
                     )

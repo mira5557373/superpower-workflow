@@ -3,6 +3,166 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.21] — 2026-06-01
+
+**Failure Triage Classifier — typed-cause classification for every
+terminal failure.** Rule-only, zero LLM cost, deterministic. Closes the
+"why did this milestone fail?" gap left by the existing failure
+plumbing (which says WHAT failed but not WHY in an actionable form).
+
+### What it does
+
+After every `MilestoneFailed` (or `CostCeilingBlocked`,
+`WorktreeMerged{success=false}`, `ParallelWaveCompleted.failed[i]`),
+the orchestrator hook reads the existing telemetry + audit + state and
+walks a 14-class decision tree to produce a `FailureTriaged` event:
+
+```python
+@dataclass
+class FailureTriaged:
+    milestone: str
+    phase: str
+    primary_class: str          # one of 14 FailureClass enum values
+    secondary_classes: list[str]
+    confidence: float           # 1.0 hard | 0.7 corroborated | 0.4 fallback
+    evidence: list[str]         # "seq=N:type=X:detail=Y" triples
+    recommendation: str         # static lookup, <=200 chars
+    anchor_seq: int
+    anchor_type: str
+    triage_version: int = 1
+    raw_reason: str             # truncated 300 chars, populated for UNKNOWN
+```
+
+### 14 failure classes
+
+| Class | Trigger | Confidence |
+|---|---|---|
+| `COST_CEILING_BLOCKED` | `CostCeilingBlocked` OR `CEILING_BLOCK` audit | 1.0 |
+| `BUDGET_EXCEEDED` | `BudgetAlert.threshold=100` | 1.0 |
+| `MERGE_CONFLICT` | `WorktreeMerged.success=false` OR `conflicts>0` | 1.0 |
+| `PLUGIN_VETO` | `PluginVetoed` matching phase | 1.0 |
+| `POLICY_VIOLATION` | `POLICY_VIOLATION` audit | 1.0 |
+| `COVERAGE_BELOW_THRESHOLD` | `CoverageResult.passed=false` | 1.0 |
+| `QUALITY_GATE_FAIL` | any `QualityGateResult.passed=false` | 1.0 |
+| `CLAUDE_SUBPROCESS_TIMEOUT` | typed `ClaudeInvocationFailed.error_kind=timeout` | 1.0 |
+| `CLAUDE_SUBPROCESS_ERROR` | typed `ClaudeInvocationFailed` (is_error/exit/mcp/auth) | 0.7 |
+| `STRICT_MODE_NON_CONVERGE` | `StrictModeIteration.iteration==max AND converged=false` | 1.0 |
+| `SPEC_FEATURE_GAP` | `SpecComplianceCompleted.missing>0` / `FeatureVerificationCompleted.broken>0` | 1.0 |
+| `GAP_NON_CONVERGE` | Phase-C `GapReport.converged=false` | 0.7 |
+| `CI_FIX_FAIL` | reason `~= CI_FIX_FAILED` OR `state.current_step=ci_fix_failed` | 1.0 |
+| `UNKNOWN` | nothing matched | 0.4 |
+
+Plus `DRIFT_CORRELATED` as a secondary-only tag (never primary).
+
+### 6 production-readiness fixes baked in (from adversarial review)
+
+The design workflow scored 39/60 (the runners-up scored 18 and 16,
+both rejected). Six revisions required:
+
+1. **Verification-without-labels strategy** — each test in
+   `test_failure_triage.py` constructs a synthetic event sequence from
+   a documented narrative + asserts the expected class. The narrative
+   IS the ground truth; no labeled corpus needed.
+2. **Success criterion rewritten** — P50 confidence >= 0.7,
+   UNKNOWN <= 15%, evidence completeness, NOT "100% confidence
+   >= 0.7" (impossible by design — rule_09 is 0.7, rule_99 is 0.4).
+3. **CLI scoped to 3 flags for v1** — `--milestone`, `--json`, default
+   replay. `--since/--last/--reclassify/--explain/--health` deferred
+   to v1.3.22.
+4. **Independence rule for composite failures** — a candidate
+   secondary is appended iff (a) its `trigger_seq > primary.trigger_seq`
+   AND (b) it is not in `IMPLIES[primary]`. Makes multi-label output
+   deterministic across rule reorderings.
+5. **Typed `ClaudeInvocationFailed` event** — added to runner pathway
+   (emitted by `Orchestrator._emit_claude_invocation_failed`). Triage
+   rules 08/09 read the typed `error_kind` field instead of
+   regex-on-MilestoneFailed.reason. Load-bearing fix: rule won't rot
+   on every SDK / model phrasing change.
+6. **Hook latency budget revised to 200ms** with shared reader cache
+   API (`read_events`/`read_audit` callbacks on the hook signature).
+
+### CLI
+
+```bash
+sw triage                                # all failures in current project
+sw triage --milestone p4-m1-monaco       # deep view + evidence chain
+sw triage --json                         # machine-readable
+```
+
+Exit codes:
+- `0` — any output (including zero failures)
+- `2` — telemetry file missing / unreadable
+- `3` — `--milestone` specified but not found
+
+### Telemetry events
+
+```python
+@dataclass
+class ClaudeInvocationFailed(TelemetryEvent):
+    milestone: str
+    phase: str
+    error_kind: str       # timeout | is_error | nonzero_exit | mcp_crash | auth | unknown
+    timed_out: bool
+    returncode: int
+    message: str          # truncated 300 chars
+    attempt: int
+    max_attempts: int
+
+@dataclass
+class FailureTriaged(TelemetryEvent):
+    milestone: str
+    phase: str
+    primary_class: str
+    secondary_classes: list[str]
+    confidence: float
+    evidence: list[str]
+    recommendation: str
+    anchor_seq: int
+    anchor_type: str
+    triage_version: int = 1
+    raw_reason: str
+```
+
+### Kill switches
+
+- Config: `triage.enabled = false` in workflow.json.
+- Env: `SW_TRIAGE_OFF=1` (CLI and orchestrator hook both honor).
+- Code path: orchestrator's triage call is try/except wrapped; any
+  internal failure produces a missing FailureTriaged event, never a
+  broken run.
+
+### Stats
+
+- **Tests: 1808 → 1860** (+52):
+  - 43 unit tests (rule-by-rule + composite + determinism + corruption
+    + summarize + to_event_dict).
+  - 9 CLI smoke tests (default / json / milestone filter / disabled /
+    env kill switch / determinism).
+- New: `src/superpower_workflow/failure_triage.py` (~640 lines pure
+  functional).
+- New: `src/superpower_workflow/hooks/triage_hook.py` (~120 lines).
+- New: `Orchestrator._triage_milestone_failure` (best-effort
+  classifier hook wired into both MilestoneFailed emit sites).
+- New: `Orchestrator._emit_claude_invocation_failed` (typed-error
+  emission in `_check_phase_result`).
+- New: `ClaudeInvocationFailed` + `FailureTriaged` telemetry events.
+- New: `sw triage {default, --milestone, --json}` CLI subcommand.
+- New: `docs/failure-triage.md` user guide.
+- Complexity-audit `max-cc` bumped 56 → 57 (new top-level subcommand
+  dispatch — same precedent as v1.3.20).
+- Ruff + format clean.
+
+### Distinct from neighboring features
+
+| Feature | Question it answers |
+|---|---|
+| Drift Detector (v1.3.19) | Is this run abnormal vs baseline? (correlation) |
+| Cost Ceilings (v1.3.20) | Did we exceed a cross-run budget envelope? (boundary) |
+| **Failure Triage (v1.3.21)** | **Why did this milestone fail?** (cause) |
+
+Drift events become `DRIFT_CORRELATED` secondaries on triage results.
+No feature overlap — orthogonal axes.
+
 ## [1.3.20] — 2026-06-01
 
 **Rolling Cost Ceilings — cross-run cost ceiling enforcement.** The

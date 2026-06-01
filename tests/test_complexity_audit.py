@@ -225,6 +225,9 @@ class TestComplexityAuditPassesAtV120Ceilings:
     additional `if args.command == "budget":` branch to `main`'s dispatch.
     Ceiling bumped 55 → 56 to absorb a legitimate feature addition without
     forcing an unrelated cli.main refactor.
+
+    v1.3.21 adds the `sw triage` top-level subcommand — same pattern, one
+    more dispatch branch. Ceiling bumped 56 → 57.
     """
 
     def test_audit_passes_at_ceilings(self):
@@ -235,7 +238,7 @@ class TestComplexityAuditPassesAtV120Ceilings:
                 "--max-lines",
                 "510",
                 "--max-cc",
-                "56",
+                "57",
                 "--max-nesting",
                 "7",
             ],

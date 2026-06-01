@@ -240,6 +240,21 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # v1.3.21 — sw triage subcommand: rule-only failure classifier replay.
+    triage_p = sub.add_parser(
+        "triage",
+        help=(
+            "Classify failures in the project's telemetry into typed "
+            "FailureClass values with confidence + evidence + recommendation."
+        ),
+    )
+    triage_p.add_argument(
+        "--milestone",
+        default=None,
+        help="Show only the failure for this milestone (deep view + full evidence chain)",
+    )
+    triage_p.add_argument("--json", action="store_true", help="Emit machine-readable JSON output")
+
     # v1.3.20 — sw budget subcommand for rolling cost ceiling visibility + config.
     budget_p = sub.add_parser(
         "budget",
@@ -1204,6 +1219,115 @@ def _ensure_ceiling_bypass_authorized() -> None:
         sys.exit(EXIT_BYPASS_UNAUTHORIZED)
 
 
+def _cmd_triage(project_root: Path, args) -> None:
+    """v1.3.21 — `sw triage` replay over .claude/sw-telemetry.jsonl.
+
+    Reads telemetry + audit + state, classifies each terminal failure
+    anchor (MilestoneFailed, CostCeilingBlocked), and prints a human-
+    readable table or JSON. Pure read-only.
+
+    Exit codes:
+      0  any output (including zero failures)
+      2  telemetry file missing / unreadable
+      3  --milestone specified but not found in classified results
+    """
+    if os.environ.get("SW_TRIAGE_OFF") == "1":
+        print("  triage disabled via SW_TRIAGE_OFF=1")
+        return
+
+    from superpower_workflow.failure_triage import (
+        classify_run,
+        summarize,
+        to_event_dict,
+    )
+
+    claude_dir = project_root / ".claude"
+    telemetry_path = claude_dir / "sw-telemetry.jsonl"
+    audit_path = claude_dir / "audit-trail.jsonl"
+    state_path = claude_dir / "workflow-state.json"
+
+    if not telemetry_path.exists():
+        if getattr(args, "json", False):
+            print(json.dumps({"failures": [], "summary": summarize([])}))
+            return
+        print(f"  No telemetry at {telemetry_path}.")
+        sys.exit(2)
+
+    cfg_path = claude_dir / "workflow.json"
+    if cfg_path.exists():
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            triage_cfg = cfg.get("triage", {})
+            if not triage_cfg.get("enabled", True):
+                print("  triage disabled -- set triage.enabled=true in workflow.json")
+                return
+        except (json.JSONDecodeError, OSError):
+            pass  # CLI keeps running even if config malformed
+
+    results = classify_run(
+        telemetry_path,
+        audit_path=audit_path if audit_path.exists() else None,
+        state_path=state_path if state_path.exists() else None,
+    )
+
+    milestone_filter = getattr(args, "milestone", None)
+    if milestone_filter:
+        filtered = [r for r in results if r.milestone == milestone_filter]
+        if not filtered:
+            if getattr(args, "json", False):
+                print(json.dumps({"failures": [], "summary": summarize([])}))
+                return
+            print(f"  No failure found for milestone '{milestone_filter}'.")
+            sys.exit(3)
+        results = filtered
+
+    if getattr(args, "json", False):
+        out = {
+            "failures": [to_event_dict(r) for r in results],
+            "summary": summarize(results),
+            "triage_version": 1,
+        }
+        print(json.dumps(out, indent=2))
+        return
+
+    if not results:
+        print("  No failures in this project's telemetry.")
+        return
+
+    summary = summarize(results)
+    print(
+        f"  triage results: {summary['total_failures']} failure(s), "
+        f"{summary['unknown_count']} unknown "
+        f"({summary['unknown_pct'] * 100:.1f}%), "
+        f"p50 confidence={summary['p50_confidence']:.2f}"
+    )
+    print(f"  {'-' * 78}")
+    print(f"  {'milestone':22s} {'phase':10s} {'class':30s} {'conf':>5s}")
+    for r in results:
+        cls_str = r.primary_class.value
+        if r.secondary_classes:
+            cls_str += f" (+{len(r.secondary_classes)})"
+        print(
+            f"  {r.milestone[:22]:22s} {r.phase[:10]:10s} {cls_str[:30]:30s} {r.confidence:>5.2f}"
+        )
+
+    if milestone_filter and len(results) == 1:
+        # Deep view.
+        r = results[0]
+        print()
+        print(f"  Primary: {r.primary_class.value}")
+        if r.secondary_classes:
+            print(f"  Secondary: {', '.join(r.secondary_classes)}")
+        print(f"  Confidence: {r.confidence:.2f}")
+        print(f"  Anchor: {r.anchor_type} (seq={r.anchor_seq})")
+        print()
+        print("  Evidence:")
+        for e in r.evidence:
+            print(f"    - {e}")
+        print()
+        print(f"  Recommendation:\n    {r.recommendation}")
+
+
 def _cmd_budget(project_root: Path, args) -> None:
     """v1.3.20 — `sw budget {show,set,reset}` subcommand.
 
@@ -2137,6 +2261,10 @@ def main() -> None:
 
     if args.command == "budget":
         _cmd_budget(project_root, args)
+        return
+
+    if args.command == "triage":
+        _cmd_triage(project_root, args)
         return
 
     if args.command == "bootstrap":

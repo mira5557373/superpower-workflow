@@ -445,6 +445,63 @@ class CostCeilingBlocked(TelemetryEvent):
     preflight_gate: str = "run_start"
 
 
+@dataclass
+class ClaudeInvocationFailed(TelemetryEvent):
+    """v1.3.21 — typed subprocess-error event from runner.
+
+    Addresses verdict revision #5 from the v1.3.21 design bake-off:
+    the rule-only classifier should NOT regex-parse free-text MilestoneFailed
+    reason strings. Instead, the runner emits this typed event whenever a
+    `claude -p` invocation fails terminally (after retries exhausted), so
+    rules 08/09 can read a stable `error_kind` field instead of brittle
+    string patterns that rot on every SDK upgrade.
+
+    error_kind ∈ {"timeout", "is_error", "nonzero_exit", "mcp_crash",
+                  "auth", "unknown"}.
+    """
+
+    EVENT_TYPE: ClassVar[str] = "claude_invocation_failed"
+    milestone: str = ""
+    phase: str = ""
+    error_kind: str = "unknown"
+    timed_out: bool = False
+    returncode: int = 0
+    message: str = ""  # truncated to 300 chars
+    attempt: int = 0
+    max_attempts: int = 0
+
+
+@dataclass
+class FailureTriaged(TelemetryEvent):
+    """v1.3.21 — classifier output: one per terminal failure anchor.
+
+    Emitted online by the orchestrator hook immediately after a
+    MilestoneFailed (or CostCeilingBlocked / WorktreeMerged{success=false}
+    / each entry in ParallelWaveCompleted.failed[]). Also produced offline
+    by `sw triage` CLI replay over .claude/sw-telemetry.jsonl.
+
+    `confidence` ∈ {1.0 hard-signal, 0.7 corroborated, 0.4 fallback}.
+    `secondary_classes` is a list of (FailureClass | SecondaryTag) values
+    that co-occurred independently. DRIFT_CORRELATED is the canonical
+    secondary tag that NEVER appears as primary.
+
+    `triage_version` lets future rule-set changes be detected on replay.
+    """
+
+    EVENT_TYPE: ClassVar[str] = "failure_triaged"
+    milestone: str = ""
+    phase: str = ""
+    primary_class: str = "unknown"
+    secondary_classes: list[str] = field(default_factory=list)
+    confidence: float = 0.4
+    evidence: list[str] = field(default_factory=list)
+    recommendation: str = ""
+    anchor_seq: int = 0
+    anchor_type: str = ""
+    triage_version: int = 1
+    raw_reason: str = ""  # truncated 300 chars, only populated for UNKNOWN
+
+
 class TelemetryEmitter:
     """v1.3.5 #3 fix: thread-safe writes for parallel orchestrator branches.
 
