@@ -18,12 +18,14 @@ from superpower_workflow.phases.context import PhaseContext
 from superpower_workflow.phases.implement import PhaseB
 from superpower_workflow.phases.plan import PhaseA
 from superpower_workflow.phases.result import PhaseResult
+from superpower_workflow.phases.review import PhaseC
 from superpower_workflow.phases.trust_but_verify import PhaseTbV
 
 __all__ = [
     "PhaseA",
     "PhaseB",
     "PhaseBase",
+    "PhaseC",
     "PhaseContext",
     "PhaseResult",
     "PhaseTbV",
