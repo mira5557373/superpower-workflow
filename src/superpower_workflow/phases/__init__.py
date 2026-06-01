@@ -15,9 +15,11 @@ from __future__ import annotations
 
 from superpower_workflow.phases.base import PhaseBase
 from superpower_workflow.phases.context import PhaseContext
+from superpower_workflow.phases.plan import PhaseA
 from superpower_workflow.phases.result import PhaseResult
 
 __all__ = [
+    "PhaseA",
     "PhaseBase",
     "PhaseContext",
     "PhaseResult",
