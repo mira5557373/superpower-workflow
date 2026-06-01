@@ -290,3 +290,152 @@ def test_fixloop_fixture_exists_and_diverges_from_baseline():
         f"than baseline ({n_baseline} records). Same size suggests the "
         f"fail-then-pass dispatcher didn't bind."
     )
+
+
+# ----- Task 1.4: SwPhase DB roundtrip ------------------------------------
+
+# Expected cache token shapes per phase claude call, taken from the
+# recorder's TOKEN_SHAPES table. extract_token_usage computes
+# cache_hit_rate = round(cache_read / (input + cache_create + cache_read), 4)
+# (denom 0 → 0.0).
+EXPECTED_PHASE_TOKENS = {
+    # Phase A → claude call 0 → TOKEN_SHAPES[0]
+    "plan": {
+        "input_tokens": 50,
+        "output_tokens": 200,
+        "cache_creation_input_tokens": 100,
+        "cache_read_input_tokens": 400,
+        # 400 / (50 + 100 + 400) = 0.7273
+        "cache_hit_rate": 0.7273,
+    },
+    # Phase B → claude call 1 → TOKEN_SHAPES[1]
+    "implement": {
+        "input_tokens": 30,
+        "output_tokens": 80,
+        "cache_creation_input_tokens": 50,
+        "cache_read_input_tokens": 200,
+        # 200 / (30 + 50 + 200) = 0.7143
+        "cache_hit_rate": 0.7143,
+    },
+    # Phase C → claude call 2 → TOKEN_SHAPES[2]
+    "review": {
+        "input_tokens": 80,
+        "output_tokens": 400,
+        "cache_creation_input_tokens": 200,
+        "cache_read_input_tokens": 800,
+        # 800 / (80 + 200 + 800) = 0.7407
+        "cache_hit_rate": 0.7407,
+    },
+    # Phase D → claude call 3 → TOKEN_SHAPES[3]
+    "push": {
+        "input_tokens": 20,
+        "output_tokens": 60,
+        "cache_creation_input_tokens": 40,
+        "cache_read_input_tokens": 160,
+        # 160 / (20 + 40 + 160) = 0.7273
+        "cache_hit_rate": 0.7273,
+    },
+}
+
+
+def test_v120_swphase_db_roundtrip(tmp_path, monkeypatch):
+    """v1.3.14 hotfix surface lock — SwPhase rows persist cache_* fields.
+
+    Tasks 1.2/1.3 capture PhaseCompleted EVENT payloads but NOT the
+    row written to SwPhase. A refactor that breaks the writer's
+    subscription (e.g., renames an event_dict key) would emit correct
+    telemetry but silently persist cache_*=0 — the v1.3.14 silent bug
+    regresses with no test catching it.
+
+    This test wires the orchestrator's telemetry to a real
+    TelemetryDbWriter backed by an on-disk SQLite engine, runs
+    _run_milestone, then queries the 4 SwPhase rows and asserts every
+    cache field round-trips exactly as extract_token_usage computed it.
+    """
+    from superpower_workflow.db.engine import (
+        create_engine_from_url,
+        ensure_schema_current,
+        get_session_factory,
+    )
+    from superpower_workflow.db.models import Base, SwPhase
+    from superpower_workflow.db.writer import TelemetryDbWriter
+    from superpower_workflow.telemetry import MilestoneStarted, RunStarted
+
+    project_root = _build_minimal_project(tmp_path)
+
+    # Real SQLite engine on disk — :memory: doesn't survive across
+    # the writer's background flush-thread session opens.
+    db_path = tmp_path / "telemetry.db"
+    engine = create_engine_from_url(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    ensure_schema_current(engine)
+
+    orch = Orchestrator(project_root=project_root)
+    # Real emitter + DB writer. install_recorders will wrap emit() one
+    # more layer; emit_orig still hits the DB writer's queue.
+    real_emitter = TelemetryEmitter(orch.claude_dir / "telemetry.jsonl", run_id="testdb")
+    orch._telemetry = TelemetryDbWriter(
+        emitter=real_emitter,
+        engine=engine,
+        project_name="goldentrace_test",
+        project_path=str(project_root),
+    )
+
+    recorder = TraceRecorder()
+    install_recorders(monkeypatch, orch, recorder)
+
+    # _run_milestone direct invocation skips Orchestrator.run(), so
+    # RunStarted + MilestoneStarted never fire. Without them, the DB
+    # writer skips the SwPhase write branch (needs _run_uuid +
+    # _milestone_uuids[name]). Emit manually so the writer sets up
+    # parent rows before phase_started arrives.
+    orch._telemetry.emit(RunStarted(spec_sha="abc", model="opus", milestone_count=1))
+    orch._telemetry.emit(MilestoneStarted(milestone="M1", index=0))
+
+    logger = WorkflowLogger(orch.claude_dir, run_id="testdb")
+    try:
+        cost = orch._run_milestone({"name": "M1"}, logger)
+    finally:
+        logger.close()
+        # Flush + join the daemon thread so the test doesn't race with
+        # background DB writes.
+        orch._telemetry.close()
+
+    assert cost > 0
+
+    session = get_session_factory(engine)()
+    try:
+        phases = session.query(SwPhase).all()
+        by_type = {p.phase_type: p for p in phases}
+        assert set(by_type.keys()) == {"plan", "implement", "review", "push"}, (
+            f"Expected SwPhase rows for plan/implement/review/push; got {sorted(by_type.keys())}"
+        )
+
+        for phase_type, expected in EXPECTED_PHASE_TOKENS.items():
+            row = by_type[phase_type]
+            assert row.input_tokens == expected["input_tokens"], (
+                f"{phase_type}: input_tokens={row.input_tokens}, "
+                f"expected {expected['input_tokens']}"
+            )
+            assert row.output_tokens == expected["output_tokens"], (
+                f"{phase_type}: output_tokens={row.output_tokens}, "
+                f"expected {expected['output_tokens']}"
+            )
+            assert row.cache_creation_input_tokens == expected["cache_creation_input_tokens"], (
+                f"{phase_type}: cache_creation_input_tokens="
+                f"{row.cache_creation_input_tokens}, expected "
+                f"{expected['cache_creation_input_tokens']}"
+            )
+            assert row.cache_read_input_tokens == expected["cache_read_input_tokens"], (
+                f"{phase_type}: cache_read_input_tokens="
+                f"{row.cache_read_input_tokens}, expected "
+                f"{expected['cache_read_input_tokens']}"
+            )
+            # Float tolerance — extract_token_usage rounds to 4 dp; the
+            # Float column persists the rounded value verbatim.
+            assert abs(row.cache_hit_rate - expected["cache_hit_rate"]) < 1e-4, (
+                f"{phase_type}: cache_hit_rate={row.cache_hit_rate}, "
+                f"expected {expected['cache_hit_rate']}"
+            )
+    finally:
+        session.close()
