@@ -15,12 +15,16 @@ from __future__ import annotations
 
 from superpower_workflow.phases.base import PhaseBase
 from superpower_workflow.phases.context import PhaseContext
+from superpower_workflow.phases.implement import PhaseB
 from superpower_workflow.phases.plan import PhaseA
 from superpower_workflow.phases.result import PhaseResult
+from superpower_workflow.phases.trust_but_verify import PhaseTbV
 
 __all__ = [
     "PhaseA",
+    "PhaseB",
     "PhaseBase",
     "PhaseContext",
     "PhaseResult",
+    "PhaseTbV",
 ]
