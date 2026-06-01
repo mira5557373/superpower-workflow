@@ -3,6 +3,125 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.18] — 2026-06-01
+
+**v1.1.9.1 Task 209 — `sw watch` rich TUI polish.** Closes the
+v1.1.9.1 admission that the live TUI was deferred. v1.3.17 shipped
+the `RunCostProjection` + `BudgetAlert` events that `sw watch` now
+visualizes.
+
+### Rich-based TUI
+
+New `RichWatch` class in `src/superpower_workflow/dashboard/watch.py`
+uses `rich.live.Live` to render a panel layout with:
+
+```
+┌─ sw watch   Status: running   Run: 01TESTRICH ────────────┐
+│                                                            │
+│  ████████████████░░░░░░░░░░░░░░░░░░░░  3/5 (60%)          │
+│                                                            │
+│  ✓ M1 $1.50    ✓ M2 $2.00    ▶ M3 (plan)                  │
+│  . M4          . M5                                        │
+│                                                            │
+│  Cost: $5.20   Budget: $50.00 (10%)                        │
+│  Projected: $18.40   [p10 $14.00, p90 $22.00]              │
+│  Confidence: ●●●○○ (partial_history)                       │
+│                                                            │
+│  Alerts: none   |   Rework: 2.5%  Defects: 1.2%            │
+│                                                            │
+└────────────────────────────────────────────────────────────┘
+```
+
+### Auto-detection + fallback
+
+`make_watch(data, interval)` dispatches:
+
+- **`RichWatch`** when `rich>=13.0` is importable
+- **`TerminalWatch`** (legacy text-mode ANSI) when rich is absent
+- **Force text** via `SW_WATCH_NO_RICH=1` env var — useful for CI,
+  non-TTY environments, or when piping output
+
+The CLI's `_cmd_watch` now calls `make_watch` instead of constructing
+`TerminalWatch` directly. Existing `sw watch` invocations get the
+rich UI automatically once `rich` is installed; nothing else changes.
+
+### What it visualizes
+
+The rich layout surfaces v1.3.17's observability events directly:
+
+- **Cost gauge with budget color**: green/yellow/red as % of cap crosses
+  50/75/90 thresholds
+- **Projection band**: `$projected [p10, p90]` from latest
+  `RunCostProjection` event (omitted on cold-start when total=0)
+- **Confidence pips**: 5-pip indicator (●●●○○) showing how much
+  historical data backs the projection
+- **Alert badge**: shows last crossed `BudgetAlert` threshold with
+  severity color
+- **Source label**: `cold_start | partial_history | full_history`
+  tells the user how trustworthy the projection is
+
+### `DashboardSnapshot` extensions
+
+New fields (defaults preserve backward compat for existing consumers):
+
+- `projected_total_usd: float`
+- `projection_low_p10_usd: float`
+- `projection_high_p90_usd: float`
+- `projection_confidence: float`
+- `projection_source: str`
+- `last_budget_alert_threshold: int`
+- `max_budget_usd: float`
+
+`DashboardData.load_snapshot()` reads the latest `run_cost_projection`
+event from the project's telemetry JSONL and the
+`state.last_budget_alert_pct` field to populate these.
+
+### Optional dependency
+
+New `[tui]` extras group:
+
+```bash
+pip install superpower-workflow[tui]
+```
+
+Pulls in `rich>=13.0`. The existing `[dev]` group also installs rich
+so CI tests both paths.
+
+### Stats
+
+- **Tests: 1687 → 1702** (+15):
+  - 3 auto-detect tests (rich available, SW_WATCH_NO_RICH=1, rich
+    missing)
+  - 3 `make_watch` dispatch tests
+  - 6 layout rendering tests (running, budget alert, cold-start,
+    completed, failed, confidence pips)
+  - 2 snapshot field tests (defaults + to_dict round-trip)
+  - 1 stop semantics test
+- New: `RichWatch` class, `_render_rich_layout`, `_rich_available`,
+  `make_watch` in `dashboard/watch.py`
+- `DashboardSnapshot` + 7 fields (backward-compat — all default to
+  zero/empty)
+- `DashboardData.load_snapshot` extended to populate them
+- Ruff + format clean
+
+### What's NOT in this release
+
+- Cross-project telemetry aggregation in projection (cold-start
+  ratios from soak-archive — v1.4.0 intelligence scope).
+- Animated transitions, scrollback, mouse interaction — `rich.live`
+  static layout is plenty for the workflow lifecycle.
+- Custom themes / color schemes — defaults are reasonable; user can
+  override via rich's NO_COLOR / FORCE_COLOR env vars natively.
+
+This closes the v1.1.9.1 observability arc. All four tasks done:
+
+| Task | Commit |
+|---|---|
+| RunCostProjection + projection module | `a38b880` |
+| BudgetAlert + threshold state machine | `a38b880` |
+| sw watch rich TUI | (this commit) |
+| v1.3.17 release | `80dc370` |
+
 ## [1.3.17] — 2026-06-01
 
 **v1.1.9.1 observability — RunCostProjection + BudgetAlert shipped.**

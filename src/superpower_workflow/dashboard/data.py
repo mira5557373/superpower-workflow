@@ -44,6 +44,17 @@ class DashboardSnapshot:
     milestone_names: list[str] = field(default_factory=list)
     started_at: str = ""
 
+    # v1.3.17 / v1.1.9.1 — observability event surface.
+    # Latest RunCostProjection event field values (defaults = no data).
+    projected_total_usd: float = 0.0
+    projection_low_p10_usd: float = 0.0
+    projection_high_p90_usd: float = 0.0
+    projection_confidence: float = 0.0
+    projection_source: str = ""  # cold_start | partial_history | full_history
+    # Latest BudgetAlert threshold crossed (0 if none).
+    last_budget_alert_threshold: int = 0
+    max_budget_usd: float = 0.0  # 0.0 if no cap configured
+
     def __post_init__(self) -> None:
         if not self.timestamp:
             self.timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -151,6 +162,33 @@ class DashboardData:
 
         milestone_names = [m.get("name", "") for m in milestones]
 
+        # v1.3.17 / v1.1.9.1 — extract latest RunCostProjection +
+        # BudgetAlert from the telemetry log. Best-effort: missing or
+        # unreadable telemetry leaves these at defaults.
+        proj_total = proj_low = proj_high = proj_conf = 0.0
+        proj_source = ""
+        last_alert_threshold = state.last_budget_alert_pct
+        max_budget_usd = float(config.get("max_total_budget_usd", 0.0) or 0.0)
+        try:
+            tel_path = self._telemetry_path(config)
+            if tel_path.exists():
+                for line in tel_path.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    t = ev.get("type")
+                    if t == "run_cost_projection":
+                        proj_total = ev.get("projected_total_usd", 0.0)
+                        proj_low = ev.get("low_p10_usd", 0.0)
+                        proj_high = ev.get("high_p90_usd", 0.0)
+                        proj_conf = ev.get("confidence", 0.0)
+                        proj_source = ev.get("source", "")
+        except OSError:
+            pass
+
         self._last_mtimes = self._snapshot_mtimes()
         return DashboardSnapshot(
             run_id=run_id,
@@ -178,4 +216,11 @@ class DashboardData:
             quality_trend=reader.quality_trend(run_id=run_id) if run_id else [],
             milestone_names=milestone_names,
             started_at=state.started_at,
+            projected_total_usd=proj_total,
+            projection_low_p10_usd=proj_low,
+            projection_high_p90_usd=proj_high,
+            projection_confidence=proj_conf,
+            projection_source=proj_source,
+            last_budget_alert_threshold=last_alert_threshold,
+            max_budget_usd=max_budget_usd,
         )

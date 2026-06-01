@@ -973,7 +973,7 @@ def _cmd_dashboard(project_root: Path, host: str | None = None, port: int | None
 
 def _cmd_watch(project_root: Path, interval: float | None = None) -> None:
     from superpower_workflow.dashboard.data import DashboardData
-    from superpower_workflow.dashboard.watch import TerminalWatch
+    from superpower_workflow.dashboard.watch import make_watch
 
     if interval is None:
         config_path = project_root / ".claude" / "workflow.json"
@@ -986,7 +986,10 @@ def _cmd_watch(project_root: Path, interval: float | None = None) -> None:
     interval = interval or 2.0
 
     data = DashboardData(project_root)
-    watch = TerminalWatch(data, interval=interval)
+    # v1.3.17 / v1.1.9.1 — auto-select rich-based TUI when available;
+    # fall back to text-mode TerminalWatch otherwise. Force text via
+    # SW_WATCH_NO_RICH=1 for CI/non-TTY environments.
+    watch = make_watch(data, interval=interval)
     watch.start()
 
 
