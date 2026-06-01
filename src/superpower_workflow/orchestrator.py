@@ -167,6 +167,12 @@ class Orchestrator:
         self._current_milestone_name: str = ""
         self._current_phase_name: str = ""
 
+        # v1.3.19 — set to True inside parallel worker bodies so the
+        # drift detector skips emission (parallel-mode v1 limitation
+        # — Verdict 2 fix #2). ParallelExecutor sets this when running
+        # `execute_wave_isolated`.
+        self._in_parallel_worker: bool = False
+
         # v1.3.12: shared in-flight cost counter across parallel workers.
         # `_run_claude` charges to this BEFORE state is updated so sibling
         # workers' budget checks see in-flight spend within milliseconds.
@@ -1072,6 +1078,99 @@ class Orchestrator:
             # Best-effort — projection is observability, never fatal.
             pass
 
+    def _emit_drift_for_phase(
+        self,
+        *,
+        phase: str,
+        cost_usd: float,
+        duration_ms: float,
+        tokens: dict,
+    ) -> None:
+        """v1.3.19 — emit DriftDetected after a phase completes.
+
+        Best-effort: catches every exception and returns silently. Drift
+        is observability; it must never break the milestone loop.
+
+        Safety gates (drift.py + here):
+        - skip if `self._in_parallel_worker` (parallel-mode v1 limitation)
+        - skip if `drift_detection.enabled=false` (default true)
+        - skip if `_telemetry` not initialized
+        - baseline_floor (default 15) suppresses emission below
+        - rate-limit dedup via `state.drift_alerts_emitted_this_milestone`
+        - INFO severity suppressed under `mode='observation_only'` default
+        """
+        if getattr(self, "_in_parallel_worker", False):
+            return
+        if self._telemetry is None:
+            return
+        drift_cfg = self.config.get("drift_detection", {})
+        if not drift_cfg.get("enabled", True):
+            return
+
+        try:
+            from superpower_workflow.drift import (
+                assess_all,
+                bucket_key_for_phase,
+                dedup_key,
+            )
+            from superpower_workflow.telemetry import DriftDetected
+
+            model_id = self.config.get("model", "")
+            telemetry_path = self.claude_dir / "sw-telemetry.jsonl"
+            bucket = bucket_key_for_phase(phase, model_id)
+
+            cache_hit_rate = float(tokens.get("cache_hit_rate", 0.0))
+            pending = [
+                ("cost_usd", bucket, float(cost_usd)),
+                ("duration_ms", bucket, float(duration_ms)),
+                ("cache_hit_rate", bucket, cache_hit_rate),
+            ]
+            mode = drift_cfg.get("mode", "observation_only")
+            emit_info = bool(drift_cfg.get("emit_info", False))
+            baseline_floor = int(drift_cfg.get("baseline_floor", 15))
+            sample_cap = int(drift_cfg.get("sample_cap", 200))
+
+            assessments = assess_all(
+                telemetry_path=telemetry_path,
+                pending_observations=pending,
+                baseline_floor=baseline_floor,
+                sample_cap=sample_cap,
+                exclude_run_id=self.state.run_id,
+                model_id_for_phase=model_id,
+            )
+
+            # Pre-load existing dedup set under the lock to avoid races
+            # with sibling _accumulate_cost callers.
+            for a in assessments:
+                if a.severity == "ok":
+                    continue
+                # observation_only: filter INFO unless emit_info=true.
+                if mode == "observation_only" and a.severity == "info" and not emit_info:
+                    continue
+                key = dedup_key(a.metric, a.bucket, a.severity, a.direction)
+                with self._state_lock:
+                    if key in self.state.drift_alerts_emitted_this_milestone:
+                        continue
+                    self.state.drift_alerts_emitted_this_milestone.append(key)
+                self._telemetry.emit(
+                    DriftDetected(
+                        milestone=self._current_milestone_name or "",
+                        metric=a.metric,
+                        aggregation=a.aggregation,
+                        bucket=a.bucket,
+                        value=round(a.value, 4),
+                        baseline_n=a.baseline_n,
+                        baseline_mean=round(a.baseline_mean, 4),
+                        baseline_sigma=round(a.baseline_sigma, 4),
+                        z_score=round(a.z_score, 4),
+                        severity=a.severity,
+                        direction=a.direction,
+                        recommendation=a.recommendation,
+                    )
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
     def _call_pre_phase(self, phase: str, milestone: dict) -> None:
         for plugin in self._plugins:
             plugin.pre_phase(phase, milestone)
@@ -1238,6 +1337,12 @@ class Orchestrator:
         # + RunCostProjection event payloads.
         self._current_milestone_name = name
 
+        # v1.3.19 — clear drift dedup at milestone start so each
+        # milestone gets a fresh budget of one-event-per-(metric,
+        # bucket, severity, direction).
+        with self._state_lock:
+            self.state.drift_alerts_emitted_this_milestone = []
+
         # Phases A → B → TbV → C → D: extras (plan_commit_sha,
         # context_summary, compliance_report, verification_report) thread
         # into PhaseContext via ctx.update(**result.extras). The Finding 3
@@ -1268,6 +1373,15 @@ class Orchestrator:
                     if phase_sequence.index(p) <= phase_sequence.index(phase_cls)
                     and p.name != "trust_but_verify"
                 ],
+            )
+
+            # v1.3.19 — drift detection after each PhaseCompleted.
+            # Best-effort; never raises.
+            self._emit_drift_for_phase(
+                phase=phase_cls.name,
+                cost_usd=result.cost_usd,
+                duration_ms=result.duration_ms,
+                tokens=result.tokens,
             )
 
         # Phase E: extras (ci_success, ci_enabled) are control-flow

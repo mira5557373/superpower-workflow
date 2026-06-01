@@ -58,6 +58,12 @@ class WorkflowState:
     # (50/75/90/100). Monotonic non-decreasing; survives state reload
     # so a resume doesn't re-fire crossed alerts.
     last_budget_alert_pct: int = 0
+    # v1.3.19 — rate-limit dedup for DriftDetected events. Set of
+    # dedup keys (f"{metric}|{bucket}|{severity}|{direction}") already
+    # emitted in the CURRENT milestone. Cleared by the orchestrator
+    # on each MilestoneStarted. Persists to disk so a resume mid-
+    # milestone doesn't refire alerts already shown.
+    drift_alerts_emitted_this_milestone: list[str] = field(default_factory=list)
 
 
 @dataclass

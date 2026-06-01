@@ -3,6 +3,152 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.19] — 2026-06-01
+
+**Drift Detector v1 — multi-metric regression monitor.** The single
+v1.4.0 intelligence-layer feature that survived the adversarial value
+check (the other three — Recipe Extractor, Curator Self-Tune,
+Best-Practice Harvester — required corpus sizes or labeled-feedback
+UX we don't have).
+
+### What it does
+
+Reads project telemetry, computes rolling baselines for 5 metrics,
+and emits typed `DriftDetected` events when observed values cross
+sigma-band thresholds. Catches:
+
+- Prompt edits that silently double Phase B cost
+- Model swaps that inflate cache miss rate
+- Convergence regressions (strict-mode loops 4× more than baseline)
+- Gap curator becoming too aggressive (attrition spikes)
+
+### Algorithm
+
+5 metrics, mixed aggregation:
+
+| Metric | Source | Aggregation | Direction |
+|---|---|---|---|
+| `cost_usd` | `PhaseCompleted` | per-phase | higher = worse (log-scaled) |
+| `duration_ms` | `PhaseCompleted` | per-phase | higher = worse (log-scaled) |
+| `cache_hit_rate` | `PhaseCompleted` | per-phase | lower = worse |
+| `gap_attrition_pct` | `GapCurationCompleted` | per-milestone | two-tailed |
+| `strict_iterations` | `StrictModeIteration` (max) | per-milestone | higher = worse |
+
+Sigma bands:
+- `info`: 2.0σ ≤ \|z\| < 3.0σ (suppressed under `observation_only`)
+- `warn`: 3.0σ ≤ \|z\| < 4.0σ
+- `critical`: \|z\| ≥ 4.0σ
+
+Heavy-tailed `cost_usd` and `duration_ms` are computed in `log1p`
+space. Sigma floor at 5% of mean prevents zero-variance explosions.
+
+### 4 production-readiness fixes baked in (from adversarial review)
+
+1. **Model-swap auto-partitioning** — bucket key is
+   `f"{phase}|{model_id}"`. Swapping `model: opus → sonnet` creates
+   a fresh baseline instead of firing ~60 spurious cost/duration
+   alerts on the legitimate cost shift.
+
+2. **Batched single-read JSONL loader** — `load_samples_batched()`
+   reads telemetry ONCE per hook call and returns all 5 metric
+   buckets. Replaces the naive 3-reads-per-phase pattern that would
+   have added ~21s wall-clock per 35-milestone run.
+
+3. **Hard baseline floor (default 15) + observation_only default** —
+   no event ever emits below `baseline_floor`. The `observation_only`
+   mode is the default for new installs; INFO severity (2σ) is
+   suppressed in this mode. Both gates protect against
+   false-positive storms during cold-start.
+
+4. **Parallel-mode skip** — `self._in_parallel_worker` flag added to
+   Orchestrator (defaults False, set True inside parallel worker
+   bodies). Drift hook short-circuits in parallel mode for v1.
+
+### Telemetry event
+
+```python
+@dataclass
+class DriftDetected(TelemetryEvent):
+    milestone: str
+    metric: str
+    aggregation: str  # per_phase | per_milestone
+    bucket: str       # phase|model_id  or  __global__|model_id
+    value: float
+    baseline_n: int
+    baseline_mean: float
+    baseline_sigma: float
+    z_score: float
+    severity: str     # info | warn | critical
+    direction: str    # high | low | neutral
+    recommendation: str
+```
+
+### Rate-limit dedup
+
+`WorkflowState.drift_alerts_emitted_this_milestone: list[str]` tracks
+which `(metric, bucket, severity, direction)` dedup keys have already
+fired in the current milestone. Cleared at each milestone start.
+Persisted to disk so a mid-milestone resume doesn't refire alerts
+already shown.
+
+### CLI: `sw drift`
+
+```bash
+sw drift                    # human-readable baseline table
+sw drift --json             # JSON output
+sw drift --baseline         # baselines only (no live assess)
+sw drift --metric cost_usd  # filter to one metric
+sw drift --phase implement  # filter to one phase
+sw drift --reset            # clear in-milestone dedup (use after deliberate model swap / config change)
+```
+
+### Config
+
+```yaml
+drift_detection:
+  enabled: true                  # master switch (default true)
+  mode: observation_only         # observation_only | enforced (v2)
+  baseline_floor: 15             # min samples before any event emits
+  sample_cap: 200                # rolling window
+  emit_info: false               # surface INFO events under observation_only
+```
+
+### Stats
+
+- **Tests: 1702 → 1742** (+40):
+  - 29 drift module unit tests (algorithm, gates, sample loader)
+  - 11 orchestrator integration tests (hook contract, dedup, no-raise)
+- New: `src/superpower_workflow/drift.py` (~350 lines, pure functional).
+- New: `DriftDetected` telemetry event in `telemetry.py`.
+- New: `WorkflowState.drift_alerts_emitted_this_milestone`.
+- New: `Orchestrator._in_parallel_worker` flag (default False).
+- New: `Orchestrator._emit_drift_for_phase` helper (best-effort, never raises).
+- New: `sw drift` CLI subcommand with 5 flags.
+- Wired into `_run_milestone` post-phase callback (next to existing
+  `_emit_run_cost_projection`).
+- Ruff + format clean.
+
+### What's deferred (and why)
+
+- **Async hook** — current sync emission is acceptable (~5-10ms per
+  phase via batched read); revisit if soak data shows real impact.
+- **`enforced` mode** (halt the run on critical drift) — reserved
+  for v2 after observation_only has produced enough soak data to
+  calibrate.
+- **Per-milestone-class buckets** — would require the classifier
+  that v1.4.0 Recipe Extractor was supposed to provide. We rejected
+  Recipe Extractor in the value verdict, so we don't have a
+  classifier. Phase+model bucketing is sufficient for v1.
+- **Cross-project drift** — `Best-Practice Harvester` scope. Defer
+  until multi-project usage emerges.
+
+### Closes the v1.4.0 intelligence-layer evaluation
+
+The 6-agent design workflow + adversarial value check declared 3 of
+4 features over-engineered for the actual corpus. v1.3.19 ships the
+one feature that survives the data-readiness test, with all 4
+adversarial-review gaps closed by the implementation.
+
 ## [1.3.18] — 2026-06-01
 
 **v1.1.9.1 Task 209 — `sw watch` rich TUI polish.** Closes the

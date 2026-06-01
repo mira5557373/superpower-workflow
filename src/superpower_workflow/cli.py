@@ -171,6 +171,37 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    drift_p = sub.add_parser(
+        "drift",
+        help=(
+            "Inspect drift baselines + recent drift events. Reads telemetry "
+            "and recomputes per-metric assessments without writing anything."
+        ),
+    )
+    drift_p.add_argument("--json", action="store_true", help="Emit JSON instead of human text")
+    drift_p.add_argument(
+        "--baseline",
+        action="store_true",
+        help="Print per-metric baseline stats only (no live assessment)",
+    )
+    drift_p.add_argument(
+        "--metric",
+        help="Filter to one metric (cost_usd | duration_ms | cache_hit_rate | gap_attrition_pct | strict_iterations)",
+    )
+    drift_p.add_argument(
+        "--phase",
+        help="Filter to one phase bucket (plan | implement | review | push)",
+    )
+    drift_p.add_argument(
+        "--reset",
+        action="store_true",
+        help=(
+            "Reset state.drift_alerts_emitted_this_milestone — useful "
+            "after a deliberate model swap or config change so the next "
+            "phase can re-emit alerts on the new baseline."
+        ),
+    )
+
     run_p = sub.add_parser("run", help="Execute milestones")
     run_p.add_argument("--milestone", help="Run a specific milestone")
     run_p.add_argument("--from", dest="from_ms", help="Start from milestone")
@@ -971,6 +1002,116 @@ def _cmd_dashboard(project_root: Path, host: str | None = None, port: int | None
         print("\n  Dashboard stopped")
 
 
+def _cmd_drift(project_root: Path, args) -> None:
+    """v1.3.19 — inspect drift baselines + recent drift events.
+
+    Reads telemetry.jsonl + workflow.json. Pure read-only (except for
+    --reset which clears state.drift_alerts_emitted_this_milestone).
+    """
+    from superpower_workflow.drift import (
+        BASELINE_FLOOR_DEFAULT,
+        METRIC_SPECS,
+        compute_baseline,
+        load_samples_batched,
+    )
+
+    claude_dir = project_root / ".claude"
+    cfg_path = claude_dir / "workflow.json"
+    if not cfg_path.exists():
+        print(f"  No workflow.json at {cfg_path}; run `sw init` first.")
+        return
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"  Failed to read workflow.json: {exc}")
+        return
+
+    drift_cfg = cfg.get("drift_detection", {})
+    baseline_floor = int(drift_cfg.get("baseline_floor", BASELINE_FLOOR_DEFAULT))
+    model_id = cfg.get("model", "")
+
+    # --reset clears the in-milestone dedup so next phase can re-emit.
+    if getattr(args, "reset", False):
+        from superpower_workflow.state import load_state, save_state
+
+        try:
+            state = load_state(claude_dir)
+            count_before = len(state.drift_alerts_emitted_this_milestone)
+            state.drift_alerts_emitted_this_milestone = []
+            save_state(claude_dir, state)
+            print(f"  Cleared {count_before} drift-alert dedup entry(ies).")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  Failed to reset drift state: {exc}")
+        return
+
+    telemetry_path = claude_dir / "sw-telemetry.jsonl"
+    samples = load_samples_batched(
+        telemetry_path,
+        model_id_for_phase=model_id,
+        model_id_for_milestone=model_id,
+    )
+
+    metric_filter = getattr(args, "metric", None)
+    phase_filter = getattr(args, "phase", None)
+
+    # Build the rows: one per (metric, bucket).
+    rows: list[dict] = []
+    for spec in METRIC_SPECS:
+        if metric_filter and spec.key != metric_filter:
+            continue
+        for (mk, bucket), bucket_samples in samples.items():
+            if mk != spec.key:
+                continue
+            if phase_filter and not bucket.startswith(phase_filter):
+                continue
+            baseline = compute_baseline(bucket_samples, spec)
+            baseline.bucket = bucket
+            disp_mean = (
+                baseline.mean if not baseline.use_log else __import__("math").expm1(baseline.mean)
+            )
+            rows.append(
+                {
+                    "metric": spec.key,
+                    "aggregation": spec.aggregation,
+                    "bucket": bucket,
+                    "n": baseline.n,
+                    "mean": round(disp_mean, 4),
+                    "sigma": round(baseline.stdev, 4),
+                    "meets_floor": baseline.n >= baseline_floor,
+                }
+            )
+
+    if getattr(args, "json", False):
+        out = {
+            "project_dir": str(project_root),
+            "baseline_floor": baseline_floor,
+            "model": model_id,
+            "rows": rows,
+        }
+        print(json.dumps(out, indent=2))
+        return
+
+    # Human-readable text.
+    if not rows:
+        print(f"  No drift baselines yet for project {project_root}.")
+        print(f"  (telemetry path: {telemetry_path})")
+        return
+    print(f"  drift baselines (baseline_floor={baseline_floor}, model={model_id})")
+    print(f"  {'-' * 76}")
+    print(f"  {'metric':22s} {'bucket':22s} {'n':>5s}  {'mean':>10s}  {'sigma':>10s}  floor?")
+    for r in rows:
+        ok = "✓" if r["meets_floor"] else "·"
+        print(
+            f"  {r['metric']:22s} {r['bucket']:22s} {r['n']:>5d}  "
+            f"{r['mean']:>10.4f}  {r['sigma']:>10.4f}  {ok}"
+        )
+    n_total = len(rows)
+    n_ok = sum(1 for r in rows if r["meets_floor"])
+    print()
+    print(f"  {n_ok}/{n_total} baselines have reached the {baseline_floor}-sample floor.")
+    print(f"  Drift events for runs in this project: see {telemetry_path}")
+
+
 def _cmd_watch(project_root: Path, interval: float | None = None) -> None:
     from superpower_workflow.dashboard.data import DashboardData
     from superpower_workflow.dashboard.watch import make_watch
@@ -1737,6 +1878,10 @@ def main() -> None:
         from superpower_workflow.mcp_server import main as mcp_main
 
         mcp_main()
+        return
+
+    if args.command == "drift":
+        _cmd_drift(project_root, args)
         return
 
     if args.command == "bootstrap":

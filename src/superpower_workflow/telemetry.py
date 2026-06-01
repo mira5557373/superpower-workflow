@@ -345,6 +345,39 @@ class RunCostProjection(TelemetryEvent):
 
 
 @dataclass
+class DriftDetected(TelemetryEvent):
+    """v1.3.19 — drift detector found a per-metric deviation.
+
+    Fires from the orchestrator's post-phase / post-milestone hook
+    when a sigma-band threshold is crossed. Subject to the safety
+    gates in `drift.py`: baseline_floor (default 15 samples),
+    observation_only mode (INFO suppressed by default), parallel-
+    mode skip, and per-(metric,bucket,severity) rate-limit per
+    milestone.
+
+    `bucket` carries the partitioning key — `"<phase>|<model_id>"`
+    for per-phase metrics, `"__global__|<model_id>"` for per-milestone.
+    Operators can use this to filter alerts to the current model.
+    """
+
+    EVENT_TYPE: ClassVar[str] = "drift_detected"
+    milestone: str = ""
+    metric: str = (
+        ""  # cost_usd / duration_ms / cache_hit_rate / gap_attrition_pct / strict_iterations
+    )
+    aggregation: str = ""  # per_phase | per_milestone
+    bucket: str = ""  # phase|model_id  or  __global__|model_id
+    value: float = 0.0  # observed value
+    baseline_n: int = 0  # sample count backing the baseline
+    baseline_mean: float = 0.0  # mean in original units (de-logged for cost/duration)
+    baseline_sigma: float = 0.0
+    z_score: float = 0.0  # signed (positive = higher than baseline)
+    severity: str = "ok"  # info | warn | critical
+    direction: str = "neutral"  # high | low | neutral
+    recommendation: str = ""
+
+
+@dataclass
 class BudgetAlert(TelemetryEvent):
     """v1.1.9.1 / v1.3.17 — budget threshold crossing.
 
