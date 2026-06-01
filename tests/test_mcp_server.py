@@ -59,8 +59,8 @@ def _make_project(tmp_path: Path, *, with_state: bool = True) -> Path:
 
 
 class TestToolCatalog:
-    """Lock the v1 tool surface — adding/removing tools requires explicit
-    change to this test."""
+    """Lock the v1.3.0 tool surface — adding/removing tools requires
+    explicit change to this test."""
 
     EXPECTED_NAMES = {
         "sw_status",
@@ -70,11 +70,12 @@ class TestToolCatalog:
         "sw_estimate",
         "sw_gap_report",
         "sw_doctor",
+        "sw_run_milestone",
     }
 
-    def test_catalog_lists_exactly_seven_tools(self):
+    def test_catalog_lists_exactly_eight_tools(self):
         defs = _tool_definitions()
-        assert len(defs) == 7, f"Expected 7 tools; got {len(defs)}"
+        assert len(defs) == 8, f"Expected 8 tools; got {len(defs)}"
 
     def test_catalog_names_match_expected(self):
         defs = _tool_definitions()
@@ -83,15 +84,35 @@ class TestToolCatalog:
             f"Tool name set drifted. Expected {self.EXPECTED_NAMES}, got {actual}"
         )
 
-    def test_sw_run_milestone_not_in_v1(self):
-        """Side-effecting tool deferred per adversarial Verdict 1
-        (dry_run default-true, confirm_token, max_cost_usd gates needed)."""
+    def test_sw_run_milestone_is_in_catalog(self):
+        """Task A1: sw_run_milestone now shipped with safety gates."""
         defs = _tool_definitions()
         names = {t.name for t in defs}
-        assert "sw_run_milestone" not in names, (
-            "sw_run_milestone must NOT ship in v1 — adversarial review "
-            "flagged safety gates that need to land first."
+        assert "sw_run_milestone" in names
+
+    def test_sw_run_milestone_dry_run_defaults_to_true(self):
+        """Verdict 1 — dry_run MUST default to true. A side-effecting
+        money-spending tool that defaults to executing is unsafe."""
+        defs = _tool_definitions()
+        run_tool = next(t for t in defs if t.name == "sw_run_milestone")
+        dry_run_prop = run_tool.inputSchema["properties"]["dry_run"]
+        assert dry_run_prop["default"] is True, (
+            "sw_run_milestone.dry_run.default MUST be true — Verdict 1 safety invariant."
         )
+
+    def test_sw_run_milestone_has_max_cost_usd_arg(self):
+        """Verdict 1 — max_cost_usd cap required."""
+        defs = _tool_definitions()
+        run_tool = next(t for t in defs if t.name == "sw_run_milestone")
+        assert "max_cost_usd" in run_tool.inputSchema["properties"], (
+            "sw_run_milestone must accept max_cost_usd to bound blast radius."
+        )
+
+    def test_sw_run_milestone_has_allow_expensive_models_arg(self):
+        """Verdict 1 — opus must be explicitly gated."""
+        defs = _tool_definitions()
+        run_tool = next(t for t in defs if t.name == "sw_run_milestone")
+        assert "allow_expensive_models" in run_tool.inputSchema["properties"]
 
     def test_every_tool_has_valid_input_schema(self):
         defs = _tool_definitions()
@@ -422,6 +443,233 @@ class TestUnknownTool:
     def test_unknown_tool_raises(self):
         with pytest.raises(ValueError, match="Unknown tool"):
             dispatch_tool("nonexistent_tool", {})
+
+
+# ---- optional mcp dependency ----
+
+
+# ---- sw_run_milestone safety gates (Verdict 1 + Verdict 2) ----
+
+
+class TestSwRunMilestoneDryRun:
+    """Verdict 1 — dry_run defaults to true; preview never executes."""
+
+    def test_no_args_returns_preview(self, tmp_path):
+        proj = _make_project(tmp_path)
+        result = dispatch_tool("sw_run_milestone", {"project_dir": str(proj)})
+        assert result["status"] == "preview"
+        assert result["dry_run"] is True
+        # Preview includes the estimate.
+        assert "estimate" in result
+        # And the next-action descriptor so Claude can teach the user.
+        assert result["next_action_to_execute"]["args"]["dry_run"] is False
+
+    def test_explicit_dry_run_true_returns_preview(self, tmp_path):
+        proj = _make_project(tmp_path)
+        result = dispatch_tool("sw_run_milestone", {"project_dir": str(proj), "dry_run": True})
+        assert result["status"] == "preview"
+
+    def test_dry_run_does_not_spawn_subprocess(self, tmp_path, monkeypatch):
+        """Critical safety invariant — dry_run path MUST NOT spawn `sw run`."""
+        proj = _make_project(tmp_path)
+        spawned: list = []
+
+        def fake_popen(*args, **kwargs):
+            spawned.append(args)
+            raise AssertionError("subprocess.Popen called during dry_run")
+
+        monkeypatch.setattr("subprocess.Popen", fake_popen)
+        dispatch_tool("sw_run_milestone", {"project_dir": str(proj)})
+        # If we got here, no spawn happened. (assert above would have raised.)
+        assert spawned == []
+
+
+class TestSwRunMilestoneCostCap:
+    """Verdict 1 — max_cost_usd cap rejects expensive runs."""
+
+    def test_cost_over_cap_rejected(self, tmp_path):
+        proj = _make_project(tmp_path)
+        # Add many milestones so estimate is high.
+        cfg_path = proj / ".claude" / "workflow.json"
+        cfg = json.loads(cfg_path.read_text())
+        cfg["milestones"] = [{"name": f"M{i}"} for i in range(50)]
+        cfg_path.write_text(json.dumps(cfg))
+
+        result = dispatch_tool(
+            "sw_run_milestone",
+            {"project_dir": str(proj), "dry_run": False, "max_cost_usd": 0.01},
+        )
+        assert result["status"] == "rejected"
+        assert "max_cost_usd" in result["reason"]
+
+    def test_dry_run_not_rejected_by_cost_cap(self, tmp_path):
+        """Cost cap only gates ACTUAL execution. Dry-run preview always works."""
+        proj = _make_project(tmp_path)
+        cfg_path = proj / ".claude" / "workflow.json"
+        cfg = json.loads(cfg_path.read_text())
+        cfg["milestones"] = [{"name": f"M{i}"} for i in range(50)]
+        cfg_path.write_text(json.dumps(cfg))
+
+        result = dispatch_tool(
+            "sw_run_milestone",
+            {"project_dir": str(proj), "dry_run": True, "max_cost_usd": 0.01},
+        )
+        assert result["status"] == "preview"
+
+
+class TestSwRunMilestoneModelGating:
+    """Verdict 1 — opus model requires explicit allow_expensive_models=true."""
+
+    def test_opus_without_allow_flag_rejected(self, tmp_path):
+        proj = _make_project(tmp_path)
+        result = dispatch_tool(
+            "sw_run_milestone",
+            {
+                "project_dir": str(proj),
+                "dry_run": False,
+                "model_override": "opus",
+            },
+        )
+        assert result["status"] == "rejected"
+        assert "opus" in result["reason"]
+        assert "allow_expensive_models" in result["reason"]
+
+    def test_opus_with_allow_flag_passes_gating(self, tmp_path):
+        proj = _make_project(tmp_path)
+        result = dispatch_tool(
+            "sw_run_milestone",
+            {
+                "project_dir": str(proj),
+                "dry_run": True,  # still dry-run for test safety
+                "model_override": "opus",
+                "allow_expensive_models": True,
+            },
+        )
+        # Gating cleared → falls through to preview path.
+        assert result["status"] == "preview"
+
+    def test_sonnet_does_not_need_allow_flag(self, tmp_path):
+        proj = _make_project(tmp_path)
+        result = dispatch_tool(
+            "sw_run_milestone",
+            {
+                "project_dir": str(proj),
+                "dry_run": True,
+                "model_override": "sonnet",
+            },
+        )
+        assert result["status"] == "preview"
+
+
+class TestSwRunMilestoneLockHeld:
+    """Verdict 2 — fail fast when .workflow.lock is held."""
+
+    def test_active_lock_returns_lock_held(self, tmp_path):
+        proj = _make_project(tmp_path)
+        import time
+
+        lock_meta = proj / ".claude" / ".workflow.lock.json"
+        lock_meta.write_text(
+            json.dumps(
+                {
+                    "pid": 99999,
+                    "hostname": "test-host",
+                    "last_heartbeat": time.time(),
+                }
+            )
+        )
+        result = dispatch_tool("sw_run_milestone", {"project_dir": str(proj)})
+        assert result["status"] == "lock_held"
+        assert result["lock_holder_pid"] == 99999
+        # Last heartbeat very recent.
+        assert result["last_heartbeat_age_seconds"] < 5
+
+    def test_stale_lock_not_treated_as_held(self, tmp_path):
+        """A stale lock (heartbeat older than HEARTBEAT_STALE_SECONDS)
+        does NOT block — Verdict 2 says user can recover via force-clean."""
+        proj = _make_project(tmp_path)
+        lock_meta = proj / ".claude" / ".workflow.lock.json"
+        lock_meta.write_text(
+            json.dumps(
+                {
+                    "pid": 99999,
+                    "hostname": "test-host",
+                    "last_heartbeat": 0,  # epoch 0 = very stale
+                }
+            )
+        )
+        result = dispatch_tool("sw_run_milestone", {"project_dir": str(proj)})
+        # Stale lock skipped — falls through to preview path.
+        assert result["status"] == "preview"
+
+
+class TestSwRunMilestoneErrorTranslation:
+    """Verdict 2 — ConfigError / file errors return structured responses,
+    not raised exceptions."""
+
+    def test_missing_workflow_json_returns_rejected(self, tmp_path):
+        # Project dir exists but no .claude/workflow.json.
+        (tmp_path / ".claude").mkdir()
+        result = dispatch_tool("sw_run_milestone", {"project_dir": str(tmp_path)})
+        assert result["status"] == "rejected"
+        assert "workflow.json not found" in result["reason"]
+
+    def test_corrupt_workflow_json_returns_spawn_failed(self, tmp_path):
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / "workflow.json").write_text("{ broken json")
+        result = dispatch_tool("sw_run_milestone", {"project_dir": str(tmp_path)})
+        assert result["status"] == "spawn_failed"
+        assert "workflow.json" in result["error"]
+
+
+class TestSwRunMilestoneRealExecution:
+    """Test the spawn path with subprocess.Popen mocked — verifies the
+    correct command is constructed without actually running sw."""
+
+    def test_spawns_sw_run_with_milestone_flag(self, tmp_path, monkeypatch):
+        proj = _make_project(tmp_path)
+        spawned: list = []
+
+        class FakeProc:
+            pid = 12345
+
+        def fake_popen(cmd, **kwargs):
+            spawned.append((cmd, kwargs))
+            return FakeProc()
+
+        monkeypatch.setattr("subprocess.Popen", fake_popen)
+        result = dispatch_tool(
+            "sw_run_milestone",
+            {
+                "project_dir": str(proj),
+                "dry_run": False,
+                "milestone": "M1",
+                "max_cost_usd": 1000.0,  # large enough to clear the estimator cap
+            },
+        )
+        assert result["status"] == "started"
+        assert result["pid"] == 12345
+        assert "--milestone" in spawned[0][0]
+        assert "M1" in spawned[0][0]
+
+    def test_spawn_oserror_returns_spawn_failed(self, tmp_path, monkeypatch):
+        proj = _make_project(tmp_path)
+
+        def fake_popen(*args, **kwargs):
+            raise OSError("fork failed")
+
+        monkeypatch.setattr("subprocess.Popen", fake_popen)
+        result = dispatch_tool(
+            "sw_run_milestone",
+            {
+                "project_dir": str(proj),
+                "dry_run": False,
+                "max_cost_usd": 1000.0,
+            },
+        )
+        assert result["status"] == "spawn_failed"
+        assert "fork failed" in result["error"]
 
 
 # ---- optional mcp dependency ----

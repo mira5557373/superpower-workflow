@@ -192,6 +192,67 @@ def _tool_definitions() -> list[Tool]:
                 "required": [],
             },
         ),
+        Tool(
+            name="sw_run_milestone",
+            description=(
+                "SIDE-EFFECTING. Execute one or more milestones via the orchestrator. "
+                "DEFAULTS to dry_run=true (returns a preview); set dry_run=false to "
+                "actually spawn `sw run`. Hard-capped by max_cost_usd (default 5.0) "
+                "and requires allow_expensive_models=true to use opus. Returns "
+                "{status: 'preview'|'started'|'lock_held'|'rejected'|'spawn_failed'} "
+                "with structured detail. The user can poll sw_status to track progress "
+                "of a 'started' run."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "milestone": {
+                        "type": "string",
+                        "description": (
+                            "Milestone name to run (e.g. M3). Omit to run all "
+                            "configured milestones."
+                        ),
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": (
+                            "DEFAULTS TO TRUE for safety. Set false to actually "
+                            "execute. Verdict 1 from the design review: a side-"
+                            "effecting money-spending tool must NEVER default to "
+                            "executing."
+                        ),
+                    },
+                    "max_cost_usd": {
+                        "type": "number",
+                        "default": 5.0,
+                        "description": (
+                            "Hard per-invocation cost cap. The tool rejects "
+                            "execution if the estimator's pessimistic cost exceeds "
+                            "this. Defaults to a conservative $5; raise explicitly "
+                            "for larger milestones."
+                        ),
+                    },
+                    "model_override": {
+                        "type": "string",
+                        "description": (
+                            "Override the configured model (sonnet/haiku/opus). "
+                            "model_override='opus' requires allow_expensive_models=true."
+                        ),
+                    },
+                    "allow_expensive_models": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "Required to allow model_override='opus' (which is "
+                            "10x+ more expensive than haiku/sonnet)."
+                        ),
+                    },
+                    "project_dir": project_dir_prop,
+                },
+                "required": [],
+            },
+        ),
     ]
 
 
@@ -479,6 +540,183 @@ def _handle_sw_doctor(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _lock_status(claude_dir: Path) -> dict[str, Any] | None:
+    """Check .workflow.lock + .workflow.lock.json. Return a `lock_held`
+    response dict if the lock is held by a live process; None otherwise.
+
+    A stale lock (heartbeat older than HEARTBEAT_STALE_SECONDS) is
+    treated as NOT held — the user can recover via `sw lock force-clean`.
+    """
+    from superpower_workflow.state import HEARTBEAT_STALE_SECONDS
+
+    lock_meta = claude_dir / ".workflow.lock.json"
+    if not lock_meta.exists():
+        return None
+    try:
+        meta = json.loads(lock_meta.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    import time
+
+    last_heartbeat = meta.get("last_heartbeat", 0)
+    if not isinstance(last_heartbeat, (int, float)):
+        return None
+    if time.time() - last_heartbeat > HEARTBEAT_STALE_SECONDS:
+        # Stale lock — caller should `sw lock force-clean`.
+        return None
+
+    return {
+        "status": "lock_held",
+        "lock_holder_pid": meta.get("pid"),
+        "lock_holder_hostname": meta.get("hostname"),
+        "last_heartbeat_age_seconds": round(time.time() - last_heartbeat, 1),
+        "message": (
+            "Another sw run is in progress. Wait for it to finish, or run "
+            "`sw lock status` to inspect (and `sw lock force-clean` if it's stale)."
+        ),
+    }
+
+
+def _handle_sw_run_milestone(args: dict[str, Any]) -> dict[str, Any]:
+    """SIDE-EFFECTING. Validate safety gates, then either preview (dry_run)
+    or spawn `sw run --milestone <name>` as a detached subprocess.
+
+    Per the adversarial review's Verdict 1, this tool:
+    - Defaults dry_run=true (NEVER executes by default).
+    - Hard-caps cost via max_cost_usd (default $5).
+    - Gates model_override='opus' behind allow_expensive_models=true.
+
+    Per Verdict 2:
+    - Returns status='lock_held' if .workflow.lock is currently held
+      (does NOT block).
+    - Translates ConfigError / file-read errors to structured
+      {status: 'spawn_failed', error: '...'} responses (no stack
+      traces leak).
+    """
+    project = _resolve_project_dir(args)
+    claude_dir = project / ".claude"
+
+    # 1. Lock check (Verdict 2).
+    lock_held = _lock_status(claude_dir)
+    if lock_held is not None:
+        return lock_held
+
+    # 2. Resolve config + safety gates (Verdict 1).
+    cfg_path = claude_dir / "workflow.json"
+    if not cfg_path.exists():
+        return {
+            "status": "rejected",
+            "reason": f"workflow.json not found at {cfg_path}. Run `sw init` first.",
+        }
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        return {"status": "spawn_failed", "error": f"failed to parse workflow.json: {exc}"}
+
+    milestone = (args or {}).get("milestone")
+    dry_run = bool((args or {}).get("dry_run", True))
+    max_cost_usd = float((args or {}).get("max_cost_usd", 5.0))
+    model_override = (args or {}).get("model_override")
+    allow_expensive = bool((args or {}).get("allow_expensive_models", False))
+
+    # 3. Model gating.
+    if model_override == "opus" and not allow_expensive:
+        return {
+            "status": "rejected",
+            "reason": (
+                "model_override='opus' is gated. Opus is the most expensive "
+                "model — explicitly pass allow_expensive_models=true if you "
+                "intend the 10x cost vs haiku/sonnet."
+            ),
+        }
+
+    # 4. Cost estimation + cap.
+    from superpower_workflow.estimator import estimate
+
+    est = estimate(cfg, project)
+    est_pessimistic = est.get("cost_pessimistic", 0.0)
+    if not dry_run and est_pessimistic > max_cost_usd:
+        return {
+            "status": "rejected",
+            "reason": (
+                f"Estimated pessimistic cost ${est_pessimistic:.2f} exceeds "
+                f"max_cost_usd cap of ${max_cost_usd:.2f}. Either raise "
+                f"max_cost_usd or run with dry_run=true to preview."
+            ),
+            "estimate": est,
+        }
+
+    # 5. Dry-run preview.
+    if dry_run:
+        return {
+            "status": "preview",
+            "dry_run": True,
+            "milestone": milestone,
+            "model_override": model_override,
+            "estimate": est,
+            "next_action_to_execute": {
+                "tool": "sw_run_milestone",
+                "args": {
+                    "milestone": milestone,
+                    "dry_run": False,
+                    "max_cost_usd": max(est_pessimistic, max_cost_usd),
+                    **(
+                        {
+                            "model_override": model_override,
+                            "allow_expensive_models": allow_expensive,
+                        }
+                        if model_override
+                        else {}
+                    ),
+                },
+            },
+            "warning": (
+                "This is a PREVIEW. To actually execute, call this tool again "
+                "with dry_run=false (and bump max_cost_usd if needed)."
+            ),
+        }
+
+    # 6. Real execution — spawn detached subprocess.
+    import shlex
+    import subprocess
+    import sys
+
+    cmd: list[str] = [sys.executable, "-m", "superpower_workflow.cli", "run"]
+    if milestone:
+        cmd.extend(["--milestone", milestone])
+    if model_override:
+        cmd.extend(["--model", model_override])
+
+    try:
+        proc = subprocess.Popen(  # noqa: S603 — args constructed, not shell
+            cmd,
+            cwd=str(project),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        return {"status": "spawn_failed", "error": str(exc)}
+
+    return {
+        "status": "started",
+        "pid": proc.pid,
+        "cmd": " ".join(shlex.quote(c) for c in cmd),
+        "project_dir": str(project),
+        "milestone": milestone,
+        "model_override": model_override,
+        "estimated_cost_usd": est_pessimistic,
+        "max_cost_usd": max_cost_usd,
+        "next_action_to_inspect": {
+            "tool": "sw_status",
+            "args": {"project_dir": str(project)},
+            "note": "Poll sw_status to track progress; sw_recent_runs once complete.",
+        },
+    }
+
+
 # Tool name → handler dispatch table.
 _TOOL_HANDLERS = {
     "sw_status": _handle_sw_status,
@@ -488,6 +726,7 @@ _TOOL_HANDLERS = {
     "sw_estimate": _handle_sw_estimate,
     "sw_gap_report": _handle_sw_gap_report,
     "sw_doctor": _handle_sw_doctor,
+    "sw_run_milestone": _handle_sw_run_milestone,
 }
 
 
