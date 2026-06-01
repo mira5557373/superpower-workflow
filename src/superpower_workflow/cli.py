@@ -162,6 +162,15 @@ def build_parser() -> argparse.ArgumentParser:
     sig_p.add_argument("tag", help="Git tag to verify")
     sig_p.add_argument("--public-key", help="Ed25519 public key (hex)")
 
+    sub.add_parser(
+        "mcp-server",
+        help=(
+            "Run the sw MCP server over stdio. Launched by Claude Code "
+            "via .mcp.json; surfaces 7 read-only tools for inspecting "
+            "workflow state, metrics, gap reports, and pre-flight health."
+        ),
+    )
+
     run_p = sub.add_parser("run", help="Execute milestones")
     run_p.add_argument("--milestone", help="Run a specific milestone")
     run_p.add_argument("--from", dest="from_ms", help="Start from milestone")
@@ -1719,6 +1728,12 @@ def main() -> None:
 
     if args.command == "resume":
         _cmd_resume(project_root)
+        return
+
+    if args.command == "mcp-server":
+        from superpower_workflow.mcp_server import main as mcp_main
+
+        mcp_main()
         return
 
     if args.command == "bootstrap":
