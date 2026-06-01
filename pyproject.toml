@@ -23,6 +23,7 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.5",
     "httpx>=0.24",
+    "mcp>=1.0",
 ]
 security = [
     "cryptography>=42.0",
