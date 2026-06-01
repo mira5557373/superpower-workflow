@@ -652,9 +652,18 @@ Net **+1100** spread across phases/, quality_gates.py, plugins/.
 - Intelligence layer (v1.4.0) — needs phase classes as first-class
   nouns before model-routing decisions can hang off them. Blocked on
   this release.
-- MCP server + memory.py + cost-alert/quality-gate hooks (v1.3.0
-  remainder) — blocked on this release (hooks specifically want
-  stable phase-class extension points).
+- MCP server + cost-alert/quality-gate hooks (v1.3.0 remainder) —
+  blocked on this release (hooks specifically want stable phase-class
+  extension points).
+- **memory.py — DESCOPED.** The v1.3.0 plan called for a `memory.py`
+  module to distill milestone learnings into cross-session memory.
+  After review, [claude-mem](https://github.com/thedotmack/claude-mem)
+  fulfills this need natively (5 lifecycle hooks, SQLite + Chroma
+  vector DB, MCP tools + HTTP API + web UI, project-scoped). sw's
+  `memory.py` would duplicate that with less integration depth.
+  Users wanting structured sw-run summaries in claude-mem can add a
+  thin ~30-line adapter that calls claude-mem's MCP `write_observation`
+  after milestone completion. Not a module in sw.
 - Complexity-ceiling ratchet from (510, 50, 7) toward (100, 15, 4)
   globally — Task 10 only checks `phases/` against (100, 15, 4); the
   monolith ceiling stays grandfathered to avoid scope creep.
