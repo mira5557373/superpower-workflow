@@ -3,6 +3,127 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.16] — 2026-06-01
+
+**v1.3.0 remainder — MCP server + hooks shipped, memory.py descoped.**
+CHANGELOG line 1133 (v1.3.0) self-described as a SKELETON release with
+the MCP server, memory module, and cost-alert/quality-gate hooks all
+deferred. v1.3.16 closes those admissions across 4 sequential tasks.
+
+### New MCP server (Task A + A1)
+
+`src/superpower_workflow/mcp_server.py` exposes sw operations to Claude
+Code sessions via the stdio MCP transport. Launched by Claude Code as
+a child process per session.
+
+**8 tools (7 read-only + 1 side-effecting with safety gates):**
+
+| Tool | Side-effecting | What |
+|---|---|---|
+| `sw_status` | no | Current workflow state, cost, run_id |
+| `sw_recent_runs` | no | Last N runs from telemetry |
+| `sw_milestone_detail` | no | Per-phase status + latest gap counts |
+| `sw_metrics` | no | Aggregate cost by phase/milestone |
+| `sw_estimate` | no | Pre-run cost + duration projection |
+| `sw_gap_report` | no | Gap report counts (optional raw findings) |
+| `sw_doctor` | no | Pre-flight health checks |
+| `sw_run_milestone` | **YES** | Spawn `sw run` with safety gates |
+
+**Design provenance**: 6-agent ultracode workflow (3 parallel surveys
++ synthesizer + 2 adversarial verifiers). Both verifiers flagged HIGH
+safety findings on the side-effecting tool; both are addressed by
+explicit gates baked into Task A1.
+
+**Safety gates on `sw_run_milestone`** (Verdict 1 + 2):
+- `dry_run` defaults to **true** — a side-effecting money-spending tool
+  must NEVER execute by default.
+- `max_cost_usd` cap (default $5) — estimator's pessimistic cost
+  rejected if it exceeds the cap.
+- `allow_expensive_models=true` required to use `model_override='opus'`
+  (10x+ cost vs haiku/sonnet).
+- `.workflow.lock` held → status='lock_held' with pid + heartbeat age,
+  does NOT block. Stale locks treated as not held; user recovers via
+  `sw lock force-clean`.
+- Error translation: workflow.json missing/corrupt → structured
+  `{status: 'rejected'|'spawn_failed', reason/error: ...}`, no stack
+  traces leak.
+
+**Trust model**: stdio is private to the spawning Claude Code session;
+process runs as invoking user; authorization derives from filesystem
+permissions. No network listener, no token. Path traversal sanitised
+in `sw_gap_report` arg handling.
+
+**Wire-up** (project `.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "sw": {
+      "type": "stdio",
+      "command": "sw",
+      "args": ["mcp-server"],
+      "env": {"CLAUDE_PROJECT_DIR": "${CLAUDE_PROJECT_DIR:-.}"}
+    }
+  }
+}
+```
+
+The `mcp` Python SDK is an optional dependency — `sw mcp-server`
+raises a friendly error pointing at `pip install
+superpower-workflow[mcp]` if absent.
+
+### Cost-alert + quality-gate hooks (Task B)
+
+Two new Claude Code Stop-style hooks in `src/superpower_workflow/hooks/`:
+
+- **`cost_alert_hook.py`**: reads workflow-state + workflow.json,
+  warns when `total_cost_usd` exceeds `max_total_budget_usd * threshold`
+  (default 75%, env-overridable). Uses ⚡ at threshold, ⚠️ at/over cap.
+- **`quality_gate_hook.py`**: reads `.quality-gate-results.json`, lists
+  failed gates with per-gate remediation hints. Truncates per-gate
+  detail to 160 chars.
+
+Both hooks are non-blocking and non-throwing — even on corrupt state
+files they silently no-op (a Claude Code session must never break
+because a sw hook had a bad day).
+
+### Descope: memory.py (Task C)
+
+The v1.3.0 plan called for a `memory.py` module to distill milestone
+learnings into cross-session memory. After review,
+[claude-mem](https://github.com/thedotmack/claude-mem) fulfills this
+natively with 5 lifecycle hooks, SQLite + Chroma vector DB, MCP tools
++ HTTP API + web UI, project-scoped storage. sw's `memory.py` would
+duplicate that with less integration depth.
+
+Users wanting structured sw-run summaries in claude-mem can add a
+~30-line adapter that calls claude-mem's MCP `write_observation`
+after milestone completion — not a module.
+
+### Stats
+
+- **Test count: 1596 → 1656** (+60 across 4 tasks):
+  - +28 MCP server (7 read-only tools + safety gates + catalog)
+  - +17 MCP `sw_run_milestone` (Verdict 1 + 2 invariants)
+  - +15 hooks (cost-alert + quality-gate)
+- New: `src/superpower_workflow/mcp_server.py` (~700 lines incl. handlers).
+- New: `src/superpower_workflow/hooks/cost_alert_hook.py` (~100 lines).
+- New: `src/superpower_workflow/hooks/quality_gate_hook.py` (~90 lines).
+- New: `[mcp]` optional dependency group (`mcp>=1.0`).
+- New: `sw mcp-server` CLI subcommand.
+- Ruff + format clean across all 4 commits.
+
+### Out-of-scope (still deferred)
+
+- Async progress notifications for long `sw_run_milestone` invocations
+  (currently spawns detached subprocess + user polls `sw_status`;
+  upgrading to MCP `notifications/progress` is a v1.3.0.x patch).
+- Integration tests that spawn the MCP server as a subprocess and
+  drive it via JSON-RPC over stdin/stdout (current tests pin the
+  dispatch contract directly via `dispatch_tool()`).
+- HTTP transport for MCP (stdio only in v1; matches Claude Code's
+  native launcher pattern).
+
 ## [1.3.15] — 2026-06-01
 
 **v1.2.0-real refactor — the Phase A/B/C/D/E class extraction that v1.2.0
