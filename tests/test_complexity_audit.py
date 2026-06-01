@@ -277,3 +277,90 @@ class TestComplexityAuditPassesAtV120Ceilings:
         assert result.returncode == 0
         assert "Functions audited" in result.stdout
         assert "Top 10" in result.stdout
+
+
+class TestPhasesPackageClearsV2Targets:
+    """v1.2.0-real Task 10 — every module under src/superpower_workflow/phases/
+    must clear the v2.0.0 complexity targets (100 lines, cc 15, nesting 4).
+
+    The v1.3.x audit's HIGH adversarial verdict said: "Replace [the global
+    ratchet] with a NEW assertion in test_complexity_audit.py: every file
+    under src/superpower_workflow/phases/ must clear v1.2.1 targets
+    (100, 15, 4). This locks in the de-complexification gain rather than
+    silently grandfathering new files at lax ceilings."
+
+    Pinned here. A new phase module that breaches any target fails this
+    test; the monolithic orchestrator.py stays grandfathered at the
+    global ceiling because it's a larger refactor target than this
+    release.
+    """
+
+    PHASE_DIR_REL = Path("src") / "superpower_workflow" / "phases"
+
+    V2_MAX_LINES = 100
+    V2_MAX_CC = 15
+    V2_MAX_NESTING = 4
+
+    def setup_method(self):
+        self.audit = _load_audit_module()
+        self.repo_root = Path(__file__).resolve().parent.parent
+        self.phases_dir = self.repo_root / self.PHASE_DIR_REL
+
+    def _audit_phases(self) -> list[dict]:
+        """Audit every function/method under phases/."""
+        all_metrics: list[dict] = []
+        for py in sorted(self.phases_dir.rglob("*.py")):
+            if "__pycache__" in py.parts:
+                continue
+            all_metrics.extend(self.audit.audit_file(py))
+        return all_metrics
+
+    def test_phases_dir_exists_and_is_non_empty(self):
+        assert self.phases_dir.exists(), (
+            f"phases/ directory missing: {self.phases_dir}. "
+            f"This test is a guardrail for the v1.2.0-real refactor — "
+            f"if phases/ was deleted, the refactor regressed."
+        )
+        metrics = self._audit_phases()
+        assert len(metrics) >= 6, (
+            f"Expected >=6 phase functions (one run() per A/B/TbV/C/D/E "
+            f"plus PhaseBase helpers); got {len(metrics)}. Probably a "
+            f"directory restructure or import regression."
+        )
+
+    def test_every_phase_function_clears_v2_targets(self):
+        """No function under phases/ may exceed (100 lines, cc 15, nest 4).
+
+        Surfaces violators in the failure message so a CI fail shows
+        exactly which method needs attention.
+        """
+        metrics = self._audit_phases()
+        violations: list[str] = []
+        for m in metrics:
+            reasons: list[str] = []
+            if m["lines"] > self.V2_MAX_LINES:
+                reasons.append(f"lines={m['lines']} (max {self.V2_MAX_LINES})")
+            if m["cc"] > self.V2_MAX_CC:
+                reasons.append(f"cc={m['cc']} (max {self.V2_MAX_CC})")
+            if m["nesting"] > self.V2_MAX_NESTING:
+                reasons.append(f"nest={m['nesting']} (max {self.V2_MAX_NESTING})")
+            if reasons:
+                violations.append(
+                    f"  {m['file']}:{m['lineno']}  {m['name']}  ({', '.join(reasons)})"
+                )
+        assert not violations, (
+            f"\n{len(violations)} phase function(s) breach the v2.0.0 "
+            f"targets ({self.V2_MAX_LINES} lines, cc {self.V2_MAX_CC}, "
+            f"nesting {self.V2_MAX_NESTING}):\n"
+            + "\n".join(violations)
+            + "\n\nNew phase code must clear these targets. The legacy "
+            "orchestrator.py stays grandfathered at the global ceiling."
+        )
+
+    def test_audit_module_can_audit_phases_dir(self):
+        """Smoke: phase modules import cleanly and the audit walks them."""
+        metrics = self._audit_phases()
+        # Sanity — every Phase class should have at least one method audited.
+        names = {m["name"] for m in metrics}
+        # `run` is on every Phase subclass.
+        assert "run" in names, f"No `run` method found in phase audit; got names={names}"

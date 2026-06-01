@@ -68,7 +68,7 @@ class PhaseE(PhaseBase):
     def run(self, ctx: PhaseContext) -> PhaseResult:
         events: list[str] = []
 
-        # 0. Short-circuit if CI not enabled — driver always calls, helper gates.
+        # Short-circuit if CI not enabled — driver always calls, helper gates.
         ci_config = self.orc._integrations.get("ci", {})
         if not ci_config.get("enabled", False):
             return PhaseResult(
@@ -81,26 +81,39 @@ class PhaseE(PhaseBase):
                 extras={"ci_success": True, "ci_enabled": False},
             )
 
-        # 1. state="ci_wait" → save_state. Per Finding 1 verdict point 3,
-        # PhaseStarted is emitted at "ci_wait" current_step, NOT "ci_fix".
+        # Two-step state transition: ci_wait → save → log → emit
+        # PhaseStarted → ci_fix → save. Finding 1 verdict point 3 —
+        # PhaseStarted emits while state="ci_wait", NOT "ci_fix".
         self.orc.state.current_step = "ci_wait"
         save_state(self.orc._state_dir, self.orc.state)
-
-        # 2. Log PHASE_E_START.
         ctx.logger.log("PHASE_E_START")
-
-        # 3. Emit PhaseStarted (with phase="ci_fix" payload — matches
-        # original line 1483 which uses phase="ci_fix" not "ci_wait").
         self.orc._telemetry.emit(PhaseStarted(milestone=ctx.milestone_name, phase=self.name))
         events.append("PhaseStarted")
-
-        # 4. NOW transition to "ci_fix" + save. The two-step transition
-        # is intentional — telemetry consumers see PhaseStarted at
-        # "ci_wait", then "ci_fix" persists right after.
         self.orc.state.current_step = "ci_fix"
         save_state(self.orc._state_dir, self.orc.state)
 
-        # 5. CI attempt notification callback.
+        ci_success, ci_cost, ci_tokens = self._run_ci_fix_loop(ctx, ci_config)
+        # v1.3.4 #15 retry safety holds at the loop boundary only —
+        # mid-loop crashes drop partial cost. Same pattern as strict-mode.
+        self.orc._accumulate_cost(0.0, ci_cost)
+
+        self._emit_ci_completion(ctx, ci_success, ci_cost, ci_tokens)
+        events.append("PhaseCompleted")
+
+        return PhaseResult(
+            phase=self.name,
+            cost_usd=ci_cost,
+            duration_ms=0,
+            session_id="",
+            tokens=ci_tokens,
+            events_emitted=events,
+            extras={"ci_success": ci_success, "ci_enabled": True},
+        )
+
+    def _run_ci_fix_loop(self, ctx: PhaseContext, ci_config: dict):
+        """Invoke the ci_fix_loop helper with a notification callback.
+        Returns (ci_success, ci_cost, ci_tokens)."""
+
         def _on_ci_attempt(attempt: int, max_attempts: int, status: str) -> None:
             self.orc._notify(
                 "ci_fix",
@@ -112,8 +125,7 @@ class PhaseE(PhaseBase):
                 },
             )
 
-        # 6. CI fix loop — returns (success, aggregate_cost, aggregate_tokens).
-        ci_success, ci_cost, ci_tokens = ci_fix_loop(
+        return ci_fix_loop(
             cwd=self.orc.cwd,
             ci_config=ci_config,
             run_claude_fn=self.orc._run_claude,
@@ -123,12 +135,18 @@ class PhaseE(PhaseBase):
             on_attempt=_on_ci_attempt,
         )
 
-        # 7. Charge aggregate cost. v1.3.4 #15 retry safety holds at the
-        # loop boundary only — mid-loop crashes drop partial cost.
-        # Matches strict-mode loop pattern from PhaseC.
-        self.orc._accumulate_cost(0.0, ci_cost)
-
-        # 8. Log completion + transition state on failure.
+    def _emit_ci_completion(
+        self,
+        ctx: PhaseContext,
+        ci_success: bool,
+        ci_cost: float,
+        ci_tokens: dict,
+    ) -> None:
+        """Log + state transition (on failure) + emit PhaseCompleted +
+        audit. Unique to PhaseE because cost_usd is round(ci_cost, 2),
+        duration_ms=0, session_id="", and the audit payload includes
+        a ci_success bool. No _call_post_phase — preserved verbatim.
+        """
         if ci_success:
             ctx.logger.log("PHASE_E_COMPLETE", status="passed", cost=round(ci_cost, 2))
         else:
@@ -136,9 +154,6 @@ class PhaseE(PhaseBase):
             save_state(self.orc._state_dir, self.orc.state)
             ctx.logger.log("PHASE_E_COMPLETE", status="failed", cost=round(ci_cost, 2))
 
-        # 9. PhaseCompleted — uses round(ci_cost, 2) in cost_usd (NOT
-        # the unrounded value other phases use). duration_ms=0,
-        # session_id="" since there's no single primary call.
         self.orc._telemetry.emit(
             PhaseCompleted(
                 milestone=ctx.milestone_name,
@@ -149,27 +164,9 @@ class PhaseE(PhaseBase):
                 **ci_tokens,
             )
         )
-        events.append("PhaseCompleted")
-
-        # 10. Audit. Includes ci_success bool in data — distinct from
-        # other phases' audit payloads.
         self.orc._audit.append(
             "PHASE_COMPLETE",
             run_id=self.orc.state.run_id,
             milestone=ctx.milestone_name,
-            data={
-                "phase": "ci_fix",
-                "cost": round(ci_cost, 2),
-                "success": ci_success,
-            },
-        )
-
-        return PhaseResult(
-            phase=self.name,
-            cost_usd=ci_cost,
-            duration_ms=0,
-            session_id="",
-            tokens=ci_tokens,
-            events_emitted=events,
-            extras={"ci_success": ci_success, "ci_enabled": True},
+            data={"phase": "ci_fix", "cost": round(ci_cost, 2), "success": ci_success},
         )

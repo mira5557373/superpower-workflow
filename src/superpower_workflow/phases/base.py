@@ -131,3 +131,26 @@ class PhaseBase(ABC):
     def _call_post_phase(self, ctx: PhaseContext, cost: float) -> None:
         """Invoke plugin post_phase hooks with the realized cost."""
         self.orc._call_post_phase(self.name, ctx.milestone_dict, {"cost": cost})
+
+    def _emit_completion(
+        self,
+        ctx: PhaseContext,
+        r: ClaudeResult,
+        log_event: str | None = None,
+    ) -> None:
+        """Standard "primary cost only" completion emission: PhaseCompleted
+        telemetry + COMPLETE log line + audit append + post_phase hook.
+
+        Shared by PhaseA / PhaseB / PhaseC / PhaseD (all emit using
+        primary r.cost_usd, not the phase-total accumulator). PhaseE has
+        a different completion shape (rounded cost, no post_phase) and
+        does its emission inline.
+
+        Args:
+            log_event: the log event name to emit (defaults to
+                self.log_event_complete).
+        """
+        self._emit_phase_completed(ctx, r)
+        ctx.logger.log(log_event or self.log_event_complete, cost=round(r.cost_usd, 2))
+        self._audit_complete(ctx, r.cost_usd)
+        self._call_post_phase(ctx, r.cost_usd)

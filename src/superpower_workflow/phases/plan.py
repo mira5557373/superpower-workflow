@@ -124,14 +124,11 @@ class PhaseA(PhaseBase):
         # 10. Check result (may raise _PhaseError — cost is already in state).
         self.orc._check_phase_result(r, "Phase A")
 
-        # 11. PhaseCompleted emit + log + audit + post_phase hook.
-        #     Each of these uses r.cost_usd (primary only, NOT primary +
-        #     curator). The original orchestrator code does the same.
-        self._emit_phase_completed(ctx, r)
+        # 11. PhaseCompleted + log + audit + post_phase via shared
+        # helper. All four emit using r.cost_usd (primary only, NOT
+        # primary + curator) — original orchestrator code does the same.
+        self._emit_completion(ctx, r)
         events.append("PhaseCompleted")
-        ctx.logger.log("PHASE_A_COMPLETE", cost=round(r.cost_usd, 2))
-        self._audit_complete(ctx, r.cost_usd)
-        self._call_post_phase(ctx, r.cost_usd)
 
         # 12. Capture plan commit SHA + session_id, save state, tag.
         #     subprocess.run([git, rev-parse, HEAD], cwd=self.orc.cwd) →

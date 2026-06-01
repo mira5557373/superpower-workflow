@@ -96,12 +96,9 @@ class PhaseB(PhaseBase):
         # 8. Check result (may raise; cost already in state).
         self.orc._check_phase_result(r, "Phase B")
 
-        # 9. PhaseCompleted + log + audit + post_phase.
-        self._emit_phase_completed(ctx, r)
+        # 9. PhaseCompleted + log + audit + post_phase via shared helper.
+        self._emit_completion(ctx, r)
         events.append("PhaseCompleted")
-        ctx.logger.log("PHASE_B_COMPLETE", cost=round(r.cost_usd, 2))
-        self._audit_complete(ctx, r.cost_usd)
-        self._call_post_phase(ctx, r.cost_usd)
 
         # 10. Transition to quality_check_b + save.
         self.orc.state.current_step = "quality_check_b"

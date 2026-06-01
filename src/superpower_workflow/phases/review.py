@@ -69,14 +69,26 @@ class PhaseC(PhaseBase):
 
     def run(self, ctx: PhaseContext) -> PhaseResult:
         events: list[str] = []
+        r, curator_cost = self._run_review(ctx, events)
+        qg_cost, cov_cost, strict_cost = self._run_post_review_checks(ctx)
+        return PhaseResult(
+            phase=self.name,
+            cost_usd=r.cost_usd + curator_cost + qg_cost + cov_cost + strict_cost,
+            duration_ms=r.duration_ms,
+            session_id=r.session_id,
+            tokens=extract_token_usage(r.raw),
+            events_emitted=events,
+            extras={},
+        )
 
-        # 1. Plugin pre-phase hook.
+    def _run_review(self, ctx: PhaseContext, events: list[str]):
+        """Phase C primary review — claude call + curator + gap emission
+        + archive + check + completion emit. Mutates `events` in place.
+
+        Returns the primary ClaudeResult and the curator cost.
+        """
         self._call_pre_phase(ctx)
-
-        # 2. State transition + save (parent _state_dir).
         self._set_current_step(ctx, "review")
-
-        # 3. save_phase_state for convergence hook (worker-local).
         save_phase_state(
             self.orc.claude_dir,
             PhaseState(
@@ -84,15 +96,12 @@ class PhaseC(PhaseBase):
                 max_iterations=ctx.convergence.get("max_iterations", 5),
             ),
         )
-
-        # 4. Log + emit PhaseStarted.
         ctx.logger.log("PHASE_C_START")
         self._emit_phase_started(ctx)
         events.append("PhaseStarted")
 
-        # 5. Primary claude call — phase_c_prompt threads compliance +
-        # verification reports from PhaseTbV (via driver's
-        # ctx.update(**result.extras)).
+        # phase_c_prompt threads compliance + verification reports
+        # from PhaseTbV (via driver's ctx.update(**result.extras)).
         r = self.orc._run_claude(
             phase_c_prompt(
                 ctx.milestone_name,
@@ -111,47 +120,39 @@ class PhaseC(PhaseBase):
             system_prompt=self.orc.sys_prompt,
             fallback_model=ctx.fallback_model,
         )
-
-        # 6. ACC #1: charge primary cost BEFORE _check_phase_result
-        # (v1.3.4 #15 + v1.3.12).
+        # ACC #1 + #2: primary + curator BEFORE _check_phase_result
+        # (v1.3.4 #15 + v1.3.12). Order matches Phase A — gap emit
+        # also fires before the check.
         self.orc._accumulate_cost(0.0, r.cost_usd)
-
-        # 7. Curator pass (returns 0.0 if disabled).
         curator_cost = self.orc._run_gap_curator(ctx.milestone_name, "review")
-        # ACC #2: curator cost charged BEFORE _check_phase_result.
         self.orc._accumulate_cost(0.0, curator_cost)
 
-        # 8. Emit gap report + gap validation events (no-op if files absent).
-        # Order matches Phase A — gap emission happens BEFORE _check_phase_result.
         self.orc._emit_gap_report(ctx.milestone_name, "review")
         events.append("GapReport")
         self.orc._emit_gap_validation(ctx.milestone_name)
         events.append("GapValidationEvent")
 
-        # 9. Archive + clear worker-local phase state.
         archive_reports(self.orc.claude_dir, ctx.milestone_name, "review")
         clear_phase_state(self.orc.claude_dir)
-
-        # 10. Check primary result (may raise; both ACCs already in state).
         self.orc._check_phase_result(r, "Phase C")
 
-        # 11. PhaseCompleted + log + audit + post_phase — all use the
-        # ORIGINAL primary r.cost_usd. The QG#2 helper below will
-        # internally reassign its own r for fix calls; those don't
-        # leak out of the helper.
-        self._emit_phase_completed(ctx, r)
+        # QG#2 helper below internally reassigns its own r for fix
+        # calls; the original r used here doesn't leak.
+        self._emit_completion(ctx, r)
         events.append("PhaseCompleted")
-        ctx.logger.log("PHASE_C_COMPLETE", cost=round(r.cost_usd, 2))
-        self._audit_complete(ctx, r.cost_usd)
-        self._call_post_phase(ctx, r.cost_usd)
+        return r, curator_cost
 
-        # 12. Transition to quality_check_c + save.
+    def _run_post_review_checks(self, ctx: PhaseContext):
+        """Phase C post-review checks — QG#2 + coverage + trailers +
+        strict-mode loop. Returns the three cost aggregates that flow
+        into PhaseResult.cost_usd.
+        """
         self.orc.state.current_step = "quality_check_c"
         save_state(self.orc._state_dir, self.orc.state)
 
-        # 13. QG#2 via the shared helper. ACC #3 (gates fix) + ACC #4
-        # (policy fix) happen INSIDE the helper, per-call. The helper
-        # handles the asymmetric policy _recheck label.
+        # QG#2: ACC #3 (gates fix) + ACC #4 (policy fix) happen INSIDE
+        # the helper, per-call. The helper handles the asymmetric
+        # policy _recheck label.
         qg_cost = run_quality_gate_checkpoint(
             self.orc,
             ctx,
@@ -159,20 +160,18 @@ class PhaseC(PhaseBase):
             phase_label="Phase C",
         )
 
-        # 14. Coverage check — ACC #5. The bool is discarded (coverage
-        # failure does NOT block Phase C completion); cov_cost
-        # aggregates inner _run_claude iterations the helper made.
+        # ACC #5 coverage: bool discarded (failure doesn't block);
+        # cov_cost aggregates the helper's inner _run_claude iterations.
         _, cov_cost = self.orc._check_coverage(ctx.logger, milestone=ctx.milestone_name)
         self.orc._accumulate_cost(0.0, cov_cost)
 
-        # 15. Trailer check — no cost, no save_state.
         plan_sha = self.orc.state.plan_commit_sha or ""
         self.orc._check_trailers(plan_sha, ctx.logger)
 
-        # 16. Strict-mode loop — UNCONDITIONAL call; helper returns 0.0
-        # when validation.strict_mode is off. Initial compliance +
-        # verification reports come from PhaseTbV via ctx (the driver
-        # threads them in via ctx.update(**extras)).
+        # Strict-mode UNCONDITIONAL call — helper returns 0.0 when off.
+        # ACC #6: single aggregate accumulate at the strict-loop
+        # BOUNDARY (v1.3.4 #15 holds only here, NOT per iteration —
+        # preserved verbatim from original).
         strict_cost = self.orc._run_strict_mode_loop(
             name=ctx.milestone_name,
             ms=ctx.milestone_dict,
@@ -182,21 +181,5 @@ class PhaseC(PhaseBase):
             initial_verification=ctx.verification_report,
             logger=ctx.logger,
         )
-        # 17. ACC #6: single aggregate accumulate of the strict-loop
-        # total. v1.3.4 #15 retry safety only holds at this boundary,
-        # NOT per strict iteration — preserved verbatim from original.
         self.orc._accumulate_cost(0.0, strict_cost)
-
-        # 18. Return PhaseResult. cost_usd is REPORTING-ONLY per
-        # Finding 1 — state has advanced incrementally inside each
-        # ACC call above. Extras empty: gap reports are file-based
-        # artifacts already archived to disk.
-        return PhaseResult(
-            phase=self.name,
-            cost_usd=r.cost_usd + curator_cost + qg_cost + cov_cost + strict_cost,
-            duration_ms=r.duration_ms,
-            session_id=r.session_id,
-            tokens=extract_token_usage(r.raw),
-            events_emitted=events,
-            extras={},
-        )
+        return qg_cost, cov_cost, strict_cost

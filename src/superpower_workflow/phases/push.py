@@ -80,19 +80,13 @@ class PhaseD(PhaseBase):
         # 7. Charge primary cost.
         self.orc._accumulate_cost(0.0, r.cost_usd)
 
-        # 8. PhaseCompleted + log + audit + post_phase.
-        # Note: NO _check_phase_result — Phase D's claude failure does
-        # NOT raise. Preserved verbatim from original.
-        self._emit_phase_completed(ctx, r)
+        # 8-9. PhaseCompleted + log + audit + post_phase via shared
+        # helper. CRITICAL ordering: _call_post_phase happens BEFORE
+        # the SBOM/sign blocks below — Finding 1 verdict point 4.
+        # NO _check_phase_result — Phase D's claude failure does NOT
+        # raise. Preserved verbatim from original.
+        self._emit_completion(ctx, r)
         events.append("PhaseCompleted")
-        ctx.logger.log("PHASE_D_COMPLETE", cost=round(r.cost_usd, 2))
-        self._audit_complete(ctx, r.cost_usd)
-        # 9. CRITICAL: _call_post_phase BEFORE SBOM/sign blocks.
-        # Finding 1 verdict point 4 — the initial v1.2.0-real plan
-        # had this ordering wrong. The original orchestrator code at
-        # line 1441 calls post_phase BEFORE the security ops at
-        # line 1443+.
-        self._call_post_phase(ctx, r.cost_usd)
 
         # 10. SBOM (best-effort).
         security = self.orc.config.get("security", {})
