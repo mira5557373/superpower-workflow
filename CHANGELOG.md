@@ -3,6 +3,161 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.20] — 2026-06-01
+
+**Rolling Cost Ceilings — cross-run cost ceiling enforcement.** The
+reliability-lens survivor of a 4-architect + 4-verdict design workflow
+(wcpy1qzhh) scored 52/60. Closes the survey's #1 production gap:
+"No daily / weekly / monthly cost ceiling — only per-run
+max_total_budget_usd; an overnight retry loop could burn the team's
+budget unchecked."
+
+### What it does
+
+A pure-functional rolling-window cost accountant that reads
+`telemetry.jsonl` for RunCompleted events and enforces optional
+ceilings declared in `.claude/workflow.json`:
+
+```json
+{
+  "cost_ceilings": {
+    "daily":   { "usd": 50,  "mode": "block" },
+    "weekly":  { "usd": 200, "mode": "block" },
+    "monthly": { "usd": 600, "mode": "warn"  }
+  }
+}
+```
+
+Three rolling windows, each with mode `warn` or `block`.
+
+### Distinct from BudgetAlert (v1.3.17)
+
+`BudgetAlert` is WITHIN-run percent-of-cap crossings (50/75/90/100).
+`CostCeilingEvaluated` is ACROSS-run absolute spend over rolling
+windows. Both fire independently — a run can trip BudgetAlert(75)
+and stay under the rolling ceiling, or pass BudgetAlert and trip a
+rolling ceiling at preflight.
+
+### Three preflight gates
+
+| Gate | When |
+|---|---|
+| `run_start` | once before any milestone (projected = estimate or max_total_budget) |
+| `milestone_start` | top of each milestone iteration |
+| `phase_e_retry` | top of each milestone retry attempt > 0 (catches overnight CI-fix loops) |
+
+Each emits one `CostCeilingEvaluated` per configured window with the
+gate stamped in `preflight_gate`. A `block` decision (no authorized
+bypass) emits `CostCeilingBlocked`, records `CEILING_BLOCK` audit,
+and exits 7.
+
+### 6 production-readiness fixes baked in (from adversarial review)
+
+1. **Deterministic synthetic-replay test** — fixed-seed 30-day
+   lognormal spend, ceiling = 2× p95, asserts zero false-positive
+   blocks. Runs in <5s.
+2. **BudgetAlert vs Ceiling interaction documented** — dedicated
+   `docs/budget-ceilings.md` + coexistence test.
+3. **Hardened `--ignore-ceiling`** — requires `SW_ALLOW_CEILING_BYPASS=1`
+   env var OR interactive TTY confirmation. Bare flag in non-TTY
+   no-env shell fails with exit 8 BEFORE orchestrator work.
+4. **`CEILING_RESET` audit event** — `sw budget reset --confirm`
+   hash-chains the reset; never deletes telemetry.
+5. **Preflight ordering specified** — three explicit gates with
+   per-gate event labeling.
+6. **Missing/corrupt telemetry → `source="no_history"` → allow** —
+   safety bias on unverifiable history.
+
+### Telemetry events
+
+```python
+@dataclass
+class CostCeilingEvaluated(TelemetryEvent):
+    window: str              # day | week | month
+    window_start_utc: str
+    window_end_utc: str
+    current_spend_usd: float
+    projected_run_cost_usd: float
+    ceiling_usd: float
+    headroom_usd: float
+    contributing_runs: int
+    mode: str                # warn | block
+    decision: str            # allow | warn | block | no_history | bypass
+    source: str              # telemetry | no_history | partial_history
+    preflight_gate: str
+
+@dataclass
+class CostCeilingBlocked(TelemetryEvent):
+    window: str
+    current_spend_usd: float
+    ceiling_usd: float
+    projected_run_cost_usd: float
+    blocked_milestone: str
+    override_used: bool
+    preflight_gate: str
+```
+
+### CLI: `sw budget`
+
+```bash
+sw budget show                  # human-readable table
+sw budget show --json           # JSON output (stable schema)
+sw budget show --window day     # filter to one window
+sw budget set --daily 50 --weekly 200 --monthly 600 --mode block
+sw budget reset --window day --confirm   # audit-logged
+sw run --ignore-ceiling         # requires SW_ALLOW_CEILING_BYPASS=1 or TTY confirm
+```
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `7` | blocked by cost ceiling |
+| `8` | `--ignore-ceiling` used without authorization |
+
+### Concurrency
+
+Separate `.claude/.ceiling.lock` held only for the
+evaluate→decide→emit window. Stale locks (>30s) auto-reclaim.
+Threaded test enforces.
+
+### Three rollback levers
+
+1. **Per-invocation** — `--ignore-ceiling` + `SW_ALLOW_CEILING_BYPASS=1`.
+2. **Per-project** — `sw budget set --mode warn` (no blocks).
+3. **Kill switch** — `SW_DISABLE_COST_CEILINGS=1` short-circuits the
+   preflight check; no telemetry, no audit.
+
+### Stats
+
+- **Tests: 1747 → 1808** (+61):
+  - 37 unit tests (window boundaries, corrupt/empty, partial-history,
+    warn/block modes, first-offending-window, headroom rounding,
+    concurrent lock, performance).
+  - 2 deterministic synthetic-replay tests.
+  - 14 CLI smoke tests.
+  - 8 orchestrator integration tests (no-history, three-gate
+    stateless, BudgetAlert coexistence, kill-switch contract).
+- New: `src/superpower_workflow/budget_ceiling.py` (~450 lines pure).
+- New: `CostCeilingEvaluated` + `CostCeilingBlocked` telemetry events.
+- New: `Orchestrator._check_cost_ceilings` (best-effort).
+- New: `Orchestrator._ignore_ceiling` instance attribute.
+- New: `sw budget {show, set, reset}` CLI subcommand.
+- New: `--ignore-ceiling` flag on `sw run` + `_ensure_ceiling_bypass_authorized`
+  helper.
+- New: `docs/budget-ceilings.md` user guide + BudgetAlert spec.
+- Complexity-audit `max-cc` bumped 55 → 56 (new top-level subcommand
+  dispatch — same precedent as v1.3.2 #21).
+- Ruff + format clean.
+
+### Closes the v1.x reliability-lens evaluation
+
+The 4-architect bake-off had 4 proposals (Rolling Cost Ceilings,
+Failure Triage Classifier, Defect Memory Primer, second Cost Ceiling
+variant). The 6-dimension adversarial verdict picked Cost Ceilings
+as the highest-scoring reliability win for an internal-only
+single-project deployment. Six revisions baked into the implementation.
+
 ## [1.3.19] — 2026-06-01
 
 **Drift Detector v1 — multi-metric regression monitor.** The single

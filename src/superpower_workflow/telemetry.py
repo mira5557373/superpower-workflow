@@ -398,6 +398,53 @@ class BudgetAlert(TelemetryEvent):
     threshold: int = 0  # 50 | 75 | 90 | 100
 
 
+@dataclass
+class CostCeilingEvaluated(TelemetryEvent):
+    """v1.3.20 — emitted once per (configured ceiling, preflight gate).
+
+    Distinct from BudgetAlert (v1.3.17), which is WITHIN-run percent-of-cap
+    crossings. This is ACROSS-run absolute spend over a rolling window:
+    rolling 24h (day), 7d (week), 30d (month). Both can fire independently
+    in a single run that crosses both thresholds.
+
+    `decision`:
+    - `allow` — under ceiling
+    - `warn` — over ceiling but mode=warn (advisory only)
+    - `block` — over ceiling and mode=block (run aborted, exit 7)
+    - `no_history` — telemetry missing/empty; defaults to allow
+    - `bypass` — over+block but user passed `--ignore-ceiling` (with env auth)
+    """
+
+    EVENT_TYPE: ClassVar[str] = "cost_ceiling_evaluated"
+    window: str = ""  # day | week | month
+    window_start_utc: str = ""
+    window_end_utc: str = ""
+    current_spend_usd: float = 0.0
+    projected_run_cost_usd: float = 0.0
+    ceiling_usd: float = 0.0  # 0.0 if window not configured
+    headroom_usd: float = 0.0
+    contributing_runs: int = 0
+    mode: str = "block"  # warn | block
+    decision: str = "allow"  # allow | warn | block | no_history | bypass
+    source: str = "telemetry"  # telemetry | no_history | partial_history
+    preflight_gate: str = "run_start"  # run_start | milestone_start | phase_e_retry
+
+
+@dataclass
+class CostCeilingBlocked(TelemetryEvent):
+    """v1.3.20 — fires only when a `block`-mode ceiling halts a run start
+    (or would have, before override). Precedes process exit 7."""
+
+    EVENT_TYPE: ClassVar[str] = "cost_ceiling_blocked"
+    window: str = ""
+    current_spend_usd: float = 0.0
+    ceiling_usd: float = 0.0
+    projected_run_cost_usd: float = 0.0
+    blocked_milestone: str = ""
+    override_used: bool = False
+    preflight_gate: str = "run_start"
+
+
 class TelemetryEmitter:
     """v1.3.5 #3 fix: thread-safe writes for parallel orchestrator branches.
 

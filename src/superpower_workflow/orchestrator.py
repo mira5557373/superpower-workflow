@@ -173,6 +173,13 @@ class Orchestrator:
         # `execute_wave_isolated`.
         self._in_parallel_worker: bool = False
 
+        # v1.3.20 — set via `sw run --ignore-ceiling`. When True AND
+        # SW_ALLOW_CEILING_BYPASS=1 is set, a block-mode ceiling becomes
+        # a bypass (CostCeilingBlocked override_used=True + CEILING_BYPASS
+        # audit). Defense-in-depth: the flag ALONE in a non-TTY shell with
+        # no env var still blocks (verdict revision #3).
+        self._ignore_ceiling: bool = False
+
         # v1.3.12: shared in-flight cost counter across parallel workers.
         # `_run_claude` charges to this BEFORE state is updated so sibling
         # workers' budget checks see in-flight spend within milliseconds.
@@ -262,7 +269,9 @@ class Orchestrator:
         remote_url: str | None = None,
         best_of_n: int = 1,
         model_override: str | None = None,
+        ignore_ceiling: bool = False,
     ) -> None:
+        self._ignore_ceiling = ignore_ceiling
         self._from_ticket = from_ticket
         self._tracker_adapter = None
 
@@ -387,6 +396,30 @@ class Orchestrator:
             },
         )
 
+        # v1.3.20 — cost ceiling preflight at the run_start gate. Projected
+        # total cost = estimator output (or max_total_budget_usd fallback).
+        # On block, raises SystemExit(7); caller's finally blocks still run.
+        try:
+            from superpower_workflow.estimator import estimate as _estimate
+        except ImportError:
+            _estimate = None
+        projected_total = 0.0
+        if _estimate is not None:
+            try:
+                est = _estimate(self.config)
+                projected_total = (
+                    float(est.get("total_cost_usd", 0.0)) if isinstance(est, dict) else 0.0
+                )
+            except Exception:  # noqa: BLE001
+                projected_total = 0.0
+        if projected_total <= 0:
+            mb = self.config.get("max_total_budget_usd", 0)
+            projected_total = float(mb) if isinstance(mb, int | float) else 0.0
+        self._check_cost_ceilings(
+            gate="run_start",
+            projected_run_cost_usd=projected_total,
+        )
+
         parallel_config = self.config.get("parallel", {})
         use_parallel = parallel or parallel_config.get("enabled", False)
         workers = max_workers or parallel_config.get("max_workers", 4)
@@ -487,6 +520,18 @@ class Orchestrator:
                 self.state.current_milestone_index = i
                 success = False
 
+                # v1.3.20 — milestone_start ceiling gate. Per-milestone
+                # projection is rough: total budget / remaining milestone
+                # count. Better than nothing; the run_start gate already
+                # caught full-budget overruns.
+                remaining_ms = max(1, len(milestones) - i)
+                per_ms_proj = max(0.0, projected_total - self.state.total_cost_usd) / remaining_ms
+                self._check_cost_ceilings(
+                    gate="milestone_start",
+                    projected_run_cost_usd=per_ms_proj,
+                    current_milestone=name,
+                )
+
                 decision = router.route(ms)
                 if model_override:
                     ms_model = model_override
@@ -496,6 +541,16 @@ class Orchestrator:
                     ms_model = None
 
                 for attempt in range(max_retries + 1):
+                    if attempt > 0:
+                        # v1.3.20 — phase_e_retry gate (the design's "overnight
+                        # CI-fix loop" scenario). Re-evaluate before each retry
+                        # so a runaway retry cycle cannot accumulate spend
+                        # past the rolling ceiling.
+                        self._check_cost_ceilings(
+                            gate="phase_e_retry",
+                            projected_run_cost_usd=per_ms_proj,
+                            current_milestone=name,
+                        )
                     try:
                         cost = self._run_milestone(ms, logger, model_override=ms_model)
                         # v1.3.4 #15: cost is now charged INCREMENTALLY by
@@ -1170,6 +1225,172 @@ class Orchestrator:
                 )
         except Exception:  # noqa: BLE001
             pass
+
+    def _check_cost_ceilings(
+        self,
+        *,
+        gate: str,
+        projected_run_cost_usd: float,
+        current_milestone: str = "",
+    ) -> None:
+        """v1.3.20 — rolling-window cost ceiling preflight check.
+
+        Called at three gate points:
+        - `run_start`: once before any milestone begins; projected = estimate.
+        - `milestone_start`: at top of each milestone iteration; projected =
+          per-milestone estimate.
+        - `phase_e_retry`: at the top of each retry attempt > 0; projected =
+          remaining retry attempts × per-milestone cost.
+
+        On block decision (and no authorized bypass):
+        - emits CostCeilingBlocked + records CEILING_BLOCK audit entry
+        - raises SystemExit(EXIT_CEILING_BLOCKED).
+
+        On bypass (--ignore-ceiling + SW_ALLOW_CEILING_BYPASS=1):
+        - emits CostCeilingBlocked with override_used=True
+        - records CEILING_BYPASS audit entry
+        - allows the run to continue.
+
+        Best-effort on all internal failures — a broken ceiling check must
+        never break the run loop. Only the BLOCK decision raises.
+        """
+        try:
+            from superpower_workflow.budget_ceiling import (
+                EXIT_CEILING_BLOCKED,
+                CeilingLock,
+                build_bypass_audit_payload,
+                evaluate_ceilings,
+                is_bypass_authorized,
+                parse_ceilings,
+            )
+            from superpower_workflow.telemetry import (
+                CostCeilingBlocked,
+                CostCeilingEvaluated,
+            )
+        except ImportError:
+            return
+
+        raw_ceilings = self.config.get("cost_ceilings")
+        ceilings = parse_ceilings(raw_ceilings)
+        if not ceilings.any_configured():
+            return  # zero-cost no-op if no ceiling declared
+
+        # Hard kill-switch (rollback lever #3 from design).
+        if os.environ.get("SW_DISABLE_COST_CEILINGS") == "1":
+            return
+
+        telemetry_path = self.claude_dir / "sw-telemetry.jsonl"
+        lock_path = self._state_dir / ".ceiling.lock"
+
+        with CeilingLock(lock_path):
+            result = evaluate_ceilings(
+                telemetry_path,
+                ceilings=ceilings,
+                projected_run_cost_usd=projected_run_cost_usd,
+            )
+
+            # Emit one CostCeilingEvaluated per evaluation that has a
+            # configured ceiling (skip unconfigured-window passthroughs).
+            for ev in result.evaluations:
+                if ev.ceiling_usd is None:
+                    continue
+                if self._telemetry is not None:
+                    self._telemetry.emit(
+                        CostCeilingEvaluated(
+                            window=ev.window,
+                            window_start_utc=ev.accounting.window_start_utc,
+                            window_end_utc=ev.accounting.window_end_utc,
+                            current_spend_usd=ev.accounting.current_spend_usd,
+                            projected_run_cost_usd=ev.projected_run_cost_usd,
+                            ceiling_usd=ev.ceiling_usd or 0.0,
+                            headroom_usd=ev.headroom_usd,
+                            contributing_runs=len(ev.accounting.contributing_runs),
+                            mode=ev.mode,
+                            decision=ev.decision,
+                            source=ev.accounting.source,
+                            preflight_gate=gate,
+                        )
+                    )
+
+            if not result.blocked:
+                return
+
+            # Block decision. Check for authorized bypass.
+            ignore_flag = bool(getattr(self, "_ignore_ceiling", False))
+            authorized, auth_reason = is_bypass_authorized(
+                ignore_flag=ignore_flag,
+                env=dict(os.environ),
+                stdin_is_tty=False,
+                tty_confirm=None,
+            )
+            blocking = result.blocking_window or "day"
+            blocking_eval = next(
+                (e for e in result.evaluations if e.window == blocking),
+                None,
+            )
+            current = blocking_eval.accounting.current_spend_usd if blocking_eval else 0.0
+            ceiling_usd_v = blocking_eval.ceiling_usd if blocking_eval else 0.0
+            proj = blocking_eval.projected_run_cost_usd if blocking_eval else 0.0
+
+            if authorized:
+                if self._telemetry is not None:
+                    self._telemetry.emit(
+                        CostCeilingBlocked(
+                            window=blocking,
+                            current_spend_usd=current,
+                            ceiling_usd=ceiling_usd_v or 0.0,
+                            projected_run_cost_usd=proj,
+                            blocked_milestone=current_milestone,
+                            override_used=True,
+                            preflight_gate=gate,
+                        )
+                    )
+                self._audit.append(
+                    "CEILING_BYPASS",
+                    run_id=self.state.run_id,
+                    milestone=current_milestone,
+                    data=build_bypass_audit_payload(
+                        window=blocking,
+                        current_spend_usd=current,
+                        ceiling_usd=ceiling_usd_v or 0.0,
+                        projected_run_cost_usd=proj,
+                        auth_reason=auth_reason,
+                    ),
+                )
+                return
+
+            # No bypass — hard block.
+            if self._telemetry is not None:
+                self._telemetry.emit(
+                    CostCeilingBlocked(
+                        window=blocking,
+                        current_spend_usd=current,
+                        ceiling_usd=ceiling_usd_v or 0.0,
+                        projected_run_cost_usd=proj,
+                        blocked_milestone=current_milestone,
+                        override_used=False,
+                        preflight_gate=gate,
+                    )
+                )
+            self._audit.append(
+                "CEILING_BLOCK",
+                run_id=self.state.run_id,
+                milestone=current_milestone,
+                data={
+                    "window": blocking,
+                    "current_spend_usd": round(current, 4),
+                    "ceiling_usd": round(ceiling_usd_v or 0.0, 4),
+                    "projected_run_cost_usd": round(proj, 4),
+                    "gate": gate,
+                },
+            )
+            print(
+                f"  FATAL: Cost ceiling blocked run "
+                f"({blocking} window: ${current:.2f} + ${proj:.2f} projected "
+                f"= ${current + proj:.2f} >= ${ceiling_usd_v or 0.0:.2f}). "
+                f"Use --ignore-ceiling with SW_ALLOW_CEILING_BYPASS=1 to override.",
+            )
+            raise SystemExit(EXIT_CEILING_BLOCKED)
 
     def _call_pre_phase(self, phase: str, milestone: dict) -> None:
         for plugin in self._plugins:

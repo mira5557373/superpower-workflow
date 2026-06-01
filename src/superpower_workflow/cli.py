@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from superpower_workflow import __version__
@@ -227,6 +228,58 @@ def build_parser() -> argparse.ArgumentParser:
         dest="model_override",
         default=None,
         help="Override model for all milestones",
+    )
+    run_p.add_argument(
+        "--ignore-ceiling",
+        dest="ignore_ceiling",
+        action="store_true",
+        default=False,
+        help=(
+            "Override rolling cost ceiling block. Requires SW_ALLOW_CEILING_BYPASS=1 "
+            "env var OR interactive TTY confirmation. Audit-logged."
+        ),
+    )
+
+    # v1.3.20 — sw budget subcommand for rolling cost ceiling visibility + config.
+    budget_p = sub.add_parser(
+        "budget",
+        help="Inspect + manage rolling cost ceilings (24h / 7d / 30d).",
+    )
+    budget_sub = budget_p.add_subparsers(dest="budget_command")
+    budget_show = budget_sub.add_parser(
+        "show", help="Show current rolling spend, ceiling, headroom per window."
+    )
+    budget_show.add_argument(
+        "--window",
+        choices=["day", "week", "month", "all"],
+        default="all",
+        help="Filter to one window (default: all)",
+    )
+    budget_show.add_argument("--json", action="store_true", help="Emit JSON output")
+    budget_set = budget_sub.add_parser("set", help="Set ceilings in .claude/workflow.json.")
+    budget_set.add_argument("--daily", type=float, default=None, help="Daily ceiling USD")
+    budget_set.add_argument("--weekly", type=float, default=None, help="Weekly ceiling USD")
+    budget_set.add_argument("--monthly", type=float, default=None, help="Monthly ceiling USD")
+    budget_set.add_argument(
+        "--mode",
+        choices=["warn", "block"],
+        default="block",
+        help="Default mode for newly-set ceilings (default: block)",
+    )
+    budget_reset = budget_sub.add_parser(
+        "reset",
+        help="Clear a window's accumulated spend (e.g. after incident recovery).",
+    )
+    budget_reset.add_argument(
+        "--window",
+        choices=["day", "week", "month"],
+        required=True,
+        help="Window to reset",
+    )
+    budget_reset.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Required: actually perform the reset (without it, prints what would happen)",
     )
 
     bootstrap_p = sub.add_parser("bootstrap", help="One-command project setup")
@@ -1112,6 +1165,199 @@ def _cmd_drift(project_root: Path, args) -> None:
     print(f"  Drift events for runs in this project: see {telemetry_path}")
 
 
+def _ensure_ceiling_bypass_authorized() -> None:
+    """v1.3.20 — defense-in-depth for `sw run --ignore-ceiling`.
+
+    Exits 8 BEFORE any orchestrator work happens if the flag is not
+    authorized via either:
+    - `SW_ALLOW_CEILING_BYPASS=1` env var (cron-safe), or
+    - interactive TTY `y` confirmation.
+
+    Prevents cron scripts from normalizing the flag as a bypass.
+    """
+    from superpower_workflow.budget_ceiling import (
+        EXIT_BYPASS_UNAUTHORIZED,
+        is_bypass_authorized,
+    )
+
+    tty = sys.stdin.isatty()
+    tty_confirm: bool | None = None
+    if tty and os.environ.get("SW_ALLOW_CEILING_BYPASS") != "1":
+        resp = (
+            input("  --ignore-ceiling will bypass rolling cost ceilings. Proceed? [y/N]: ")
+            .strip()
+            .lower()
+        )
+        tty_confirm = resp == "y"
+    authorized, reason = is_bypass_authorized(
+        ignore_flag=True,
+        env=dict(os.environ),
+        stdin_is_tty=tty,
+        tty_confirm=tty_confirm,
+    )
+    if not authorized:
+        print(
+            f"  FATAL: --ignore-ceiling requires SW_ALLOW_CEILING_BYPASS=1 "
+            f"env var OR interactive TTY confirmation ({reason}).",
+            file=sys.stderr,
+        )
+        sys.exit(EXIT_BYPASS_UNAUTHORIZED)
+
+
+def _cmd_budget(project_root: Path, args) -> None:
+    """v1.3.20 — `sw budget {show,set,reset}` subcommand.
+
+    Read-only inspection except `set` (writes workflow.json) and `reset`
+    (writes a reset checkpoint + emits CEILING_RESET audit, never mutates
+    telemetry.jsonl).
+    """
+    from superpower_workflow.budget_ceiling import (
+        build_reset_audit_payload,
+        evaluate_ceilings,
+        parse_ceilings,
+    )
+
+    claude_dir = project_root / ".claude"
+    cfg_path = claude_dir / "workflow.json"
+    if not cfg_path.exists():
+        print(f"  No workflow.json at {cfg_path}; run `sw init` first.")
+        return
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"  Failed to read workflow.json: {exc}")
+        return
+
+    sub = getattr(args, "budget_command", None)
+
+    if sub == "set":
+        ceilings = cfg.setdefault("cost_ceilings", {})
+        mode = getattr(args, "mode", "block")
+        for key, val in (
+            ("daily", args.daily),
+            ("weekly", args.weekly),
+            ("monthly", args.monthly),
+        ):
+            if val is None:
+                continue
+            if val <= 0:
+                print(f"  Invalid {key} value: {val} (must be > 0). Skipped.")
+                continue
+            ceilings[key] = {"usd": float(val), "mode": mode}
+        cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        print(f"  Updated cost_ceilings in {cfg_path}.")
+        return
+
+    if sub == "reset":
+        window = args.window
+        if not args.confirm:
+            print(
+                f"  DRY-RUN: would clear {window} window. Re-run with --confirm to actually reset."
+            )
+            return
+        ceilings_block = cfg.setdefault("cost_ceilings", {})
+        checkpoints = ceilings_block.setdefault("reset_checkpoints", {})
+        now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        # Capture prior spend BEFORE writing the checkpoint.
+        model = cfg.get("model", "")
+        telemetry_path = claude_dir / "sw-telemetry.jsonl"
+        from superpower_workflow.budget_ceiling import load_window_spend
+
+        prior = load_window_spend(
+            telemetry_path,
+            now_utc=__import__("datetime").datetime.now(__import__("datetime").UTC),
+            window=window,
+        )
+        checkpoints[window] = now_iso
+        cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        # Audit (if audit-trail enabled in config).
+        from superpower_workflow.audit import AuditTrail, derive_key
+
+        security = cfg.get("security", {})
+        if security.get("audit_trail", False):
+            key = derive_key()
+            if key is not None:
+                audit_path = claude_dir / "audit-trail.jsonl"
+                trail = AuditTrail(audit_path, key=key)
+                trail.append(
+                    "CEILING_RESET",
+                    data=build_reset_audit_payload(
+                        window=window,
+                        prior_spend_usd=prior.current_spend_usd,
+                        cleared_at_utc=now_iso,
+                    ),
+                )
+        print(
+            f"  Reset {window} window. Prior spend ${prior.current_spend_usd:.2f} "
+            f"cleared at {now_iso}. (Model: {model})"
+        )
+        return
+
+    # Default: show.
+    telemetry_path = claude_dir / "sw-telemetry.jsonl"
+    ceilings = parse_ceilings(cfg.get("cost_ceilings"))
+    if not ceilings.any_configured():
+        if getattr(args, "json", False):
+            print(json.dumps({"windows": [], "configured": False}, indent=2))
+            return
+        print("  No cost ceilings configured.")
+        print("  Set one with: sw budget set --daily 50 --mode block")
+        return
+
+    # Use evaluate_ceilings with zero projected to avoid double-counting.
+    result = evaluate_ceilings(
+        telemetry_path,
+        ceilings=ceilings,
+        projected_run_cost_usd=0.0,
+    )
+    target_window = getattr(args, "window", "all")
+    rows: list[dict] = []
+    for ev in result.evaluations:
+        if target_window != "all" and ev.window != target_window:
+            continue
+        if ev.ceiling_usd is None:
+            continue
+        rows.append(
+            {
+                "window": ev.window,
+                "window_start_utc": ev.accounting.window_start_utc,
+                "window_end_utc": ev.accounting.window_end_utc,
+                "current_spend_usd": ev.accounting.current_spend_usd,
+                "ceiling_usd": ev.ceiling_usd,
+                "headroom_usd": ev.headroom_usd,
+                "mode": ev.mode,
+                "source": ev.accounting.source,
+                "contributing_runs": [
+                    {
+                        "run_id": r.run_id,
+                        "total_cost_usd": r.total_cost_usd,
+                        "completed_at_utc": r.completed_at_utc,
+                    }
+                    for r in ev.accounting.contributing_runs
+                ],
+            }
+        )
+
+    if getattr(args, "json", False):
+        print(json.dumps({"configured": True, "windows": rows}, indent=2))
+        return
+
+    print(f"  Cost ceilings (project={project_root.name}, telemetry={telemetry_path.name})")
+    print(f"  {'-' * 74}")
+    print(
+        f"  {'window':6s} {'mode':6s} {'spend':>10s} / {'ceiling':>10s}   {'headroom':>10s}  runs"
+    )
+    for r in rows:
+        runs_n = len(r["contributing_runs"])
+        print(
+            f"  {r['window']:6s} {r['mode']:6s} "
+            f"${r['current_spend_usd']:>9.2f} / ${r['ceiling_usd']:>9.2f}   "
+            f"${r['headroom_usd']:>9.2f}  {runs_n:>4d}"
+        )
+    if not rows:
+        print("  (no ceilings match the filter)")
+
+
 def _cmd_watch(project_root: Path, interval: float | None = None) -> None:
     from superpower_workflow.dashboard.data import DashboardData
     from superpower_workflow.dashboard.watch import make_watch
@@ -1853,6 +2099,10 @@ def main() -> None:
     if args.command == "run":
         from superpower_workflow.orchestrator import Orchestrator
 
+        ignore_ceiling = bool(getattr(args, "ignore_ceiling", False))
+        if ignore_ceiling:
+            _ensure_ceiling_bypass_authorized()
+
         orch = Orchestrator(project_root)
         orch.run(
             dry_run=args.dry_run,
@@ -1867,6 +2117,7 @@ def main() -> None:
             remote_url=getattr(args, "remote", None),
             best_of_n=getattr(args, "best_of_n", 1),
             model_override=getattr(args, "model_override", None),
+            ignore_ceiling=ignore_ceiling,
         )
         return
 
@@ -1882,6 +2133,10 @@ def main() -> None:
 
     if args.command == "drift":
         _cmd_drift(project_root, args)
+        return
+
+    if args.command == "budget":
+        _cmd_budget(project_root, args)
         return
 
     if args.command == "bootstrap":
