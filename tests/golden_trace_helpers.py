@@ -300,10 +300,22 @@ def make_accumulate_cost_wrapper(
 
     def wrapped(self_orch, local_cost: float, delta: float) -> float:
         new_local = original(self_orch, local_cost, delta)
+        # NOTE: `new_local` (the return value) is NOT recorded.
+        # The original `_run_milestone` threaded a `cost` variable through
+        # every `_accumulate_cost` call so the return was the milestone
+        # running total. The v1.2.0-real refactor has each phase class
+        # call `_accumulate_cost(0.0, delta)` since the return is unused
+        # (driver tracks running total in ctx.accumulated_cost via
+        # pure-local arithmetic). The state side effect (`delta` charged,
+        # `new_state_total` updated) is identical; only the local
+        # accumulator return value differs. Locking `new_local` in the
+        # fixture would create a false-positive failure on a refactor
+        # that legitimately changed the local-accumulator threading
+        # pattern. The load-bearing invariants — what was charged and
+        # what state shows after — remain pinned.
         recorder.record(
             "accumulate_cost",
             delta=round(delta, 6),
-            new_local=round(new_local, 6),
             new_state_total=round(self_orch.state.total_cost_usd, 6),
         )
         return new_local
@@ -487,15 +499,38 @@ def install_recorders(monkeypatch, orch, recorder: TraceRecorder, **opts) -> Non
         make_accumulate_cost_wrapper(recorder, original_accumulate),
     )
 
-    # 3. save_state — wrap the module-level function. Patch both the
-    # state module's definition AND any module that already imported it
-    # (orchestrator.py uses `from superpower_workflow.state import save_state`,
-    # so the symbol is rebound there as well).
+    # 3. save_state — wrap the module-level function. Patch the state
+    # module's definition AND every module that already imported the
+    # symbol (each `from superpower_workflow.state import save_state`
+    # creates a local rebinding that bypasses the state-module patch).
+    # The v1.2.0-real refactor moved several save_state callsites from
+    # orchestrator.py into phase modules; each phase module's local
+    # save_state binding needs its own patch so the recorder captures
+    # every state-transition save.
     original_save_state = state_mod.save_state
     wrapped_save_state = make_save_state_recorder(recorder, original_save_state)
     monkeypatch.setattr(state_mod, "save_state", wrapped_save_state)
-    if hasattr(orch_mod, "save_state"):
-        monkeypatch.setattr(orch_mod, "save_state", wrapped_save_state)
+
+    _save_state_holders = [orch_mod]
+    # Phase modules that import save_state at module load.
+    for mod_name in (
+        "superpower_workflow.phases.plan",
+        "superpower_workflow.phases.implement",
+        "superpower_workflow.phases.review",
+        "superpower_workflow.phases.push",
+        "superpower_workflow.phases.ci_fix",
+    ):
+        try:
+            phase_mod = __import__(mod_name, fromlist=["save_state"])
+            _save_state_holders.append(phase_mod)
+        except ImportError:
+            # Phase module not yet present (e.g., Task 1.x tests run
+            # before Task 4+). Skip silently.
+            pass
+
+    for holder in _save_state_holders:
+        if hasattr(holder, "save_state"):
+            monkeypatch.setattr(holder, "save_state", wrapped_save_state)
 
     # 4. Subprocess dispatcher.
     dispatcher = make_subprocess_dispatcher(

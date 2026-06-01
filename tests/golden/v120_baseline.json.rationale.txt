@@ -1,1 +1,1 @@
-initial v1.2.0-real baseline capture
+v1.2.0-real Task 8: driver wires PhaseA/B/TbV/C/D/E classes. Recorder updated to patch save_state in phase modules (top-level imports bypass state-module patch). Phase classes call _accumulate_cost(0.0, delta) so recorder no longer records new_local artifact.

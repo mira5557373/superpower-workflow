@@ -49,7 +49,6 @@
       "kind": "accumulate_cost",
       "payload": {
         "delta": 1.0,
-        "new_local": 1.0,
         "new_state_total": 1.0
       }
     },
@@ -58,7 +57,6 @@
       "kind": "accumulate_cost",
       "payload": {
         "delta": 0.0,
-        "new_local": 1.0,
         "new_state_total": 1.0
       }
     },
@@ -156,7 +154,6 @@
       "kind": "accumulate_cost",
       "payload": {
         "delta": 0.2,
-        "new_local": 1.2,
         "new_state_total": 1.2
       }
     },
@@ -237,7 +234,6 @@
       "kind": "accumulate_cost",
       "payload": {
         "delta": 2.5,
-        "new_local": 3.7,
         "new_state_total": 3.7
       }
     },
@@ -267,7 +263,6 @@
       "kind": "accumulate_cost",
       "payload": {
         "delta": 0.0,
-        "new_local": 3.7,
         "new_state_total": 3.7
       }
     },
@@ -276,7 +271,6 @@
       "kind": "accumulate_cost",
       "payload": {
         "delta": 0.0,
-        "new_local": 3.7,
         "new_state_total": 3.7
       }
     },
@@ -285,7 +279,6 @@
       "kind": "accumulate_cost",
       "payload": {
         "delta": 0.0,
-        "new_local": 3.7,
         "new_state_total": 3.7
       }
     },
@@ -338,7 +331,6 @@
       "kind": "accumulate_cost",
       "payload": {
         "delta": 0.5,
-        "new_local": 4.2,
         "new_state_total": 4.2
       }
     },
@@ -347,7 +339,6 @@
       "kind": "accumulate_cost",
       "payload": {
         "delta": 0.0,
-        "new_local": 4.2,
         "new_state_total": 4.2
       }
     },
@@ -404,7 +395,6 @@
       "kind": "accumulate_cost",
       "payload": {
         "delta": 0.0,
-        "new_local": 4.2,
         "new_state_total": 4.2
       }
     },
@@ -413,7 +403,6 @@
       "kind": "accumulate_cost",
       "payload": {
         "delta": 0.0,
-        "new_local": 4.2,
         "new_state_total": 4.2
       }
     },
@@ -466,7 +455,6 @@
       "kind": "accumulate_cost",
       "payload": {
         "delta": 0.75,
-        "new_local": 4.95,
         "new_state_total": 4.95
       }
     },

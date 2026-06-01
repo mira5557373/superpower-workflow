@@ -1630,7 +1630,7 @@ def test_orchestrator_runs_phase_e_when_ci_enabled(tmp_path):
     with (
         patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
         patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
-        patch("superpower_workflow.orchestrator.ci_fix_loop") as mock_ci,
+        patch("superpower_workflow.phases.ci_fix.ci_fix_loop") as mock_ci,
         patch("superpower_workflow.orchestrator.send_notification"),
     ):
         mock_ci.return_value = (True, 0.5, _empty_tokens())
@@ -1656,7 +1656,7 @@ def test_orchestrator_skips_phase_e_when_ci_disabled(tmp_path):
     with (
         patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
         patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
-        patch("superpower_workflow.orchestrator.ci_fix_loop") as mock_ci,
+        patch("superpower_workflow.phases.ci_fix.ci_fix_loop") as mock_ci,
         patch("superpower_workflow.orchestrator.send_notification"),
     ):
         orch = Orchestrator(tmp_path)
@@ -1684,7 +1684,7 @@ def test_orchestrator_phase_e_cost_added(tmp_path):
     with (
         patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result(cost=1.0)),
         patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
-        patch("superpower_workflow.orchestrator.ci_fix_loop") as mock_ci,
+        patch("superpower_workflow.phases.ci_fix.ci_fix_loop") as mock_ci,
         patch("superpower_workflow.orchestrator.send_notification"),
     ):
         mock_ci.return_value = (True, 3.0, _empty_tokens())
@@ -1714,7 +1714,7 @@ def test_orchestrator_phase_e_failure_does_not_fail_milestone(tmp_path):
     with (
         patch("superpower_workflow.orchestrator.run_claude", return_value=_ok_result()),
         patch("superpower_workflow.orchestrator.subprocess.run", side_effect=_smart_subprocess),
-        patch("superpower_workflow.orchestrator.ci_fix_loop") as mock_ci,
+        patch("superpower_workflow.phases.ci_fix.ci_fix_loop") as mock_ci,
         patch("superpower_workflow.orchestrator.send_notification"),
     ):
         mock_ci.return_value = (False, 2.0, _empty_tokens())

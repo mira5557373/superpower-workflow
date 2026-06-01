@@ -15,7 +15,6 @@ from superpower_workflow.docs.api_docs import build_api_docs
 from superpower_workflow.docs.changelog import generate_changelog
 from superpower_workflow.docs.diagrams import generate_mermaid
 from superpower_workflow.docs.readme_gen import generate_readme
-from superpower_workflow.integrations.ci_fix import ci_fix_loop
 from superpower_workflow.integrations.github import (
     create_pr,
     fetch_issue,
@@ -30,31 +29,32 @@ from superpower_workflow.parallel.executor import ParallelExecutor, ParallelResu
 from superpower_workflow.parallel.planner import ExecutionWave, ParallelPlanner
 from superpower_workflow.parallel.router import ModelRouter
 from superpower_workflow.parallel.worktree import WorktreeManager
-from superpower_workflow.plugins.interface import Plugin, PluginVetoError
+from superpower_workflow.phases import (
+    PhaseA,
+    PhaseB,
+    PhaseC,
+    PhaseContext,
+    PhaseD,
+    PhaseE,
+    PhaseTbV,
+)
+from superpower_workflow.plugins.interface import Plugin
 from superpower_workflow.plugins.loader import load_plugins
 from superpower_workflow.policy import PolicyEngine
 from superpower_workflow.prompts import (
-    phase_a_prompt,
-    phase_b_prompt,
-    phase_c_prompt,
-    phase_d_prompt,
     system_prompt,
 )
-from superpower_workflow.runner import ClaudeResult, extract_token_usage, run_claude
-from superpower_workflow.security import SecretsHandler, generate_sbom, sign_artifact
+from superpower_workflow.runner import ClaudeResult, run_claude
+from superpower_workflow.security import SecretsHandler
 from superpower_workflow.state import (
     GAP_REPORT_FILE,
     GAP_REPORT_RAW_FILE,
     PHASE_FILE,
     HeartbeatThread,
-    PhaseState,
     acquire_lock,
-    archive_reports,
-    clear_phase_state,
     load_config,
     load_state,
     release_lock,
-    save_phase_state,
     save_state,
 )
 from superpower_workflow.telemetry import (
@@ -67,8 +67,6 @@ from superpower_workflow.telemetry import (
     MilestoneFailed,
     MilestoneSkipped,
     MilestoneStarted,
-    PhaseCompleted,
-    PhaseStarted,
     QualityGateResult,
     RetryAttempt,
     RunCompleted,
@@ -1079,6 +1077,24 @@ class Orchestrator:
         model_override: str | None = None,
         num_agents: int | None = None,
     ) -> float:
+        """Thin driver — orchestrates 6 phase classes per v1.2.0-real refactor.
+
+        Each phase (PhaseA/B/TbV/C/D/E) consumes a PhaseContext and produces
+        a PhaseResult. The driver threads ctx between phases via:
+
+            ctx = ctx.update(
+                accumulated_cost=ctx.accumulated_cost + result.cost_usd,
+                **result.extras,
+            )
+
+        Pure-local arithmetic — driver NEVER calls _accumulate_cost. State
+        has advanced incrementally INSIDE each phase via
+        self._accumulate_cost(...) after every internal claude call,
+        preserving the v1.3.12 in-flight budget gate and v1.3.4 #15 retry
+        safety. The driver pattern was validated by the Task 1.x golden
+        trace fixtures: post-refactor traces must deep-equal pre-refactor
+        baseline + fix-loop fixtures.
+        """
         name = ms["name"]
         sections = ms.get("spec_sections", "")
         spec = self.config["spec"]
@@ -1094,442 +1110,43 @@ class Orchestrator:
         )
         verify = self.config.get("verify_commands", {})
         convergence = self.config.get("convergence", {})
-        cost = 0.0
 
-        # Phase A: Plan + Ultrathink
-        try:
-            self._call_pre_phase("plan", ms)
-        except PluginVetoError as e:
-            raise _PhaseError("plan", str(e)) from e
-        self.state.current_step = "plan"
-        save_state(self._state_dir, self.state)
-        save_phase_state(
-            self.claude_dir,
-            PhaseState(phase="ultrathink", max_iterations=convergence.get("max_iterations", 5)),
-        )
-        logger.log("PHASE_A_START")
-        self._telemetry.emit(PhaseStarted(milestone=name, phase="plan"))
-        r = self._run_claude(
-            phase_a_prompt(name, context, spec, sections),
+        # Build the initial PhaseContext for the phase loop.
+        ctx = PhaseContext(
+            milestone_name=name,
+            milestone_dict=ms,
+            spec=spec,
+            sections=sections,
             model=model,
-            effort=effort.get("plan", "max"),
-            budget=budgets.get("plan", 25),
-            cwd=self.cwd,
-            system_prompt=self.sys_prompt,
             fallback_model=fallback,
-        )
-        cost = self._accumulate_cost(cost, r.cost_usd)
-        curator_cost = self._run_gap_curator(name, "plan")
-        cost = self._accumulate_cost(cost, curator_cost)
-        self._emit_gap_report(name, "plan")
-        self._emit_gap_validation(name)
-        archive_reports(self.claude_dir, name, "plan")
-        clear_phase_state(self.claude_dir)
-        self._check_phase_result(r, "Phase A")
-        self._telemetry.emit(
-            PhaseCompleted(
-                milestone=name,
-                phase="plan",
-                cost_usd=r.cost_usd,
-                duration_ms=r.duration_ms,
-                session_id=r.session_id,
-                **extract_token_usage(r.raw),
-            )
-        )
-        logger.log("PHASE_A_COMPLETE", cost=round(r.cost_usd, 2))
-        self._audit.append(
-            "PHASE_COMPLETE",
-            run_id=self.state.run_id,
-            milestone=name,
-            data={"phase": "plan", "cost": round(r.cost_usd, 2)},
-        )
-        self._call_post_phase("plan", ms, {"cost": r.cost_usd})
-
-        sha_result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            cwd=self.cwd,
-        )
-        self.state.plan_commit_sha = sha_result.stdout.strip()
-        self.state.last_phase_session_id = r.session_id
-        save_state(self._state_dir, self.state)
-
-        subprocess.run(["git", "tag", f"pre-impl/{name}"], capture_output=True, cwd=self.cwd)
-
-        # Phase B: Implement
-        try:
-            self._call_pre_phase("implement", ms)
-        except PluginVetoError as e:
-            raise _PhaseError("implement", str(e)) from e
-        self.state.current_step = "implement"
-        save_state(self._state_dir, self.state)
-        plan_path = self._find_plan_path(name)
-        logger.log("PHASE_B_START")
-        self._telemetry.emit(PhaseStarted(milestone=name, phase="implement"))
-        r = self._run_claude(
-            phase_b_prompt(name, context, plan_path),
-            model=model,
-            effort=effort.get("implement", "high"),
-            budget=budgets.get("implement", 100),
-            cwd=self.cwd,
-            system_prompt=self.sys_prompt,
-            fallback_model=fallback,
-        )
-        cost = self._accumulate_cost(cost, r.cost_usd)
-        self.state.last_phase_session_id = r.session_id
-        self._check_phase_result(r, "Phase B")
-        self._telemetry.emit(
-            PhaseCompleted(
-                milestone=name,
-                phase="implement",
-                cost_usd=r.cost_usd,
-                duration_ms=r.duration_ms,
-                session_id=r.session_id,
-                **extract_token_usage(r.raw),
-            )
-        )
-        logger.log("PHASE_B_COMPLETE", cost=round(r.cost_usd, 2))
-        self._audit.append(
-            "PHASE_COMPLETE",
-            run_id=self.state.run_id,
-            milestone=name,
-            data={"phase": "implement", "cost": round(r.cost_usd, 2)},
-        )
-        self._call_post_phase("implement", ms, {"cost": r.cost_usd})
-
-        # Quality Gates Checkpoint #1
-        self.state.current_step = "quality_check_b"
-        save_state(self._state_dir, self.state)
-        passed, failures = self._verify_quality_gates(
-            logger, milestone=name, checkpoint="quality_check_b"
-        )
-        if not passed:
-            fix_prompt = (
-                f"Quality gates failed after Phase B for {name}:\n"
-                + "\n".join(f"- {f}" for f in failures)
-                + "\nFix ALL issues. Commit the fix."
-            )
-            r = self._run_claude(
-                fix_prompt,
-                model=model,
-                effort="high",
-                budget=10.0,
-                cwd=self.cwd,
-                system_prompt=self.sys_prompt,
-                fallback_model=fallback,
-            )
-            cost = self._accumulate_cost(cost, r.cost_usd)
-            passed, failures = self._verify_quality_gates(
-                logger, milestone=name, checkpoint="quality_check_b"
-            )
-            if not passed:
-                logger.log("QUALITY_GATES_STILL_FAILING", failures=str(failures))
-
-        policy_passed, policy_violations = self._check_policies(
-            logger, milestone=name, checkpoint="quality_check_b"
-        )
-        if not policy_passed:
-            fix_prompt = (
-                f"Policy violations after {name}:\n"
-                + "\n".join(f"- {v}" for v in policy_violations)
-                + "\nFix ALL violations. Commit the fix."
-            )
-            r = self._run_claude(
-                fix_prompt,
-                model=model,
-                effort="high",
-                budget=10.0,
-                cwd=self.cwd,
-                system_prompt=self.sys_prompt,
-                fallback_model=fallback,
-            )
-            cost = self._accumulate_cost(cost, r.cost_usd)
-            policy_passed, remaining = self._check_policies(
-                logger, milestone=name, checkpoint="quality_check_b_recheck"
-            )
-            if not policy_passed:
-                logger.log("POLICY_FIX_FAILED", violations=len(remaining))
-
-        _, cov_cost = self._check_coverage(logger, milestone=name)
-        cost = self._accumulate_cost(cost, cov_cost)
-        plan_sha = self.state.plan_commit_sha or ""
-        self._check_trailers(plan_sha, logger)
-
-        # Refresh context to include what Phase B built
-        context = build_context_summary(
-            self.state.completed,
-            self.root,
-            ms,
-            self.config.get("milestones", []),
-        )
-
-        # Spec Compliance Check
-        compliance_report, compliance_cost = self._run_spec_compliance(name, ms)
-        cost = self._accumulate_cost(cost, compliance_cost)
-
-        # Feature Verification
-        verification_report, verify_cost = self._run_feature_verification(name)
-        cost = self._accumulate_cost(cost, verify_cost)
-
-        # Phase C: Review + Fix
-        try:
-            self._call_pre_phase("review", ms)
-        except PluginVetoError as e:
-            raise _PhaseError("review", str(e)) from e
-        self.state.current_step = "review"
-        save_state(self._state_dir, self.state)
-        save_phase_state(
-            self.claude_dir,
-            PhaseState(phase="review", max_iterations=convergence.get("max_iterations", 5)),
-        )
-        logger.log("PHASE_C_START")
-        self._telemetry.emit(PhaseStarted(milestone=name, phase="review"))
-        r = self._run_claude(
-            phase_c_prompt(
-                name,
-                context,
-                self.state.plan_commit_sha or "",
-                verify.get("test", "true"),
-                verify.get("lint", "true"),
-                verify.get("format", "true"),
-                compliance_report=compliance_report,
-                verification_report=verification_report,
-            ),
-            model=model,
-            effort=effort.get("review", "max"),
-            budget=budgets.get("review", 40),
-            cwd=self.cwd,
-            system_prompt=self.sys_prompt,
-            fallback_model=fallback,
-        )
-        cost = self._accumulate_cost(cost, r.cost_usd)
-        curator_cost = self._run_gap_curator(name, "review")
-        cost = self._accumulate_cost(cost, curator_cost)
-        self._emit_gap_report(name, "review")
-        self._emit_gap_validation(name)
-        archive_reports(self.claude_dir, name, "review")
-        clear_phase_state(self.claude_dir)
-        self._check_phase_result(r, "Phase C")
-        self._telemetry.emit(
-            PhaseCompleted(
-                milestone=name,
-                phase="review",
-                cost_usd=r.cost_usd,
-                duration_ms=r.duration_ms,
-                session_id=r.session_id,
-                **extract_token_usage(r.raw),
-            )
-        )
-        logger.log("PHASE_C_COMPLETE", cost=round(r.cost_usd, 2))
-        self._audit.append(
-            "PHASE_COMPLETE",
-            run_id=self.state.run_id,
-            milestone=name,
-            data={"phase": "review", "cost": round(r.cost_usd, 2)},
-        )
-        self._call_post_phase("review", ms, {"cost": r.cost_usd})
-
-        # Quality Gates Checkpoint #2
-        self.state.current_step = "quality_check_c"
-        save_state(self._state_dir, self.state)
-        passed, failures = self._verify_quality_gates(
-            logger, milestone=name, checkpoint="quality_check_c"
-        )
-        if not passed:
-            fix_prompt = (
-                f"Quality gates failed after Phase C for {name}:\n"
-                + "\n".join(f"- {f}" for f in failures)
-                + "\nFix ALL issues. Commit the fix."
-            )
-            r = self._run_claude(
-                fix_prompt,
-                model=model,
-                effort="high",
-                budget=10.0,
-                cwd=self.cwd,
-                system_prompt=self.sys_prompt,
-                fallback_model=fallback,
-            )
-            cost = self._accumulate_cost(cost, r.cost_usd)
-            passed, failures = self._verify_quality_gates(
-                logger, milestone=name, checkpoint="quality_check_c"
-            )
-            if not passed:
-                logger.log("QUALITY_GATES_STILL_FAILING", failures=str(failures))
-
-        policy_passed, policy_violations = self._check_policies(
-            logger, milestone=name, checkpoint="quality_check_c"
-        )
-        if not policy_passed:
-            fix_prompt = (
-                f"Policy violations after {name}:\n"
-                + "\n".join(f"- {v}" for v in policy_violations)
-                + "\nFix ALL violations. Commit the fix."
-            )
-            r = self._run_claude(
-                fix_prompt,
-                model=model,
-                effort="high",
-                budget=10.0,
-                cwd=self.cwd,
-                system_prompt=self.sys_prompt,
-                fallback_model=fallback,
-            )
-            cost = self._accumulate_cost(cost, r.cost_usd)
-            policy_passed, remaining = self._check_policies(
-                logger, milestone=name, checkpoint="quality_check_c_recheck"
-            )
-            if not policy_passed:
-                logger.log("POLICY_FIX_FAILED", violations=len(remaining))
-
-        _, cov_cost = self._check_coverage(logger, milestone=name)
-        cost = self._accumulate_cost(cost, cov_cost)
-        plan_sha = self.state.plan_commit_sha or ""
-        self._check_trailers(plan_sha, logger)
-
-        # Strict mode: loop on residual compliance/verification findings
-        strict_cost = self._run_strict_mode_loop(
-            name=name,
-            ms=ms,
-            model=model,
-            fallback=fallback,
-            initial_compliance=compliance_report,
-            initial_verification=verification_report,
+            budgets=budgets,
+            effort=effort,
+            verify=verify,
+            convergence=convergence,
+            validation=self.config.get("validation", {}),
+            context_summary=context,
+            plan_commit_sha=self.state.plan_commit_sha,
             logger=logger,
         )
-        cost = self._accumulate_cost(cost, strict_cost)
 
-        # Phase D: Push + Tag
-        try:
-            self._call_pre_phase("push", ms)
-        except PluginVetoError as e:
-            raise _PhaseError("push", str(e)) from e
-        self._call_pre_commit(ms, [])
-        self.state.current_step = "push"
-        save_state(self._state_dir, self.state)
-        branch = "main" if self.config.get("git_strategy") == "main" else f"milestone/{name}"
-        logger.log("PHASE_D_START")
-        self._telemetry.emit(PhaseStarted(milestone=name, phase="push"))
-        r = self._run_claude(
-            phase_d_prompt(name, branch),
-            model=model,
-            effort=effort.get("push", "low"),
-            budget=budgets.get("push", 3),
-            cwd=self.cwd,
-            system_prompt=self.sys_prompt,
-            fallback_model=fallback,
-        )
-        cost = self._accumulate_cost(cost, r.cost_usd)
-        self._telemetry.emit(
-            PhaseCompleted(
-                milestone=name,
-                phase="push",
-                cost_usd=r.cost_usd,
-                duration_ms=r.duration_ms,
-                session_id=r.session_id,
-                **extract_token_usage(r.raw),
+        # Phases A → B → TbV → C → D: extras (plan_commit_sha,
+        # context_summary, compliance_report, verification_report) thread
+        # into PhaseContext via ctx.update(**result.extras). The Finding 3
+        # extras-drift guard fires if a phase emits an extras key that
+        # PhaseContext doesn't recognise.
+        for phase_cls in (PhaseA, PhaseB, PhaseTbV, PhaseC, PhaseD):
+            result = phase_cls(self).run(ctx)
+            ctx = ctx.update(
+                accumulated_cost=ctx.accumulated_cost + result.cost_usd,
+                **result.extras,
             )
-        )
-        logger.log("PHASE_D_COMPLETE", cost=round(r.cost_usd, 2))
-        self._audit.append(
-            "PHASE_COMPLETE",
-            run_id=self.state.run_id,
-            milestone=name,
-            data={"phase": "push", "cost": round(r.cost_usd, 2)},
-        )
-        self._call_post_phase("push", ms, {"cost": r.cost_usd})
 
-        security = self.config.get("security", {})
-        sbom_tool = security.get("sbom_tool", "")
-        sbom_output = security.get("sbom_output", "")
-        if sbom_tool:
-            ok, sbom_path = generate_sbom(
-                tool_cmd=sbom_tool,
-                output_path=sbom_output,
-                cwd=self.cwd,
-                milestone=name,
-            )
-            if ok and sbom_path:
-                logger.log("SBOM_GENERATED", milestone=name, path=sbom_path)
-                self._audit.append(
-                    "SBOM_GENERATED",
-                    run_id=self.state.run_id,
-                    milestone=name,
-                    data={"path": sbom_path},
-                )
-            else:
-                logger.log("SBOM_FAILED", milestone=name)
-
-        if security.get("sign_artifacts", False):
-            tag = name
-            sig = sign_artifact(tag=tag, cwd=self.cwd)
-            if sig:
-                logger.log("ARTIFACT_SIGNED", milestone=name)
-                self._audit.append(
-                    "ARTIFACT_SIGNED",
-                    run_id=self.state.run_id,
-                    milestone=name,
-                    data={"tag": tag},
-                )
-            else:
-                logger.log("SIGNING_SKIPPED", milestone=name)
-
-        ci_config = self._integrations.get("ci", {})
-        if ci_config.get("enabled", False):
-            self.state.current_step = "ci_wait"
-            save_state(self._state_dir, self.state)
-            logger.log("PHASE_E_START")
-            self._telemetry.emit(PhaseStarted(milestone=name, phase="ci_fix"))
-
-            self.state.current_step = "ci_fix"
-            save_state(self._state_dir, self.state)
-
-            def _on_ci_attempt(attempt: int, max_attempts: int, status: str) -> None:
-                self._notify(
-                    "ci_fix",
-                    {
-                        "milestone": name,
-                        "attempt": attempt,
-                        "max_attempts": max_attempts,
-                        "status": status,
-                    },
-                )
-
-            ci_success, ci_cost, ci_tokens = ci_fix_loop(
-                cwd=self.cwd,
-                ci_config=ci_config,
-                run_claude_fn=self._run_claude,
-                model=self.config["model"],
-                system_prompt=self.sys_prompt,
-                fallback_model=self.config.get("fallback_model"),
-                on_attempt=_on_ci_attempt,
-            )
-            cost = self._accumulate_cost(cost, ci_cost)
-
-            if ci_success:
-                logger.log("PHASE_E_COMPLETE", status="passed", cost=round(ci_cost, 2))
-            else:
-                self.state.current_step = "ci_fix_failed"
-                save_state(self._state_dir, self.state)
-                logger.log("PHASE_E_COMPLETE", status="failed", cost=round(ci_cost, 2))
-
-            self._telemetry.emit(
-                PhaseCompleted(
-                    milestone=name,
-                    phase="ci_fix",
-                    cost_usd=round(ci_cost, 2),
-                    duration_ms=0,
-                    session_id="",
-                    **ci_tokens,
-                )
-            )
-            self._audit.append(
-                "PHASE_COMPLETE",
-                run_id=self.state.run_id,
-                milestone=name,
-                data={"phase": "ci_fix", "cost": round(ci_cost, 2), "success": ci_success},
-            )
+        # Phase E: extras (ci_success, ci_enabled) are control-flow
+        # signals consumed by the driver, NOT structural data that
+        # threads to a subsequent phase. PhaseE has no downstream phase,
+        # so we accumulate cost but discard extras.
+        result_e = PhaseE(self).run(ctx)
+        cost = ctx.accumulated_cost + result_e.cost_usd
 
         gh_config = self._integrations.get("github", {})
         if gh_config.get("auto_pr", False) and self.config.get("git_strategy") != "main":

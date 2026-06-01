@@ -243,8 +243,16 @@ class TestAccumulateCostWrapper:
         assert len(r.accumulate_cost_calls) == 1
         payload = r.accumulate_cost_calls[0].payload
         assert payload["delta"] == 1.5
-        assert payload["new_local"] == 1.5
         assert payload["new_state_total"] == 1.5
+        # new_local is NOT recorded — it's a mock-bookkeeping artifact
+        # of how the caller threads the local accumulator. The v1.2.0-real
+        # refactor uses _accumulate_cost(0.0, delta) per Finding 1 (the
+        # driver tracks running total via ctx.accumulated_cost), while
+        # the pre-refactor code threaded the milestone running cost.
+        # Both produce identical state side effects; locking new_local
+        # would create false-positive failures on the legitimate
+        # refactor.
+        assert "new_local" not in payload
 
     def test_rounds_to_six_dp(self):
         """Float noise above 6dp should not generate fixture instability."""
