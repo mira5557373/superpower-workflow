@@ -3,6 +3,163 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.15] — 2026-06-01
+
+**v1.2.0-real refactor — the Phase A/B/C/D/E class extraction that v1.2.0
+shipped as a skeleton release.** CHANGELOG line 1163 admitted v1.2.0
+deferred the headline `T2.0.1` refactor; CHANGELOG line 1168 admitted
+the `TrustButVerifyPipeline` shipped as dead code. The v1.3.x post-line
+integration audit (`docs/superpowers/plans/2026-06-01-v120-real-phase-refactor.md`)
+revisited both admissions and shipped the actual extraction across 10
+sequential tasks.
+
+### Why this lands as v1.3.15, not v1.2.0
+
+The v1.2.0 version number already shipped (as the skeleton release). The
+substantive work that should have been v1.2.0 lands in the v1.3.x line
+because that's where the version counter sits. Naming-wise this is
+called "v1.2.0-real" in commit messages and docs; semver-wise it's just
+v1.3.15.
+
+### Pre-refactor state (problem statement)
+
+The v1.3.x audit found:
+
+- `_run_milestone` grew from 502 → **657 lines** inside a 2316-line
+  `orchestrator.py` despite the v1.2.0 CHANGELOG claiming the refactor
+  shipped.
+- `TrustButVerifyPipeline` shipped at v1.2.0 with 13 unit tests but
+  zero orchestrator callers.
+- Two adversarial-review findings on the refactor design itself
+  (`Finding 1 CRITICAL`: cost-accumulation granularity, `Finding 2
+  HIGH`: golden-trace blind spots) had to be resolved before any code
+  could land.
+
+### Refactor architecture
+
+```
+src/superpower_workflow/phases/
+├── __init__.py          — exports PhaseBase + PhaseA/B/TbV/C/D/E + Context + Result
+├── base.py              — PhaseBase abstract class + shared helpers
+├── context.py           — PhaseContext frozen dataclass (extras-drift guard)
+├── result.py            — PhaseResult (cost_usd reporting-only per Finding 1)
+├── plan.py              — PhaseA (Plan + Ultrathink)
+├── implement.py         — PhaseB (Implement + QG#1 + coverage + trailers + ctx refresh)
+├── trust_but_verify.py  — PhaseTbV (spec_compliance + feature_verification)
+├── review.py            — PhaseC (Review + QG#2 + coverage + trailers + strict-mode)
+├── push.py              — PhaseD (Push + SBOM + sign)
+└── ci_fix.py            — PhaseE (CI fix loop)
+```
+
+The orchestrator's `_run_milestone` is now a thin driver:
+
+```python
+ctx = PhaseContext(...initial...)
+for phase_cls in (PhaseA, PhaseB, PhaseTbV, PhaseC, PhaseD):
+    result = phase_cls(self).run(ctx)
+    ctx = ctx.update(
+        accumulated_cost=ctx.accumulated_cost + result.cost_usd,
+        **result.extras,
+    )
+result_e = PhaseE(self).run(ctx)
+cost = ctx.accumulated_cost + result_e.cost_usd
+# ... auto_pr + post_milestone + docs (verbatim) ...
+return cost
+```
+
+Pure-local arithmetic — driver NEVER calls `_accumulate_cost`. State
+advanced incrementally INSIDE each phase via `self.orc._accumulate_cost(...)`
+after every internal claude call, preserving the v1.3.12 in-flight
+budget gate + v1.3.4 #15 retry safety.
+
+### 10 ordered tasks
+
+| Task | Commit | Highlights |
+|---|---|---|
+| 1.1 | `298d903` | Recorder infrastructure — TraceRecorder + dispatchers + 25 unit tests |
+| 1.2 | `ab6a040` | Happy-path baseline fixture (36 records) |
+| 1.3 | `8909c4b` | Fix-loop fixture (45 records) — pins Finding 1 + Finding 2 |
+| 1.4 | `2b3a5c7` | SwPhase DB roundtrip — locks v1.3.14 hotfix surface |
+| 2 | `2e19bbc` | PhaseBase + PhaseContext + PhaseResult contracts (19 tests) |
+| 3 | `31d4cd7` | `run_quality_gate_checkpoint` helper (18 tests) |
+| 4 | `5bc69ab` | PhaseA (Plan) — 16 tests |
+| 5 | `8ecf7e8` | PhaseB + PhaseTbV — 32 tests |
+| 6 | `49aacb5` | PhaseC (Review) — 24 tests (workflow-designed) |
+| 7 | `b428238` | PhaseD + PhaseE — 33 tests |
+| 8 | `55788c0` | Driver wire-up — orchestrator.py 2316 → 1933 lines (−383) |
+| 9 | `5f803a4` | Retired dead `TrustButVerifyPipeline` (−346 lines + −13 tests) |
+| 10 | `5098e41` | Per-phase complexity audit + helper extractions |
+
+### Adversarial findings resolved
+
+**Finding 1 (CRITICAL)** — cost-accumulation granularity must not regress.
+Each phase class calls `self.orc._accumulate_cost(...)` after EVERY
+internal claude call (primary, curator, QG fix-loop, coverage,
+compliance, verification, strict iterations, ci_fix). `PhaseResult.cost_usd`
+is REPORTING-ONLY. Driver does pure-local add. v1.3.12 in-flight gate +
+v1.3.4 #15 retry safety preserved per-phase.
+
+**Finding 2 (HIGH)** — golden trace captures more than events. Universal
+telemetry sink (not manual-append), `_accumulate_cost` recorder,
+`save_state` recorder, subprocess dispatcher by cmd[0], per-call
+token-shape variation, SwPhase DB roundtrip assertion. Two fixtures
+(happy + fix-loop). `GOLDEN_TRACE_UPDATE=1` gated on `GOLDEN_TRACE_RATIONALE`.
+
+**Finding 3 (MEDIUM)** — scope cleanups. Module-level
+`quality_gates.run_quality_gate_checkpoint` helper (not a PhaseB
+method). New PhaseTbV introduced (Phase B ends at QG#1 + ctx refresh).
+`PhaseContext.update(**unknown)` raises `TypeError` — extras-drift
+guard. Per-phase complexity audit instead of global ratchet.
+
+### Per-phase complexity targets
+
+Every function under `src/superpower_workflow/phases/` clears
+**v2.0.0 targets: (100 lines, cyclomatic 15, nesting 4)**.
+
+Top 5 by line count post-refactor:
+- `plan.py:run`: 99 lines, cc=1, nest=0
+- `implement.py:run`: 88 lines, cc=3, nest=0
+- `push.py:run`: 68 lines, cc=4, nest=1
+- `review.py:_run_review`: 60 lines, cc=3, nest=0
+- `ci_fix.py:run`: 44 lines, cc=2, nest=1
+
+Pinned by `tests/test_complexity_audit.py::TestPhasesPackageClearsV2Targets`.
+The legacy `orchestrator.py` stays grandfathered at the global
+ceiling (510, 55, 7) — that's a future release.
+
+### Stats
+
+- **Test count: 1432 → 1596** passing (+164 across 10 tasks).
+- `orchestrator.py`: 2316 → **1933 lines** (−383).
+- `_run_milestone`: 657 → **121 lines** (−536; remaining bulk is the
+  auto_pr + post_milestone + docs blocks).
+- New: `src/superpower_workflow/phases/` package (10 files).
+- New: `src/superpower_workflow/quality_gates.py` (single module-level helper).
+- Deleted: `src/superpower_workflow/pipelines/` (dead code).
+- Ruff + format clean across all 10 commits.
+
+### Verification
+
+Golden trace fixtures (Tasks 1.2/1.3/1.4) produce **byte-identical
+traces** pre- and post-refactor:
+- Baseline: 36 records (8 events, 11 acc, 11 save_state, 4 run_claude, 2 subprocess)
+- Fixloop: 45 records (11 events, 12 acc, 12 save_state, 5 run_claude, 5 subprocess)
+- SwPhase DB roundtrip locks cache_* fields per phase (v1.3.14 surface).
+
+### Out-of-scope (deferred)
+
+- Plugin extension point for custom phases (intentionally minimal —
+  the abstract `PhaseBase` is already extensible; no formal registry).
+- Tightening the global complexity ceiling. The phases/ package is
+  the leading edge; the legacy `orchestrator.py` is a separate
+  refactor target.
+- Async phase execution (per ODQ-4, deferred to ≥v2.0.0).
+
+This closes the v1.2.0-real arc. Next release line per the original
+roadmap is v1.4.0 (intelligence layer — curator self-tune, recipe
+extractor) or the v1.3.0 remainder (MCP server, memory module,
+cost-alert / quality-gate hooks).
+
 ## [1.3.14] — 2026-05-31
 
 Foundation hotfix surfaced by the v1.3.x post-line integration audit. A
