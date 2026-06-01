@@ -14,9 +14,11 @@ concrete phase classes are added in Tasks 4-7.
 from __future__ import annotations
 
 from superpower_workflow.phases.base import PhaseBase
+from superpower_workflow.phases.ci_fix import PhaseE
 from superpower_workflow.phases.context import PhaseContext
 from superpower_workflow.phases.implement import PhaseB
 from superpower_workflow.phases.plan import PhaseA
+from superpower_workflow.phases.push import PhaseD
 from superpower_workflow.phases.result import PhaseResult
 from superpower_workflow.phases.review import PhaseC
 from superpower_workflow.phases.trust_but_verify import PhaseTbV
@@ -27,6 +29,8 @@ __all__ = [
     "PhaseBase",
     "PhaseC",
     "PhaseContext",
+    "PhaseD",
+    "PhaseE",
     "PhaseResult",
     "PhaseTbV",
 ]
