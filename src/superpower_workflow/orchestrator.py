@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import threading
@@ -58,6 +59,7 @@ from superpower_workflow.state import (
     save_state,
 )
 from superpower_workflow.telemetry import (
+    BudgetAlert,
     CoverageResult,
     FeatureVerificationCompleted,
     GapCurationCompleted,
@@ -70,6 +72,7 @@ from superpower_workflow.telemetry import (
     QualityGateResult,
     RetryAttempt,
     RunCompleted,
+    RunCostProjection,
     RunStarted,
     SpecComplianceCompleted,
     StrictModeIteration,
@@ -156,6 +159,13 @@ class Orchestrator:
         # this lock. Sequential mode is unaffected (lock acquisition on
         # an uncontended lock is ~50ns).
         self._state_lock = threading.Lock()
+
+        # v1.3.17 / v1.1.9.1 — current milestone + phase labels used in
+        # BudgetAlert + RunCostProjection event payloads. Best-effort
+        # labels (empty string is a valid value). Set by the milestone
+        # loop + phase classes when they transition.
+        self._current_milestone_name: str = ""
+        self._current_phase_name: str = ""
 
         # v1.3.12: shared in-flight cost counter across parallel workers.
         # `_run_claude` charges to this BEFORE state is updated so sibling
@@ -946,6 +956,7 @@ class Orchestrator:
         Returns the new local accumulator so callers can keep using the
         `cost = self._accumulate_cost(cost, delta)` idiom.
         """
+        budget_alert_to_emit: BudgetAlert | None = None
         if delta:
             import contextlib
 
@@ -965,7 +976,101 @@ class Orchestrator:
                 # save_state sites under `_state_dir`.
                 with contextlib.suppress(OSError):
                     save_state(self._state_dir, self.state)
+
+                # v1.3.17 / v1.1.9.1 — BudgetAlert threshold crossing.
+                # Computed under the SAME lock so two parallel workers
+                # crossing 50% simultaneously can't both fire — whoever
+                # acquires the lock first bumps last_budget_alert_pct
+                # and the other sees the updated value. Emission itself
+                # happens OUTSIDE the lock to keep the in-flight gate's
+                # latency unchanged.
+                max_budget = self.config.get("max_total_budget_usd", 0)
+                try:
+                    max_budget_f = float(max_budget)
+                except (TypeError, ValueError):
+                    max_budget_f = 0.0
+                if max_budget_f > 0 and math.isfinite(max_budget_f):
+                    pct = (self.state.total_cost_usd / max_budget_f) * 100
+                    new_bucket = max(
+                        (t for t in (50, 75, 90, 100) if pct >= t),
+                        default=0,
+                    )
+                    if new_bucket > self.state.last_budget_alert_pct:
+                        self.state.last_budget_alert_pct = new_bucket
+                        with contextlib.suppress(OSError):
+                            save_state(self._state_dir, self.state)
+                        budget_alert_to_emit = BudgetAlert(
+                            milestone=self._current_milestone_name or "",
+                            phase=self._current_phase_name or "",
+                            current_spent_usd=round(self.state.total_cost_usd, 4),
+                            max_budget_usd=max_budget_f,
+                            percent_of_cap=round(pct, 2),
+                            threshold=new_bucket,
+                        )
+
+        # Emit OUTSIDE the state_lock so the in-flight gate's hot path
+        # isn't held while the telemetry emitter does its own I/O.
+        if budget_alert_to_emit is not None and self._telemetry is not None:
+            with contextlib.suppress(Exception):
+                self._telemetry.emit(budget_alert_to_emit)
         return local_acc + delta
+
+    def _emit_run_cost_projection(
+        self,
+        ctx,
+        *,
+        phase_just_completed: str,
+        remaining_in_milestone: list[str],
+        completed_in_milestone: list[str],
+    ) -> None:
+        """v1.3.17 / v1.1.9.1 — emit RunCostProjection after a phase completes.
+
+        Best-effort: never raises. The projection module handles missing
+        telemetry / zero history / degenerate cases.
+        """
+        if self._telemetry is None:
+            return
+        try:
+            from superpower_workflow.projection import compute_projection
+
+            telemetry_path = self.claude_dir / "sw-telemetry.jsonl"
+            milestones = self.config.get("milestones", [])
+            result = compute_projection(
+                state_total_cost=self.state.total_cost_usd,
+                milestones_total=len(milestones),
+                milestones_completed=len(self.state.completed),
+                milestones_failed=len(self.state.failed),
+                milestones_skipped=len(self.state.skipped),
+                remaining_phases=remaining_in_milestone,
+                completed_phases_this_milestone=completed_in_milestone,
+                telemetry_path=telemetry_path,
+            )
+            max_budget = self.config.get("max_total_budget_usd", 0)
+            try:
+                max_budget_f = float(max_budget)
+            except (TypeError, ValueError):
+                max_budget_f = 0.0
+            pct_of_cap = (
+                (self.state.total_cost_usd / max_budget_f) * 100 if max_budget_f > 0 else 0.0
+            )
+            self._telemetry.emit(
+                RunCostProjection(
+                    milestone=self._current_milestone_name or "",
+                    milestones_completed=len(self.state.completed),
+                    milestones_total=len(milestones),
+                    current_spent_usd=round(self.state.total_cost_usd, 4),
+                    projected_total_usd=round(result.projected_total, 4),
+                    low_p10_usd=round(result.low_p10, 4),
+                    high_p90_usd=round(result.high_p90, 4),
+                    confidence=round(result.confidence, 4),
+                    source=result.source,
+                    max_budget_usd=max_budget_f,
+                    pct_of_cap=round(pct_of_cap, 2),
+                )
+            )
+        except Exception:  # noqa: BLE001
+            # Best-effort — projection is observability, never fatal.
+            pass
 
     def _call_pre_phase(self, phase: str, milestone: dict) -> None:
         for plugin in self._plugins:
@@ -1129,22 +1234,47 @@ class Orchestrator:
             logger=logger,
         )
 
+        # v1.3.17 / v1.1.9.1 — track current milestone for BudgetAlert
+        # + RunCostProjection event payloads.
+        self._current_milestone_name = name
+
         # Phases A → B → TbV → C → D: extras (plan_commit_sha,
         # context_summary, compliance_report, verification_report) thread
         # into PhaseContext via ctx.update(**result.extras). The Finding 3
         # extras-drift guard fires if a phase emits an extras key that
         # PhaseContext doesn't recognise.
-        for phase_cls in (PhaseA, PhaseB, PhaseTbV, PhaseC, PhaseD):
+        phase_sequence = (PhaseA, PhaseB, PhaseTbV, PhaseC, PhaseD)
+        for phase_cls in phase_sequence:
+            self._current_phase_name = phase_cls.name
             result = phase_cls(self).run(ctx)
             ctx = ctx.update(
                 accumulated_cost=ctx.accumulated_cost + result.cost_usd,
                 **result.extras,
+            )
+            # v1.3.17 — emit RunCostProjection after each PhaseCompleted.
+            # Best-effort; failures don't break the loop.
+            self._emit_run_cost_projection(
+                ctx,
+                phase_just_completed=phase_cls.name,
+                remaining_in_milestone=[
+                    p.name
+                    for p in phase_sequence
+                    if phase_sequence.index(p) > phase_sequence.index(phase_cls)
+                    and p.name != "trust_but_verify"
+                ],
+                completed_in_milestone=[
+                    p.name
+                    for p in phase_sequence
+                    if phase_sequence.index(p) <= phase_sequence.index(phase_cls)
+                    and p.name != "trust_but_verify"
+                ],
             )
 
         # Phase E: extras (ci_success, ci_enabled) are control-flow
         # signals consumed by the driver, NOT structural data that
         # threads to a subsequent phase. PhaseE has no downstream phase,
         # so we accumulate cost but discard extras.
+        self._current_phase_name = PhaseE.name
         result_e = PhaseE(self).run(ctx)
         cost = ctx.accumulated_cost + result_e.cost_usd
 

@@ -1,1 +1,1 @@
-v1.2.0-real Task 8: driver wires PhaseA/B/TbV/C/D/E classes. Recorder updated to patch save_state in phase modules (top-level imports bypass state-module patch). Phase classes call _accumulate_cost(0.0, delta) so recorder no longer records new_local artifact.
+v1.3.17 / v1.1.9.1 — trace now includes RunCostProjection events emitted after each PhaseCompleted by the driver. BudgetAlert may also fire if costs cross thresholds (baseline config has max_budget=100 and total cost ~$4, so no threshold crossed in this fixture).

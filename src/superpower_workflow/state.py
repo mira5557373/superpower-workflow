@@ -54,6 +54,10 @@ class WorkflowState:
     spec_sha: str = ""
     run_id: str = ""
     started_at: str = ""
+    # v1.3.17 / v1.1.9.1 — highest BudgetAlert threshold already fired
+    # (50/75/90/100). Monotonic non-decreasing; survives state reload
+    # so a resume doesn't re-fire crossed alerts.
+    last_budget_alert_pct: int = 0
 
 
 @dataclass

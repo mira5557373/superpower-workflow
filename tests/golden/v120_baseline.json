@@ -107,6 +107,14 @@
     },
     {
       "call_index": 10,
+      "kind": "event",
+      "payload": {
+        "event_type": "run_cost_projection",
+        "fields": {}
+      }
+    },
+    {
+      "call_index": 11,
       "kind": "save_state",
       "payload": {
         "claude_dir": ".claude",
@@ -115,7 +123,7 @@
       }
     },
     {
-      "call_index": 11,
+      "call_index": 12,
       "kind": "event",
       "payload": {
         "event_type": "phase_started",
@@ -126,7 +134,7 @@
       }
     },
     {
-      "call_index": 12,
+      "call_index": 13,
       "kind": "run_claude",
       "payload": {
         "call_index_local": 1,
@@ -141,7 +149,7 @@
       }
     },
     {
-      "call_index": 13,
+      "call_index": 14,
       "kind": "save_state",
       "payload": {
         "claude_dir": ".claude",
@@ -150,7 +158,7 @@
       }
     },
     {
-      "call_index": 14,
+      "call_index": 15,
       "kind": "accumulate_cost",
       "payload": {
         "delta": 0.2,
@@ -158,7 +166,7 @@
       }
     },
     {
-      "call_index": 15,
+      "call_index": 16,
       "kind": "event",
       "payload": {
         "event_type": "phase_completed",
@@ -176,20 +184,12 @@
       }
     },
     {
-      "call_index": 16,
+      "call_index": 17,
       "kind": "save_state",
       "payload": {
         "claude_dir": ".claude",
         "current_step": "quality_check_b",
         "total_cost_usd": 1.2
-      }
-    },
-    {
-      "call_index": 17,
-      "kind": "accumulate_cost",
-      "payload": {
-        "delta": 0.0,
-        "new_state_total": 1.2
       }
     },
     {
@@ -202,6 +202,14 @@
     },
     {
       "call_index": 19,
+      "kind": "event",
+      "payload": {
+        "event_type": "run_cost_projection",
+        "fields": {}
+      }
+    },
+    {
+      "call_index": 20,
       "kind": "accumulate_cost",
       "payload": {
         "delta": 0.0,
@@ -209,7 +217,23 @@
       }
     },
     {
-      "call_index": 20,
+      "call_index": 21,
+      "kind": "accumulate_cost",
+      "payload": {
+        "delta": 0.0,
+        "new_state_total": 1.2
+      }
+    },
+    {
+      "call_index": 22,
+      "kind": "event",
+      "payload": {
+        "event_type": "run_cost_projection",
+        "fields": {}
+      }
+    },
+    {
+      "call_index": 23,
       "kind": "save_state",
       "payload": {
         "claude_dir": ".claude",
@@ -218,7 +242,7 @@
       }
     },
     {
-      "call_index": 21,
+      "call_index": 24,
       "kind": "event",
       "payload": {
         "event_type": "phase_started",
@@ -229,7 +253,7 @@
       }
     },
     {
-      "call_index": 22,
+      "call_index": 25,
       "kind": "run_claude",
       "payload": {
         "call_index_local": 2,
@@ -244,7 +268,7 @@
       }
     },
     {
-      "call_index": 23,
+      "call_index": 26,
       "kind": "save_state",
       "payload": {
         "claude_dir": ".claude",
@@ -253,7 +277,7 @@
       }
     },
     {
-      "call_index": 24,
+      "call_index": 27,
       "kind": "accumulate_cost",
       "payload": {
         "delta": 2.5,
@@ -261,7 +285,7 @@
       }
     },
     {
-      "call_index": 25,
+      "call_index": 28,
       "kind": "accumulate_cost",
       "payload": {
         "delta": 0.0,
@@ -269,7 +293,7 @@
       }
     },
     {
-      "call_index": 26,
+      "call_index": 29,
       "kind": "event",
       "payload": {
         "event_type": "phase_completed",
@@ -287,7 +311,7 @@
       }
     },
     {
-      "call_index": 27,
+      "call_index": 30,
       "kind": "save_state",
       "payload": {
         "claude_dir": ".claude",
@@ -296,7 +320,7 @@
       }
     },
     {
-      "call_index": 28,
+      "call_index": 31,
       "kind": "accumulate_cost",
       "payload": {
         "delta": 0.0,
@@ -304,7 +328,7 @@
       }
     },
     {
-      "call_index": 29,
+      "call_index": 32,
       "kind": "accumulate_cost",
       "payload": {
         "delta": 0.0,
@@ -312,7 +336,15 @@
       }
     },
     {
-      "call_index": 30,
+      "call_index": 33,
+      "kind": "event",
+      "payload": {
+        "event_type": "run_cost_projection",
+        "fields": {}
+      }
+    },
+    {
+      "call_index": 34,
       "kind": "save_state",
       "payload": {
         "claude_dir": ".claude",
@@ -321,7 +353,7 @@
       }
     },
     {
-      "call_index": 31,
+      "call_index": 35,
       "kind": "event",
       "payload": {
         "event_type": "phase_started",
@@ -332,7 +364,7 @@
       }
     },
     {
-      "call_index": 32,
+      "call_index": 36,
       "kind": "run_claude",
       "payload": {
         "call_index_local": 3,
@@ -347,7 +379,7 @@
       }
     },
     {
-      "call_index": 33,
+      "call_index": 37,
       "kind": "save_state",
       "payload": {
         "claude_dir": ".claude",
@@ -356,7 +388,7 @@
       }
     },
     {
-      "call_index": 34,
+      "call_index": 38,
       "kind": "accumulate_cost",
       "payload": {
         "delta": 0.5,
@@ -364,7 +396,7 @@
       }
     },
     {
-      "call_index": 35,
+      "call_index": 39,
       "kind": "event",
       "payload": {
         "event_type": "phase_completed",
@@ -379,6 +411,14 @@
           "cache_read_input_tokens": 160,
           "cache_hit_rate": 0.7273
         }
+      }
+    },
+    {
+      "call_index": 40,
+      "kind": "event",
+      "payload": {
+        "event_type": "run_cost_projection",
+        "fields": {}
       }
     }
   ]

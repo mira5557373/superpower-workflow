@@ -318,6 +318,53 @@ class StrictModeIteration(TelemetryEvent):
     cost_usd: float = 0.0
 
 
+@dataclass
+class RunCostProjection(TelemetryEvent):
+    """v1.1.9.1 / v1.3.17 — mid-run cost projection.
+
+    Emitted after each PhaseCompleted. Combines actual phase costs with
+    historical per-phase ratios (or cold-start defaults) to project the
+    run's total. `source` indicates the data quality: cold_start (no
+    history), partial_history (3-9 historical samples), full_history
+    (>=10 samples). Confidence is in [0,1] proportional to sample
+    saturation.
+    """
+
+    EVENT_TYPE: ClassVar[str] = "run_cost_projection"
+    milestone: str = ""
+    milestones_completed: int = 0
+    milestones_total: int = 0
+    current_spent_usd: float = 0.0
+    projected_total_usd: float = 0.0
+    low_p10_usd: float = 0.0
+    high_p90_usd: float = 0.0
+    confidence: float = 0.0
+    source: str = "cold_start"  # cold_start | partial_history | full_history
+    max_budget_usd: float = 0.0  # 0.0 == no cap configured
+    pct_of_cap: float = 0.0  # 0.0 when max_budget_usd <= 0
+
+
+@dataclass
+class BudgetAlert(TelemetryEvent):
+    """v1.1.9.1 / v1.3.17 — budget threshold crossing.
+
+    Fires inside Orchestrator._accumulate_cost when state.total_cost_usd
+    crosses UP to a new threshold (50/75/90/100). Monotonic — once a
+    threshold has fired, cost oscillating around it (refunds, parallel
+    rebalance) does NOT re-fire. Leap-skip: cost jumping 40% → 80% emits
+    exactly ONE BudgetAlert(threshold=75), not separate 50+75 events;
+    the raw percent_of_cap field carries the actual crossing value.
+    """
+
+    EVENT_TYPE: ClassVar[str] = "budget_alert"
+    milestone: str = ""
+    phase: str = ""
+    current_spent_usd: float = 0.0
+    max_budget_usd: float = 0.0
+    percent_of_cap: float = 0.0  # actual computed pct at crossing time
+    threshold: int = 0  # 50 | 75 | 90 | 100
+
+
 class TelemetryEmitter:
     """v1.3.5 #3 fix: thread-safe writes for parallel orchestrator branches.
 
