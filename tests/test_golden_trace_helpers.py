@@ -137,6 +137,43 @@ class TestSubprocessDispatcher:
         result = dispatcher("git push origin master", shell=True)
         assert result.returncode == 0  # git path, not the gate-fail rc
 
+    def test_callable_gate_returncode_supports_fail_then_pass(self):
+        """The callable form takes (per-dispatcher gate_call_index, cmd_repr)
+        so callers can encode 'first N fail' patterns. Critical for the
+        v1.2.0-real fix-loop fixture where Phase B's QG#1 must fail once
+        then pass on the recheck inside the same _run_milestone invocation.
+        """
+        r = TraceRecorder()
+        # gate_call_index 0 fails; all subsequent pass.
+        dispatcher = make_subprocess_dispatcher(
+            r, gate_returncode=lambda idx, cmd: 1 if idx == 0 else 0
+        )
+        # First gate call → fails (idx=0).
+        assert dispatcher("ruff check .", shell=True).returncode == 1
+        # Second gate call → passes (idx=1).
+        assert dispatcher("ruff check .", shell=True).returncode == 0
+        # Git calls in between do NOT bump the gate counter — verify by
+        # interleaving a git call then another gate call (should pass).
+        dispatcher(["git", "rev-parse", "HEAD"])
+        assert dispatcher("ruff check .", shell=True).returncode == 0
+
+    def test_callable_gate_returncode_receives_cmd_for_per_command_patterns(self):
+        """The cmd argument lets callers branch on which gate is being
+        invoked. Useful if a fixture needs only `lint` to fail while
+        `sast` etc. pass on the first call.
+        """
+        r = TraceRecorder()
+        seen = []
+
+        def gate_fn(idx: int, cmd: str) -> int:
+            seen.append((idx, cmd))
+            return 1 if "ruff" in cmd else 0
+
+        dispatcher = make_subprocess_dispatcher(r, gate_returncode=gate_fn)
+        assert dispatcher("ruff check .", shell=True).returncode == 1
+        assert dispatcher("bandit -r .", shell=True).returncode == 0
+        assert seen == [(0, "ruff check ."), (1, "bandit -r .")]
+
 
 class TestRunClaudeStub:
     def test_per_call_token_variation(self):

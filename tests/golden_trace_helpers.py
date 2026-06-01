@@ -336,7 +336,7 @@ def make_save_state_recorder(
 def make_subprocess_dispatcher(
     recorder: TraceRecorder,
     *,
-    gate_returncode: int = 0,
+    gate_returncode: int | Callable[[int, str], int] = 0,
 ) -> Callable[..., Any]:
     """Return a subprocess.run replacement that dispatches by cmd[0].
 
@@ -346,7 +346,12 @@ def make_subprocess_dispatcher(
     - `git push <...>` → rc=0
     - `git diff --name-only ...` → empty stdout
     - any other `git ...` → rc=0 with empty stdout
-    - any non-git command (assumed: quality-gate shell command) → rc=gate_returncode
+    - any non-git command (assumed: quality-gate shell command) →
+      rc=gate_returncode(call_index, cmd) if callable else gate_returncode
+
+    The callable form takes (per-dispatcher gate-call-index, cmd_repr) so
+    callers can encode "fail once then pass" stateful patterns. The index
+    counts only non-git calls (gate calls), starting at 0.
     """
 
     class _Result:
@@ -354,6 +359,17 @@ def make_subprocess_dispatcher(
             self.returncode = returncode
             self.stdout = stdout
             self.stderr = stderr
+
+    # Per-dispatcher mutable state: count of gate calls so the callable
+    # form can implement "first N fail" patterns.
+    gate_call_count = {"n": 0}
+
+    def _resolve_gate_rc(cmd_repr: str) -> int:
+        idx = gate_call_count["n"]
+        gate_call_count["n"] += 1
+        if callable(gate_returncode):
+            return gate_returncode(idx, cmd_repr)
+        return gate_returncode
 
     def dispatcher(*args, **kwargs) -> _Result:
         # First positional arg is the command (list or str depending on shell=True).
@@ -377,7 +393,8 @@ def make_subprocess_dispatcher(
                 return _Result(returncode=0, stdout=DETERMINISTIC_SHA + "\n")
             return _Result(returncode=0, stdout="")
         # Anything else is treated as a quality-gate shell command.
-        return _Result(returncode=gate_returncode, stdout="", stderr="")
+        rc = _resolve_gate_rc(cmd_repr)
+        return _Result(returncode=rc, stdout="", stderr="")
 
     return dispatcher
 

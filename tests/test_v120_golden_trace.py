@@ -36,6 +36,7 @@ from tests.golden_trace_helpers import (
 )
 
 FIXTURE_PATH = Path(__file__).parent / "golden" / "v120_baseline.json"
+FIXLOOP_FIXTURE_PATH = Path(__file__).parent / "golden" / "v120_fixloop.json"
 
 
 def _build_minimal_project(tmp_path: Path) -> Path:
@@ -87,6 +88,50 @@ def _build_minimal_project(tmp_path: Path) -> Path:
     # validated by the test (we stub run_claude).
     (tmp_path / "spec.md").write_text("# Test spec\n\nMinimal placeholder.\n")
 
+    return tmp_path
+
+
+def _build_fixloop_project(tmp_path: Path) -> Path:
+    """Build a project tree with quality_gates enabled so the fix-loop fires.
+
+    Same as _build_minimal_project except quality_gates configures one gate
+    (lint → 'ruff check .'). The test combines this with a stateful
+    subprocess dispatcher that makes the first gate call fail, triggering
+    Phase B's fix-loop (fix-prompt claude call + _accumulate_cost + recheck).
+    QG#2 in Phase C then runs the gate again (which now passes on first try).
+    """
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+
+    cfg = {
+        "schema_version": 1,
+        "spec": "spec.md",
+        "model": "opus",
+        "fallback_model": "haiku",
+        "budgets": {"plan": 25, "implement": 25, "review": 10, "push": 3},
+        "effort": {"plan": "max", "implement": "high", "review": "max", "push": "low"},
+        "verify_commands": {},
+        "milestones": [{"name": "M1"}],
+        "plugins": {},
+        "validation": {},
+        # Only one gate so the fix-loop counts are easy to reason about.
+        # Each QG checkpoint runs this command once; first call fails,
+        # subsequent pass (the test wires the stateful dispatcher).
+        "quality_gates": {"lint": "ruff check ."},
+        "security": {},
+        "integrations": {},
+        "convergence": {},
+        "telemetry": {"enabled": False},
+        "max_total_budget_usd": 100.0,
+        "delay_between_phases_seconds": 0,
+    }
+    (claude_dir / "workflow.json").write_text(json.dumps(cfg))
+
+    state = WorkflowState()
+    state.run_id = "01TESTFIX0987654321ABCDEFG"
+    save_state(claude_dir, state)
+
+    (tmp_path / "spec.md").write_text("# Test spec\n\nMinimal placeholder.\n")
     return tmp_path
 
 
@@ -166,4 +211,82 @@ def test_fixture_exists_and_is_non_trivial():
     assert len(records) >= 20, (
         f"Fixture has only {len(records)} records — expected >=20 for a "
         f"full A→B→C→D run. Probably a partial capture."
+    )
+
+
+def test_v120_fixloop_quality_gate(tmp_path, monkeypatch):
+    """Capture the QG#1 fix-loop trace.
+
+    Setup: quality_gates configures one gate (`lint → ruff check .`). The
+    stateful dispatcher makes the first gate call return rc=1, and all
+    subsequent calls return rc=0. The flow then exercises:
+
+    - Phase A: same as happy path (no gates run during plan).
+    - Phase B: primary claude → QG#1 lint call #1 (rc=1, fails) → fix-loop
+      prompt claude call → _accumulate_cost on fix-loop cost → QG#1 lint
+      call #2 (rc=0, passes) → policy check (no policies configured) →
+      coverage → context refresh → spec_compliance + feature_verification
+      (both skipped, validation empty) → PhaseCompleted.
+    - Phase C: primary claude → QG#2 lint call #3 (rc=0, passes first try
+      — no fix-loop) → PhaseCompleted.
+    - Phase D: same as happy path.
+
+    The fix-loop adds: 1 extra run_claude, 1 extra _accumulate_cost (on
+    fix-loop cost — this is the v1.3.12 in-flight gate granularity that
+    must survive the refactor), 1 extra QG subprocess call. Trace
+    expected to be ~5-8 records longer than the happy-path baseline.
+
+    A refactor that drops the per-call _accumulate_cost inside the
+    fix-loop (Finding 1 regression) collapses the accumulate_cost record
+    count by 1 — surfaces as a diff at the corresponding call_index.
+    """
+    project_root = _build_fixloop_project(tmp_path)
+    orch = _build_orchestrator(project_root)
+
+    recorder = TraceRecorder()
+    # First gate call fails, all subsequent pass — triggers Phase B's
+    # QG#1 fix-loop exactly once.
+    install_recorders(
+        monkeypatch,
+        orch,
+        recorder,
+        gate_returncode=lambda idx, cmd: 1 if idx == 0 else 0,
+    )
+
+    logger = WorkflowLogger(orch.claude_dir, run_id="testfix")
+    try:
+        cost = orch._run_milestone({"name": "M1"}, logger)
+    finally:
+        logger.close()
+
+    # Sanity: fix-loop ran (1 extra claude call vs happy path).
+    assert len(recorder.run_claude_calls) >= 5, (
+        f"Expected >=5 run_claude calls (A/B/B-fix/C/D); got {len(recorder.run_claude_calls)}"
+    )
+    # Sanity: at least one gate call failed (rc=1 path was exercised).
+    gate_calls = [r for r in recorder.subprocess_calls if r.payload["head"] != "git"]
+    assert len(gate_calls) >= 2, (
+        f"Expected >=2 gate calls (QG#1 fail + recheck); got {len(gate_calls)}"
+    )
+    assert cost > 0
+
+    assert_trace_matches_fixture(recorder, FIXLOOP_FIXTURE_PATH)
+
+
+def test_fixloop_fixture_exists_and_diverges_from_baseline():
+    """The fix-loop fixture must exist and must be strictly larger than
+    the happy-path baseline (because the fix-loop adds claude calls,
+    accumulate_cost calls, and gate subprocess calls). If both fixtures
+    had the same record count, the dispatcher's fail-then-pass logic
+    isn't binding.
+    """
+    assert FIXLOOP_FIXTURE_PATH.exists(), f"Fix-loop fixture missing: {FIXLOOP_FIXTURE_PATH}."
+    baseline = json.loads(FIXTURE_PATH.read_text())
+    fixloop = json.loads(FIXLOOP_FIXTURE_PATH.read_text())
+    n_baseline = len(baseline.get("records", []))
+    n_fixloop = len(fixloop.get("records", []))
+    assert n_fixloop > n_baseline, (
+        f"Fix-loop fixture ({n_fixloop} records) should be strictly larger "
+        f"than baseline ({n_baseline} records). Same size suggests the "
+        f"fail-then-pass dispatcher didn't bind."
     )

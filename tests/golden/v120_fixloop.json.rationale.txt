@@ -1,0 +1,1 @@
+initial v1.2.0-real fix-loop fixture capture (QG#1 fail-once-then-pass)
