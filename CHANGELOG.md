@@ -3,6 +3,112 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.17] — 2026-06-01
+
+**v1.1.9.1 observability — RunCostProjection + BudgetAlert shipped.**
+v1.1.9's CHANGELOG admitted mid-run cost projection (T1.9.1) and
+threshold alerts (G1.9.8) were deferred. v1.3.17 closes those
+admissions with two new typed telemetry events + their algorithmic
+backbone, baking in 5 algorithm fixes the adversarial review surfaced.
+
+### `RunCostProjection` event
+
+Emitted after each PhaseCompleted by the orchestrator driver. Combines
+actual observed phase costs with historical per-phase ratios (or
+cold-start defaults) to project the run's total spend, with p10/p90
+confidence bounds.
+
+**Algorithm** (`src/superpower_workflow/projection.py`, pure-functional):
+
+```
+projected_total = state.total_cost_usd
+                + sum(expected_cost(p) for p in remaining_phases)
+                + per_ms_future_cost * future_milestone_count
+
+expected_cost(p) = mean(last_N_samples(p))  if history exists
+                 = fallback_ms_cost * COLD_START_RATIOS[p]  otherwise
+
+confidence = min(1.0, total_samples / (10 * len(remaining_phases)))
+source ∈ {cold_start | partial_history | full_history}
+```
+
+**5 algorithm fixes from Verdict 1** of the design-review workflow:
+
+1. **Cold-start ratios calibrated from soak data** — `COLD_START_RATIOS`
+   uses `plan=0.23, implement=0.54, review=0.20, push=0.03` measured
+   across 8 real samples in `soak-archive/`. The prior design's
+   `0.30/0.40/0.20/0.05` under-weighted Phase B by ~35%.
+2. **Failed/skipped milestone cost** — `observed_milestone_avg` uses
+   `state.total_cost_usd / (completed+failed+skipped)` so failed/
+   skipped spend isn't silently dropped.
+3. **Custom-phase residual ratios** — renormalize all ratios to 1.0
+   after adding any unknown phase. Prior `1 - sum(used)` went
+   negative when defaults already summed to 1.0.
+4. **Single-milestone runs** — escape cold-start once first
+   PhaseCompleted fires (don't wait for milestone completion).
+5. **All-zero / degenerate costs** — return `projected_total=0,
+   confidence=0` cleanly.
+
+### `BudgetAlert` event
+
+Fires inside `Orchestrator._accumulate_cost` when `state.total_cost_usd`
+crosses UP to a new threshold in `{50, 75, 90, 100}` percent of
+`max_total_budget_usd`. New `WorkflowState.last_budget_alert_pct: int`
+field tracks the highest crossed threshold (monotonic non-decreasing,
+persisted via existing `save_state` path).
+
+**Invariants** (Verdict 2 — design holds):
+
+- **Parallel-safe**: threshold check runs under the existing
+  `_state_lock` block, so two workers can't both fire `threshold=50`.
+- **Monotonic**: once `threshold=75` fires, cost oscillating around
+  it (refunds, parallel rebalance) does NOT re-fire.
+- **Leap-skip**: cost jumping `$0 → $95` emits ONE `BudgetAlert(threshold=90)`,
+  not separate 50+75+90 events. The raw `percent_of_cap=95.0` field
+  carries the actual crossing magnitude.
+- **Disabled** when `max_total_budget_usd` is missing/0/inf.
+- **Survives resume**: `last_budget_alert_pct` persisted to disk.
+- **Latency**: emission happens OUTSIDE `_state_lock` so the v1.3.12
+  in-flight gate hot path is unchanged.
+
+### Stats
+
+- **Tests: 1656 → 1687** (+31):
+  - +21 projection algorithm (cold-start, history, degenerate, fixes 1-5)
+  - +10 orchestrator wiring (single-fire, leap-skip, monotonic,
+    no-cap, persistence, emission shape, never-raises)
+- **New module**: `src/superpower_workflow/projection.py` (~280 lines).
+- **WorkflowState**: +1 field (`last_budget_alert_pct: int`).
+- **Orchestrator**: `_accumulate_cost` extended with threshold check;
+  new `_emit_run_cost_projection` helper; `_current_milestone_name` +
+  `_current_phase_name` instance attrs for event payloads.
+- Golden trace fixtures regenerated: baseline 36→41 records,
+  fixloop 45→50 records (added `run_cost_projection` events; no
+  `BudgetAlert` since fixture costs stay under 50% threshold).
+- Ruff + format clean.
+
+### Wire-up for consumers
+
+`sw watch` (text-mode) and `sw dashboard` (web UI) both subscribe to
+the existing telemetry JSONL — they'll surface the new events
+automatically. The richer `sw watch` TUI polish (live cost gauge +
+projection band) lands as a follow-up patch (deferred from this
+release; the load-bearing piece is the event data).
+
+Operators integrating with claude-mem or external metrics can read
+`run_cost_projection` + `budget_alert` events from
+`.claude/sw-telemetry.jsonl` directly, or wire them into the dashboard
+via existing `TelemetryReader`.
+
+### What's NOT in this release
+
+- `sw watch` TUI polish with rich library — surface for the new
+  events lands in a follow-up (the events themselves are usable
+  via `sw status`, `sw metrics`, and the dashboard regardless).
+- Per-phase historical ratios from cross-project corpus — current
+  scope reads project-local telemetry only. Cross-project learning
+  is v1.4.0 intelligence-layer scope.
+
 ## [1.3.16] — 2026-06-01
 
 **v1.3.0 remainder — MCP server + hooks shipped, memory.py descoped.**
