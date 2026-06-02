@@ -1198,12 +1198,21 @@ def _ensure_ceiling_bypass_authorized() -> None:
     tty = sys.stdin.isatty()
     tty_confirm: bool | None = None
     if tty and os.environ.get("SW_ALLOW_CEILING_BYPASS") != "1":
-        resp = (
-            input("  --ignore-ceiling will bypass rolling cost ceilings. Proceed? [y/N]: ")
-            .strip()
-            .lower()
-        )
-        tty_confirm = resp == "y"
+        # v1.3.21 soak finding: in a non-interactive launch (eg `nohup python
+        # -c ...` or a script piped from another process), sys.stdin can
+        # claim to be a TTY but input() raises EOFError because nothing is
+        # listening on the other end. Treat EOFError/KeyboardInterrupt as
+        # explicit non-confirmation rather than crashing through to the
+        # caller — exit 8 is the right exit either way.
+        try:
+            resp = (
+                input("  --ignore-ceiling will bypass rolling cost ceilings. Proceed? [y/N]: ")
+                .strip()
+                .lower()
+            )
+            tty_confirm = resp == "y"
+        except (EOFError, KeyboardInterrupt):
+            tty_confirm = False
     authorized, reason = is_bypass_authorized(
         ignore_flag=True,
         env=dict(os.environ),

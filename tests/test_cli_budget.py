@@ -173,6 +173,25 @@ class TestRunIgnoreCeiling:
         assert code == 8
         assert "SW_ALLOW_CEILING_BYPASS" in err
 
+    def test_ignore_ceiling_tty_but_no_stdin_input_exits_8(
+        self,
+        project_with_workflow: Path,
+        run_cli,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """v1.3.21 soak regression: `nohup python -c ...` or similar non-
+        interactive launches see sys.stdin.isatty()==True but `input()`
+        raises EOFError. Must exit 8 cleanly, not crash with a traceback.
+        """
+        monkeypatch.delenv("SW_ALLOW_CEILING_BYPASS", raising=False)
+        # Force sys.stdin.isatty() to return True (the soak's broken path).
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        # Pretend input() raises EOFError as it would in a piped non-TTY.
+        monkeypatch.setattr("builtins.input", lambda _prompt="": (_ for _ in ()).throw(EOFError()))
+        code, _, err = run_cli("run", "--ignore-ceiling", "--dry-run")
+        assert code == 8
+        assert "SW_ALLOW_CEILING_BYPASS" in err
+
     def test_ignore_ceiling_with_env_authorizes(
         self, project_with_workflow: Path, run_cli, monkeypatch: pytest.MonkeyPatch
     ) -> None:

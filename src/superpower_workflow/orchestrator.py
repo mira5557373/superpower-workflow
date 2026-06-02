@@ -962,15 +962,21 @@ class Orchestrator:
             if getattr(r, "timed_out", False):
                 kind = "timeout"
             else:
+                # v1.3.21 soak finding #2: _check_phase_result only calls us
+                # when r.is_error is true. The msg-substring check above was
+                # written assuming we'd see free-text patterns ("is_error",
+                # "returncode") in r.text, but in practice r.text is the
+                # claude `result` field which contains the error semantics
+                # but rarely the literal words. Default to "is_error" when
+                # is_error=true and not timed out; only escalate to
+                # auth/mcp_crash when those keywords ACTUALLY appear.
                 msg = (r.text or "").lower()
                 if "auth" in msg or "unauthorized" in msg or "401" in msg:
                     kind = "auth"
                 elif "mcp" in msg or "stdio" in msg:
                     kind = "mcp_crash"
-                elif "is_error" in msg or "is error" in msg:
-                    kind = "is_error"
                 else:
-                    kind = "nonzero_exit"
+                    kind = "is_error"
             message = (r.text or "")[:300]
             self._telemetry.emit(
                 ClaudeInvocationFailed(
