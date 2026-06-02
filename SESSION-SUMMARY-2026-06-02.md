@@ -107,14 +107,54 @@ Both workflows ran the standard pattern: parallel architect proposals → 6-dime
 - `docs/calibration.md` — v1.3.24 user guide
 - All commits on `master` since `1fcc742`
 
+## v1.3.27 — closes the v1.3.x sweep
+
+After the ultrathink analysis you asked for, I discovered that **Path A
+was incoherent**: all 35 e2e_agent milestones are already DONE at
+$665.44 historical cost. There's no "next milestone" to soak sw against.
+
+Pivoted to shipping the **deferred CLI work** that prior REPORTs called
+out. Zero claude spend, real operational value:
+
+- `sw triage --reclassify` — replay rules over historical telemetry,
+  write `.triage-replay.jsonl` sidecar
+- `sw triage --explain <CLASS>` — rule + recommendation + IMPLIES
+  subsumption
+- `sw triage --health` — UNKNOWN-rate monitoring + per-class
+  distribution (OK / DEGRADED at 15% threshold)
+- `sw breaker status` — rolling window + per-class counter + TRIP/ok
+  indicators (operational visibility — see when breaker is about to trip)
+- `sw breaker reset --confirm` — clear window + emit
+  `CIRCUIT_BREAKER_RESET` audit entry
+
+Tests: 1938 → 1953 (+15). Complexity-audit max-cc 57 → 58. CI green.
+
+## Final session tally
+
+- **6 releases shipped** (v1.3.22, v1.3.23, v1.3.24, v1.3.25, v1.3.26, v1.3.27)
+- **Two major features** (Calibration Loop, Circuit Breaker)
+- **Three soaks** ($3.94 real spend) → three production bugs caught + fixed
+- **Five new CLI surfaces** shipped in v1.3.27
+- **Tests: 1742 → 1953** (+211)
+- **All CI green**
+
 ## Recommendations for next session
 
-1. **Soak v1.3.26 Circuit Breaker** — provoke same-class repeated failures in a controlled scenario, verify `CircuitBreakerWouldTrip` events emit at the right moments.
-2. **Run more samples through Calibration Loop** — currently `partial` tier with n=1 for haiku-4-5. After 4 more same-model runs the warm tier kicks in and the DEFAULT_TABLE prior stops mattering.
-3. **Deferred work**:
-   - v1.3.21 deferred: `sw triage --reclassify`, `--explain`, `--health` flags
-   - v1.3.24 deferred: MCP `estimate://current` resource
-   - v1.3.26 deferred: `sw breaker status`, `sw breaker reset` CLI subcommands
-4. **Flip observation_only → enforced** once 10 same-class trips have been observed across runs (per v1.3.26 design's flip plan).
+The v1.3.x sweep is **feature-complete**. Verdict scores plateaued at
+45-46/60 — further telemetry features will keep hitting diminishing
+returns. The honest next move:
+
+1. **Soak v1.3.26 Circuit Breaker in a controlled scenario** — provoke
+   same-class repeats, verify `CircuitBreakerWouldTrip` fires at the
+   right moments. ~$5 budget.
+2. **Documentation pass** — holistic "Getting Started" guide tying all
+   5 telemetry features together. No money.
+3. **Real-world dogfood** — if you have a NEW project (not e2e_agent
+   which is done), run sw on it with all features enabled. Real validation.
+4. **Flip Circuit Breaker observation_only → enforced** once N=10
+   same-class trips observed across runs (per v1.3.26 design flip plan).
+
+The orchestrator has matured beyond the e2e_agent project that
+motivated its design. It's ready for new projects.
 
 Wake up rested.
