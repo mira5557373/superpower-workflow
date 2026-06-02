@@ -1,0 +1,138 @@
+{
+  "spec": "spec.md",
+  "model": "claude-haiku-4-5",
+  "max_total_budget_usd": 20.0,
+  "budgets": {
+    "plan": 2.0,
+    "implement": 6.0,
+    "review": 3.0,
+    "push": 0.5
+  },
+  "telemetry": {
+    "enabled": true,
+    "path": ".claude/sw-telemetry.jsonl"
+  },
+  "verify_commands": {},
+  "drift_detection": {
+    "enabled": true,
+    "mode": "observation_only",
+    "baseline_floor": 5,
+    "sample_cap": 200
+  },
+  "cost_ceilings": {
+    "daily": {
+      "usd": 30.0,
+      "mode": "warn"
+    },
+    "weekly": {
+      "usd": 100.0,
+      "mode": "warn"
+    }
+  },
+  "triage": {
+    "enabled": true
+  },
+  "circuit_breaker": {
+    "enabled": true,
+    "observation_only": true
+  },
+  "security": {
+    "audit_trail": true
+  },
+  "milestones": [
+    {
+      "name": "p1-m1-core-types-storage",
+      "spec_sections": [
+        "Functional requirements",
+        "Non-functional requirements"
+      ],
+      "description": "Core types (Entry, ShortCode), atomic storage abstraction, JSON schema versioning, and base62 hash computation",
+      "depends_on": []
+    },
+    {
+      "name": "p1-m2-storage-layer",
+      "spec_sections": [
+        "Non-functional requirements"
+      ],
+      "description": "StoreBackend protocol, JsonStore implementation with atomic writes, directory/file creation, permission handling",
+      "depends_on": [
+        "p1-m1-core-types-storage"
+      ]
+    },
+    {
+      "name": "p1-m3-add-command",
+      "spec_sections": [
+        "Functional requirements"
+      ],
+      "description": "URL validation, alias validation, deterministic 6-char base62 hash, add subcommand with CLI argument parsing",
+      "depends_on": [
+        "p1-m2-storage-layer"
+      ]
+    },
+    {
+      "name": "p1-m4-resolve-command",
+      "spec_sections": [
+        "Functional requirements"
+      ],
+      "description": "Resolve subcommand, lookup logic, error handling for unknown codes with exit 1",
+      "depends_on": [
+        "p1-m2-storage-layer"
+      ]
+    },
+    {
+      "name": "p1-m5-list-command",
+      "spec_sections": [
+        "Functional requirements"
+      ],
+      "description": "List subcommand with optional limit, tab-separated output format, sorting by creation time descending",
+      "depends_on": [
+        "p1-m2-storage-layer"
+      ]
+    },
+    {
+      "name": "p1-m6-rm-command",
+      "spec_sections": [
+        "Functional requirements"
+      ],
+      "description": "Remove subcommand, permanent deletion, error handling for unknown codes with exit 1",
+      "depends_on": [
+        "p1-m2-storage-layer"
+      ]
+    },
+    {
+      "name": "p1-m7-stats-command",
+      "spec_sections": [
+        "Functional requirements"
+      ],
+      "description": "Stats subcommand computing total count, 24-hour count, and most recent entry timestamp",
+      "depends_on": [
+        "p1-m2-storage-layer"
+      ]
+    },
+    {
+      "name": "p1-m8-cli-main",
+      "spec_sections": [
+        "Functional requirements",
+        "Non-functional requirements"
+      ],
+      "description": "Main CLI entry point with subcommand routing, argument validation, deterministic behavior",
+      "depends_on": [
+        "p1-m3-add-command",
+        "p1-m4-resolve-command",
+        "p1-m5-list-command",
+        "p1-m6-rm-command",
+        "p1-m7-stats-command"
+      ]
+    },
+    {
+      "name": "p1-m9-quality-gates",
+      "spec_sections": [
+        "Quality gates"
+      ],
+      "description": "Ruff zero-violations verification, 90% branch coverage, comprehensive test suite for all subcommands and error paths",
+      "depends_on": [
+        "p1-m8-cli-main"
+      ]
+    }
+  ]
+}
