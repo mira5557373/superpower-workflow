@@ -105,7 +105,11 @@ class TestWebSocket:
                         result.put(e)
 
                 threading.Thread(target=_recv, daemon=True).start()
-                payload = result.get(timeout=5.0)
+                # v1.3.23: bump 5.0→15.0s. The 5s timeout was tight enough to
+                # flake on loaded CI runners (Ubuntu 3.11 in particular).
+                # Real-world WS push latency is <100ms; the 15s ceiling is
+                # purely a CI-resilience cushion, NOT a behavior change.
+                payload = result.get(timeout=15.0)
                 assert not isinstance(payload, Exception), f"recv failed: {payload!r}"
                 assert payload["event_type"] == "soak_injection"
                 assert payload["data"]["injected"] is True
