@@ -241,9 +241,7 @@ def evaluate(
     diversity_slice = hypothetical[-config.diversity_window :]
     if len(diversity_slice) >= config.diversity_threshold:
         action = (
-            BreakerAction.TRIP_OBSERVED
-            if config.observation_only
-            else BreakerAction.TRIP_ENFORCED
+            BreakerAction.TRIP_OBSERVED if config.observation_only else BreakerAction.TRIP_ENFORCED
         )
         return Decision(
             action=action,
