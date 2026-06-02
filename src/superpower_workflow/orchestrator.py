@@ -82,6 +82,20 @@ from superpower_workflow.telemetry import (
 REQUIRED_CONFIG_KEYS = ("spec", "model", "budgets", "milestones")
 
 
+def _canonical_model_for(ms_model: str | None, config: dict) -> str | None:
+    """v1.3.24 — resolve the canonical model_id for a milestone, falling
+    back to the config-level model. Used to stamp MilestoneCompleted events
+    so calibration can partition samples by model.
+    """
+    try:
+        from superpower_workflow._model_key import canonicalize
+
+        raw = ms_model or config.get("model", "")
+        return canonicalize(raw)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def validate_config(config: dict) -> list[str]:
     errors = []
     for key in REQUIRED_CONFIG_KEYS:
@@ -585,6 +599,9 @@ class Orchestrator:
                                 milestone=name,
                                 cost_usd=round(cost, 2),
                                 duration_seconds=round(time.monotonic() - milestone_start, 1),
+                                # v1.3.24 — stamp canonical model_id for
+                                # calibration to partition samples.
+                                model_id=_canonical_model_for(ms_model, self.config),
                             )
                         )
                         self._notify(
@@ -896,6 +913,11 @@ class Orchestrator:
                     test_file_count=_count_test_files(self.root),
                 )
             )
+            # v1.3.24 — emit EstimateCalibrated on COMPLETED runs only.
+            # Failed/cancelled runs skipped so the error_ratio reflects
+            # successful-run distribution only (verdict #5).
+            if status == "complete" and os.environ.get("SW_CALIBRATION_DISABLE") != "1":
+                self._emit_estimate_calibrated()
 
         self._audit.append(
             "RUN_COMPLETE",
@@ -1336,6 +1358,68 @@ class Orchestrator:
                 audit_path=audit_path if audit_path.exists() else None,
                 state_snapshot=state_snapshot,
                 emit=_emit,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _emit_estimate_calibrated(self) -> None:
+        """v1.3.24 — emit one EstimateCalibrated event per completed run.
+
+        Best-effort: any exception inside (telemetry/estimator/calibration
+        module unavailable, malformed config, etc.) is silently swallowed.
+        Calibration is observability, never blocks the run.
+        """
+        try:
+            from superpower_workflow._model_key import canonicalize
+            from superpower_workflow.calibration import (
+                compute_error_ratio,
+                load_samples_by_model,
+            )
+            from superpower_workflow.estimator import estimate_banded
+            from superpower_workflow.telemetry import EstimateCalibrated
+
+            if self._telemetry is None:
+                return
+
+            model_id = canonicalize(self.config.get("model", "")) or "unknown"
+            telemetry_path = self.claude_dir / "sw-telemetry.jsonl"
+            # Predicted cost: re-call the banded estimator over the BASELINE
+            # (pre-run) telemetry. For simplicity in v1, we just call it
+            # against the CURRENT telemetry — the difference is at most
+            # ~4 phase_completed events worth of cost, and we're interested
+            # in the trend, not the exact "pre-run snapshot".
+            try:
+                est = estimate_banded(self.config, project_root=self.root)
+                predicted = float(est.get("p50_usd", 0.0))
+            except Exception:  # noqa: BLE001
+                predicted = 0.0
+            actual = round(self.state.total_cost_usd, 4)
+            if predicted <= 0:
+                return
+
+            # Samples already captured pre-run; load again to get the count.
+            try:
+                samples_by_model, _, _ = load_samples_by_model(telemetry_path)
+                samples_used = len(samples_by_model.get(model_id, []))
+            except Exception:  # noqa: BLE001
+                samples_used = 0
+
+            if samples_used >= 5:
+                calibration_source = "warm"
+            elif samples_used >= 1:
+                calibration_source = "partial"
+            else:
+                calibration_source = "cold_start"
+
+            self._telemetry.emit(
+                EstimateCalibrated(
+                    model_id=model_id,
+                    predicted_cost_usd=round(predicted, 4),
+                    actual_cost_usd=actual,
+                    error_ratio=compute_error_ratio(predicted, actual),
+                    samples_used=samples_used,
+                    calibration_source=calibration_source,
+                )
             )
         except Exception:  # noqa: BLE001
             pass

@@ -60,6 +60,10 @@ class MilestoneCompleted(TelemetryEvent):
     milestone: str = ""
     cost_usd: float = 0.0
     duration_seconds: float = 0.0
+    # v1.3.24 — gained model_id so calibration can partition samples by model.
+    # None on pre-v1.3.24 events (skipped by calibration to avoid pooling
+    # mixed-model data into a phantom 'unknown' bucket).
+    model_id: str | None = None
 
 
 @dataclass
@@ -500,6 +504,32 @@ class FailureTriaged(TelemetryEvent):
     anchor_type: str = ""
     triage_version: int = 1
     raw_reason: str = ""  # truncated 300 chars, only populated for UNKNOWN
+
+
+@dataclass
+class EstimateCalibrated(TelemetryEvent):
+    """v1.3.24 — emitted once per completed run by the estimator calibration loop.
+
+    Captures (predicted, actual, error_ratio) so calibration quality is
+    observable in telemetry. Subsequent `sw estimate` calls fold the
+    rolling mean of `error_ratio` into their confidence-band rendering.
+
+    `calibration_source` ∈ {"cold_start", "partial", "warm"}:
+    - `cold_start`: zero same-model samples in history, used DEFAULT_TABLE
+    - `partial`: 1 ≤ samples < 5, blended table + telemetry
+    - `warm`: samples ≥ 5, pure-telemetry EWMA in log1p space
+
+    Emitted ONLY on `status="complete"` runs — failed/cancelled runs are
+    excluded so the error_ratio reflects successful-run distribution only.
+    """
+
+    EVENT_TYPE: ClassVar[str] = "estimate_calibrated"
+    model_id: str = ""
+    predicted_cost_usd: float = 0.0
+    actual_cost_usd: float = 0.0
+    error_ratio: float = 0.0  # actual / max(predicted, 0.001)
+    samples_used: int = 0
+    calibration_source: str = "cold_start"  # cold_start | partial | warm
 
 
 class TelemetryEmitter:

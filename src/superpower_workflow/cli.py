@@ -93,7 +93,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip spec linter blockers (use only if you know what you're doing)",
     )
-    sub.add_parser("estimate", help="Cost and duration estimate")
+    estimate_p = sub.add_parser("estimate", help="Cost and duration estimate (banded v1.3.24)")
+    estimate_p.add_argument("--json", action="store_true", help="Machine-readable banded output")
+    estimate_p.add_argument(
+        "--legacy", action="store_true", help="Force v1.3.23 single-pair output"
+    )
+    estimate_p.add_argument(
+        "--calibration",
+        action="store_true",
+        help="Show per-model calibration breakdown table",
+    )
     sub.add_parser("status", help="Show progress")
     sub.add_parser("resume", help="Resume from failure point")
     sub.add_parser("clean", help="Remove runtime files")
@@ -1180,6 +1189,114 @@ def _cmd_drift(project_root: Path, args) -> None:
     print(f"  Drift events for runs in this project: see {telemetry_path}")
 
 
+def _cmd_estimate(project_root: Path, args) -> None:
+    """v1.3.24 — banded cost+duration estimate with calibration awareness.
+
+    Default: per-model bands (p10/p50/p90) sourced from telemetry or
+    DEFAULT_TABLE if cold-start. `--legacy` forces v1.3.23 single-pair.
+    `--json` emits machine-readable schema. `--calibration` shows the
+    per-model breakdown table.
+    """
+    from superpower_workflow.estimator import estimate, estimate_banded
+    from superpower_workflow.state import load_config
+
+    config = load_config(project_root / ".claude")
+    is_legacy = bool(getattr(args, "legacy", False))
+    is_json = bool(getattr(args, "json", False))
+    show_cal = bool(getattr(args, "calibration", False))
+
+    if is_legacy:
+        est = estimate(config, project_root=project_root)
+        if is_json:
+            print(json.dumps({"schema_version": 1, "legacy": True, **est}, indent=2))
+            return
+        print(f"  Milestones: {est['milestone_count']}")
+        print(f"  Cost: ${est['cost_optimistic']}-${est['cost_pessimistic']} (legacy)")
+        print(f"  Duration: {est['duration_optimistic_min']}-{est['duration_pessimistic_min']} min")
+        return
+
+    est = estimate_banded(config, project_root=project_root)
+    if is_json:
+        out = {
+            "schema_version": 1,
+            "spec_path": config.get("spec", ""),
+            "model_id": est.get("model_id", "unknown"),
+            "milestone_count": est["milestone_count"],
+            "band": {
+                "p10_usd": est.get("p10_usd", est["cost_optimistic"]),
+                "p50_usd": est.get("p50_usd", est["cost_pessimistic"]),
+                "p90_usd": est.get("p90_usd", est["cost_pessimistic"]),
+            },
+            "tier": est.get("tier", "legacy"),
+            "samples_used": est.get("samples_used", 0),
+            "calibration_source": est.get("source", "legacy"),
+            "rolling_error_ratio_mean": est.get("rolling_error_ratio_mean"),
+            "last_sample_age_days": est.get("last_sample_age_days"),
+            "duration_min": [
+                est["duration_optimistic_min"],
+                est["duration_pessimistic_min"],
+            ],
+        }
+        print(json.dumps(out, indent=2))
+        return
+
+    model = est.get("model_id", "unknown")
+    tier = est.get("tier", "legacy")
+    n = est.get("samples_used", 0)
+    age = est.get("last_sample_age_days")
+    p10 = est.get("p10_usd", est["cost_optimistic"])
+    p50 = est.get("p50_usd", est["cost_pessimistic"])
+    p90 = est.get("p90_usd", est["cost_pessimistic"])
+    print(f"  Spec: {config.get('spec', '?')} ({est['milestone_count']} milestones)")
+    print(f"  Estimate: ${p50:.2f}  [p10 ${p10:.2f} - p90 ${p90:.2f}]")
+    age_str = f"  age={age}d" if age is not None else ""
+    print(f"    model={model}  samples={n}  tier={tier}{age_str}")
+    print(f"  Duration: {est['duration_optimistic_min']}-{est['duration_pessimistic_min']} min")
+    if show_cal:
+        _render_calibration_table(project_root)
+
+
+def _render_calibration_table(project_root: Path) -> None:
+    """v1.3.24 — `sw estimate --calibration` per-model breakdown."""
+    from superpower_workflow._model_key import canonicalize
+    from superpower_workflow.calibration import (
+        compute_bands,
+        load_samples_by_model,
+        rolling_error_ratio,
+    )
+    from superpower_workflow.state import load_config
+
+    config = load_config(project_root / ".claude")
+    telemetry_path = project_root / ".claude" / "sw-telemetry.jsonl"
+    if telemetry_path.exists():
+        samples_by_model, youngest, skipped = load_samples_by_model(telemetry_path)
+    else:
+        samples_by_model, youngest, skipped = {}, {}, 0
+
+    # Include the current target model even if no samples.
+    current_model = canonicalize(config.get("model", "")) or "unknown"
+    models = set(samples_by_model.keys()) | {current_model}
+    print()
+    print(f"  {'Model':14s} {'n':>3s}  {'p10':>7s}  {'p50':>7s}  {'p90':>7s}  err  age")
+    for m in sorted(models):
+        band = compute_bands(
+            samples_by_model,
+            target_model=m,
+            milestone_count=1,
+            youngest_by_model=youngest,
+        )
+        ratio = rolling_error_ratio(telemetry_path, m) if telemetry_path.exists() else None
+        age_str = f"{band.last_sample_age_days}d" if band.last_sample_age_days else "-"
+        ratio_str = f"{ratio:.2f}" if ratio is not None else "-"
+        print(
+            f"  {m:14s} {band.samples_used:>3d}  "
+            f"${band.p10_usd:>6.2f}  ${band.p50_usd:>6.2f}  ${band.p90_usd:>6.2f}  "
+            f"{ratio_str:>4s}  {age_str:>5s}  [{band.tier}]"
+        )
+    if skipped:
+        print(f"  ({skipped} pre-v1.3.24 sample(s) skipped — no model_id)")
+
+
 def _ensure_ceiling_bypass_authorized() -> None:
     """v1.3.20 — defense-in-depth for `sw run --ignore-ceiling`.
 
@@ -2193,14 +2310,7 @@ def main() -> None:
         return
 
     if args.command == "estimate":
-        from superpower_workflow.estimator import estimate
-        from superpower_workflow.state import load_config
-
-        config = load_config(project_root / ".claude")
-        est = estimate(config, project_root=project_root)
-        print(f"  Milestones: {est['milestone_count']}")
-        print(f"  Cost: ${est['cost_optimistic']}-${est['cost_pessimistic']}")
-        print(f"  Duration: {est['duration_optimistic_min']}-{est['duration_pessimistic_min']} min")
+        _cmd_estimate(project_root, args)
         return
 
     if args.command == "status":

@@ -3,6 +3,120 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.24] — 2026-06-02
+
+**Estimator Calibration Loop.** Closes the 3.8× over-projection the
+v1.3.21-e2e soak measured on `claude-haiku-4-5` ($1.49 actual vs
+$5.60-$8.00 estimated). `sw estimate` now produces per-model
+confidence-banded forecasts that calibrate themselves from telemetry.
+
+### What it does
+
+Reads `MilestoneCompleted` events with `model_id` from `sw-telemetry.jsonl`,
+partitions by canonical model id, and produces three-tier bands:
+
+- **`cold_start`** (n=0): published `DEFAULT_TABLE` prior
+- **`partial`** (1 ≤ n < 5): blend of table + telemetry, small-n widened
+- **`warm`** (n ≥ 5): pure log1p-EWMA + percentiles
+
+Transitions happen automatically as samples accumulate. No config
+needed for normal use.
+
+### CLI
+
+```bash
+sw estimate                 # banded per-model (default)
+sw estimate --json          # machine-readable schema (snapshot-locked)
+sw estimate --calibration   # per-model breakdown table
+sw estimate --legacy        # force v1.3.23 single-pair output
+```
+
+Banded output:
+```
+Spec: spec.md (3 milestones)
+Estimate: $0.54  [p10 $0.24 - p90 $1.26]
+  model=haiku-4-5  samples=2  tier=partial  age=0.05d
+```
+
+### 6 adversarial-review revisions baked in
+
+Workflow `w4rgcreql` scored this proposal 45/60; the runners-up (all
+variants of "Anomaly Replay") scored 36-44 and were rejected. Six
+revisions required for this feature:
+
+1. **Schema bump owned explicitly.** `MilestoneCompleted` gained
+   `model_id: str | None` field. Pre-v1.3.24 events with
+   `model_id=None` are explicitly **skipped** (not pooled into a
+   phantom `unknown` bucket) and counted in a log line.
+2. **log1p space everywhere.** Calibration and drift now share
+   `_stats.py` (log1p_ewma + log1p_percentiles + small_n_widen).
+   Cross-module consistency asserted by test.
+3. **MCP resource scope-sneak cut.** `estimate://current` deferred to
+   v1.3.25.
+4. **PREP commit landed first.** `_stats.py` + `_model_key.py`
+   extracted; `drift.py` migrated to use shared helpers. No behavior
+   change, existing drift tests green.
+5. **22 enumerated test cases** including missing-model_id backfill,
+   cancelled-run non-emission, all-zero degenerate case, model-swap
+   creates-fresh-bucket, cross-module consistency.
+6. **Telemetry growth posture documented.** One `EstimateCalibrated`
+   per **completed** run (failed/cancelled excluded). Bounded
+   O(runs) — same order as existing `RunCompleted`.
+
+### Telemetry events
+
+```python
+@dataclass
+class MilestoneCompleted(TelemetryEvent):
+    # ... existing fields ...
+    model_id: str | None = None    # NEW in v1.3.24
+
+@dataclass
+class EstimateCalibrated(TelemetryEvent):
+    model_id: str
+    predicted_cost_usd: float
+    actual_cost_usd: float
+    error_ratio: float            # actual / max(predicted, 0.001)
+    samples_used: int
+    calibration_source: str       # cold_start | partial | warm
+```
+
+### Kill switches
+
+- `SW_CALIBRATION_DISABLE=1` env var — skips banded path AND
+  `EstimateCalibrated` emission
+- `sw estimate --legacy` flag — per-invocation fallback
+- `SW_CALIBRATION_MAX_EVENTS=N` — caps streaming read (default 10000)
+
+### Stats
+
+- **Tests: 1862 → 1917** (+55):
+  - 12 unit tests for `_stats.py` + `_model_key.py` (the PREP modules)
+  - 23 unit tests for `calibration.py` (load_samples, compute_bands,
+    rolling_error_ratio, compute_error_ratio, cross-module consistency)
+  - 5 CLI smoke tests for `sw estimate` banded output
+  - 1 regression update to `test_full_run_event_sequence` (acknowledges
+    new `estimate_calibrated` event as terminal anchor alongside
+    `run_completed`)
+- New modules: `_stats.py` (~95 LOC), `_model_key.py` (~80 LOC),
+  `calibration.py` (~350 LOC).
+- Modified: `estimator.py` (+90 LOC: `estimate_banded()`),
+  `cli.py` (+150 LOC: `_cmd_estimate` + `_render_calibration_table`),
+  `orchestrator.py` (+80 LOC: `_emit_estimate_calibrated` +
+  `_canonical_model_for` helper + `MilestoneCompleted.model_id` wiring),
+  `telemetry.py` (+30 LOC: `EstimateCalibrated` + `MilestoneCompleted.model_id`).
+- New: `docs/calibration.md`.
+- Ruff + format clean.
+
+### Distinct from neighboring features
+
+| Feature | Asks |
+|---|---|
+| Drift Detector (v1.3.19) | Is this run abnormal? |
+| Cost Ceilings (v1.3.20) | Did we exceed rolling budget? |
+| Failure Triage (v1.3.21) | Why did this fail? |
+| **Calibration Loop (v1.3.24)** | **What will the NEXT run cost on this model?** |
+
 ## [1.3.23] — 2026-06-02
 
 **Drift Detector validation soak + third soak-surfaced fix.**

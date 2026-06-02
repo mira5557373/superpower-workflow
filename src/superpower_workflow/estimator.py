@@ -77,3 +77,74 @@ def estimate(config: dict, project_root: Path | None = None) -> dict:
         "duration_optimistic_min": round(n * total_minutes * OPTIMISTIC_FACTOR),
         "duration_pessimistic_min": n * total_minutes,
     }
+
+
+def estimate_banded(
+    config: dict,
+    project_root: Path | None = None,
+) -> dict:
+    """v1.3.24 — calibration-aware banded estimator.
+
+    Reads `MilestoneCompleted` events with `model_id` from telemetry,
+    partitions by canonical model, returns confidence bands plus the
+    same `cost_optimistic` / `cost_pessimistic` fields the legacy
+    estimator emits (for backward-compat callers).
+
+    Cold-start path: zero telemetry samples → uses `DEFAULT_TABLE`
+    prior from `calibration.py`, explicitly labeled `tier=cold_start`.
+
+    Set `SW_CALIBRATION_DISABLE=1` to skip and fall back to legacy.
+    """
+    import os
+
+    from superpower_workflow._model_key import canonicalize
+    from superpower_workflow.calibration import (
+        compute_bands,
+        load_samples_by_model,
+        rolling_error_ratio,
+    )
+
+    legacy = estimate(config, project_root)
+    if os.environ.get("SW_CALIBRATION_DISABLE") == "1":
+        legacy["tier"] = "legacy"
+        legacy["source"] = "legacy"
+        legacy["model_id"] = canonicalize(config.get("model", "")) or "unknown"
+        return legacy
+
+    milestone_count = legacy["milestone_count"]
+    model_id = canonicalize(config.get("model", "")) or "unknown"
+
+    telemetry_path = None
+    if project_root is not None:
+        telemetry_path = project_root / ".claude" / "sw-telemetry.jsonl"
+    if telemetry_path is None or not telemetry_path.exists():
+        samples_by_model: dict = {}
+        youngest: dict = {}
+    else:
+        samples_by_model, youngest, _ = load_samples_by_model(telemetry_path)
+    err_ratio = (
+        rolling_error_ratio(telemetry_path, model_id)
+        if telemetry_path is not None and telemetry_path.exists()
+        else None
+    )
+    band = compute_bands(
+        samples_by_model,
+        target_model=model_id,
+        milestone_count=milestone_count,
+        youngest_by_model=youngest,
+        rolling_error_ratio_mean=err_ratio,
+    )
+    legacy.update(
+        {
+            "model_id": band.model_id,
+            "tier": band.tier,
+            "source": band.source,
+            "samples_used": band.samples_used,
+            "p10_usd": band.p10_usd,
+            "p50_usd": band.p50_usd,
+            "p90_usd": band.p90_usd,
+            "rolling_error_ratio_mean": band.rolling_error_ratio_mean,
+            "last_sample_age_days": band.last_sample_age_days,
+        }
+    )
+    return legacy

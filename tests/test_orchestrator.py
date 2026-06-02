@@ -968,7 +968,11 @@ class TestTelemetryIntegration:
         events = _read_telemetry(tmp_path)
         types = [e["type"] for e in events]
         assert types[0] == "run_started"
-        assert types[-1] == "run_completed"
+        # v1.3.24: run_completed is no longer guaranteed-last because the
+        # estimate_calibrated event (emitted on completed runs only) lands
+        # after it. Both terminal anchors are acceptable.
+        assert types[-1] in ("run_completed", "estimate_calibrated")
+        assert "run_completed" in types
         assert "milestone_started" in types
         assert "milestone_completed" in types
         assert "phase_started" in types
