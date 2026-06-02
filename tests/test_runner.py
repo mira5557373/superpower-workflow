@@ -302,3 +302,27 @@ class TestRunClaudeHandlesTimeout:
 
             assert result.is_error is True
             assert result.timed_out is True
+
+
+class TestRunClaudeHandlesNoneStdout:
+    """v1.3.22 soak finding #3: child process killed mid-stream returned
+    a CompletedProcess-like object with stdout=None. The success-path check
+    `result.stdout.strip()` raised AttributeError. Must short-circuit cleanly."""
+
+    def test_returncode_0_but_stdout_none_falls_through_to_retry(self):
+        """returncode=0 + stdout=None must NOT crash on .strip(). Falls
+        through to retry path and eventually returns is_error=True."""
+        with (
+            patch("superpower_workflow.runner._invoke_claude") as mock_run,
+            patch("superpower_workflow.runner.time.sleep"),  # skip retry delays
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout=None, stderr=None)
+            result = run_claude(
+                prompt="test",
+                model="opus",
+                effort="medium",
+                budget=1.0,
+                cwd="/tmp",
+            )
+            # Must not have crashed; final return is is_error=True.
+            assert result.is_error is True

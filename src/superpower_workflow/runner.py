@@ -274,7 +274,11 @@ def run_claude(
                 on_child_ended=on_child_ended,
             )
 
-            if result.returncode == 0 and result.stdout.strip():
+            # v1.3.22 soak finding #3: defensive None-check. Real soak hit
+            # AttributeError: 'NoneType' has no 'strip' when the child process
+            # was killed (e.g. parent SIGTERM mid-stream) and the helper
+            # returned a CompletedProcess-like object with stdout=None.
+            if result.returncode == 0 and result.stdout and result.stdout.strip():
                 parsed = _parse_json_output(result.stdout)
                 # v1.3.9: always credit this attempt's cost to the running
                 # total, even when is_error=true (cost was real spend).
