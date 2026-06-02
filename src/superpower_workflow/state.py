@@ -64,6 +64,12 @@ class WorkflowState:
     # on each MilestoneStarted. Persists to disk so a resume mid-
     # milestone doesn't refire alerts already shown.
     drift_alerts_emitted_this_milestone: list[str] = field(default_factory=list)
+    # v1.3.26 — Classed Circuit Breaker rolling failure window. Each
+    # entry is a dict serialized from `circuit_breaker.BreakerWindowEntry`
+    # (kept as plain dicts for forward/backward-compat JSON loading).
+    # Loaded pre-v1.3.26 state files MUST default to empty list — verified
+    # by `tests/test_breaker_state_migration.py`.
+    breaker_window: list[dict] = field(default_factory=list)
 
 
 @dataclass

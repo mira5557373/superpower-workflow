@@ -476,7 +476,13 @@ class Orchestrator:
 
         milestone_retry_delays = [120, 300, 600]
         max_retries = len(milestone_retry_delays)
-        consecutive_failures = 0
+        # v1.3.26 — class-aware circuit breaker replaces the class-blind
+        # `consecutive_failures >= 3` counter. The breaker reads
+        # FailureTriaged events (v1.3.21) and applies per-FailureClass
+        # thresholds (deterministic=2, transient=3). Ships
+        # observation_only=true so accumulator data validates trip rules
+        # against real runs before being promoted to enforced.
+        consecutive_failures = 0  # kept as a tripwire fallback when triage absent
 
         try:
             for i, ms in enumerate(milestones):
@@ -675,12 +681,29 @@ class Orchestrator:
 
                 if not success:
                     consecutive_failures += 1
-                    if consecutive_failures >= 3:
+                    # v1.3.26 — Classed Circuit Breaker decision.
+                    if self._evaluate_circuit_breaker(name):
+                        # TRIP_ENFORCED → abort the run loop.
+                        logger.log(
+                            "CIRCUIT_BREAKER",
+                            consecutive=consecutive_failures,
+                            mode="enforced",
+                        )
+                        break
+                    # Legacy 3-consecutive tripwire kept as a SAFETY NET for
+                    # the case where FailureTriaged is missing (triage
+                    # disabled / errored). Future release can remove once
+                    # the breaker is enforced.
+                    if consecutive_failures >= 3 and not self._breaker_enabled():
                         print(
                             "  FATAL: 3 consecutive milestone failures. "
                             "Likely systemic issue. Stopping."
                         )
-                        logger.log("CIRCUIT_BREAKER", consecutive=consecutive_failures)
+                        logger.log(
+                            "CIRCUIT_BREAKER",
+                            consecutive=consecutive_failures,
+                            mode="legacy",
+                        )
                         break
 
                 delay = self.config.get("delay_between_phases_seconds", 10)
@@ -1361,6 +1384,129 @@ class Orchestrator:
             )
         except Exception:  # noqa: BLE001
             pass
+
+    def _breaker_enabled(self) -> bool:
+        """v1.3.26 — quick gate check used by the legacy 3-strike fallback."""
+        try:
+            return bool(self.config.get("circuit_breaker", {}).get("enabled", True))
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _evaluate_circuit_breaker(self, milestone_name: str) -> bool:
+        """v1.3.26 — class-aware breaker. Returns True iff TRIP_ENFORCED.
+
+        Best-effort: any internal failure swallowed; breaker never blocks
+        the run loop with its own exception.
+
+        Reads the most recent FailureTriaged from telemetry for this
+        milestone and appends to `state.breaker_window`. Emits one of:
+        - CircuitBreakerWouldTrip (observation_only=true)
+        - CircuitBreakerTripped (observation_only=false → returns True)
+        """
+        try:
+            from superpower_workflow.circuit_breaker import (
+                BreakerAction,
+                BreakerWindowEntry,
+                evaluate,
+                parse_config,
+            )
+            from superpower_workflow.telemetry import (
+                CircuitBreakerTripped,
+                CircuitBreakerWouldTrip,
+            )
+
+            if self._telemetry is None:
+                return False
+            config = parse_config(self.config.get("circuit_breaker", {}))
+            if not config.enabled:
+                return False
+
+            # Find latest FailureTriaged for this milestone in telemetry.
+            telemetry_path = self.claude_dir / "sw-telemetry.jsonl"
+            primary_class = ""
+            confidence = 0.0
+            triage_event_id = ""
+            if telemetry_path.exists():
+                try:
+                    for line in reversed(telemetry_path.read_text(encoding="utf-8").splitlines()):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        import json as _json
+
+                        try:
+                            ev = _json.loads(line)
+                        except _json.JSONDecodeError:
+                            continue
+                        if ev.get("type") != "failure_triaged":
+                            continue
+                        if ev.get("milestone", "") != milestone_name:
+                            continue
+                        primary_class = ev.get("primary_class", "")
+                        confidence = float(ev.get("confidence", 0.0))
+                        triage_event_id = ev.get("timestamp", "")
+                        break
+                except OSError:
+                    pass
+
+            new_entry = BreakerWindowEntry(
+                milestone_name=milestone_name,
+                primary_class=primary_class,
+                confidence=confidence,
+                triage_event_id=triage_event_id,
+                ts=__import__("time").strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
+
+            # Build window from state (dict entries → dataclass).
+            window: list[BreakerWindowEntry] = []
+            for raw in self.state.breaker_window:
+                if not isinstance(raw, dict):
+                    continue
+                try:
+                    window.append(BreakerWindowEntry(**raw))
+                except TypeError:
+                    continue
+
+            decision = evaluate(window, new_entry=new_entry, config=config)
+            # Persist updated window.
+            with self._state_lock:
+                self.state.breaker_window = [
+                    {
+                        "milestone_name": e.milestone_name,
+                        "primary_class": e.primary_class,
+                        "confidence": e.confidence,
+                        "triage_event_id": e.triage_event_id,
+                        "ts": e.ts,
+                    }
+                    for e in decision.window[-config.diversity_window :]
+                ]
+
+            if decision.action == BreakerAction.CONTINUE:
+                return False
+
+            threshold = config.same_class_thresholds.get(
+                decision.primary_class or "", config.default_same_class_threshold
+            )
+            event_args = {
+                "rule_matched": decision.rule_matched.value,
+                "primary_class": decision.primary_class or "",
+                "window_size": len(decision.window),
+                "threshold": threshold,
+                "remediation_hint": decision.remediation_hint or "",
+            }
+            if decision.action == BreakerAction.TRIP_OBSERVED:
+                self._telemetry.emit(CircuitBreakerWouldTrip(**event_args))
+                return False
+            # TRIP_ENFORCED
+            self._telemetry.emit(CircuitBreakerTripped(**event_args))
+            print(
+                f"  FATAL: Circuit breaker TRIPPED (rule={decision.rule_matched.value}, "
+                f"class={decision.primary_class}, window={len(decision.window)}). "
+                f"{decision.remediation_hint}"
+            )
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
     def _emit_estimate_calibrated(self) -> None:
         """v1.3.24 — emit one EstimateCalibrated event per completed run.

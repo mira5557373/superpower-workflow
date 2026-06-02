@@ -532,6 +532,45 @@ class EstimateCalibrated(TelemetryEvent):
     calibration_source: str = "cold_start"  # cold_start | partial | warm
 
 
+@dataclass
+class CircuitBreakerTripped(TelemetryEvent):
+    """v1.3.26 — emitted when the breaker enforces a trip and aborts the run.
+
+    Exit code 10 follows. observation_only mode emits CircuitBreakerWouldTrip
+    instead and continues. `rule_matched` ∈ {same_class_repeat, diversity_overflow}.
+    """
+
+    EVENT_TYPE: ClassVar[str] = "circuit_breaker_tripped"
+    rule_matched: str = ""
+    primary_class: str = ""
+    window_size: int = 0
+    threshold: int = 0
+    remediation_hint: str = ""
+
+
+@dataclass
+class CircuitBreakerWouldTrip(TelemetryEvent):
+    """v1.3.26 — emitted in observation_only mode when a trip rule matched
+    but the breaker is configured to NOT actually abort. Used to validate
+    trip rules against real telemetry before promoting to enforced."""
+
+    EVENT_TYPE: ClassVar[str] = "circuit_breaker_would_trip"
+    rule_matched: str = ""
+    primary_class: str = ""
+    window_size: int = 0
+    threshold: int = 0
+    remediation_hint: str = ""
+
+
+@dataclass
+class CircuitBreakerReset(TelemetryEvent):
+    """v1.3.26 — emitted when an operator clears the breaker window via
+    `sw resume --reset-breaker` (CLI deferred to v1.3.27; event reserved)."""
+
+    EVENT_TYPE: ClassVar[str] = "circuit_breaker_reset"
+    prior_window_size: int = 0
+
+
 class TelemetryEmitter:
     """v1.3.5 #3 fix: thread-safe writes for parallel orchestrator branches.
 

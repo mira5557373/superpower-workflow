@@ -3,6 +3,137 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.26] — 2026-06-02
+
+**Classed Circuit Breaker — class-aware run-level fail-fast.** Replaces
+the class-blind `consecutive_failures >= 3` counter with a class-aware
+accumulator that consumes v1.3.21 `FailureTriaged` events.
+
+### What it does
+
+Two trip rules:
+1. **same_class_repeat** — N back-to-back failures of the same
+   `FailureClass`. Deterministic classes (policy, coverage, ceiling,
+   merge_conflict, ...) trip at N=2; transient classes (timeout, error,
+   gap_non_converge) trip at N=3.
+2. **diversity_overflow** — legacy 3-in-5 safety net preserved.
+
+### Observation-only by default
+
+Ships with `observation_only=true`. The breaker accumulates
+`CircuitBreakerWouldTrip` events against real runs WITHOUT actually
+aborting — so trip rules can be validated against production telemetry
+before being promoted. The legacy 3-strike fallback also remains as a
+final safety net when triage is unavailable.
+
+### 6 adversarial-review revisions baked in
+
+Workflow `wf7eg1t2g` scored this 46/60. Six revisions:
+
+1. **Per-FailureClass thresholds.** Deterministic classes default to
+   N=2 (one repeat is enough — the cause won't fix itself), transient
+   classes default to N=3 (preserves legacy retry-burst tolerance).
+2. **WorkflowState backward-compat.** `breaker_window` field defaults
+   to `[]` when loading pre-v1.3.26 state files. Regression test
+   `test_pre_v1326_state_loads_with_empty_breaker_window` enforces.
+3. **v1 scope trimmed** — `sw breaker status` + `sw breaker reset` CLI
+   subcommands deferred to v1.3.27 after observation-only telemetry
+   validates the trip rules in production.
+4. **Low-confidence triage doesn't advance counter.** Failures with
+   `confidence < 0.7` break the same-class chain (low-conf result is
+   ambiguous — don't penalize on uncertain data).
+5. **Layered explicitly** with the existing milestone-level retry loop
+   (`max_retries=3`, delays 120/300/600s). Retry loop runs first;
+   breaker decides whether the NEXT milestone runs.
+6. **observation-only → enforced flip plan**: after N=10
+   same-class trips observed across runs with zero retry-recovers
+   between them, flip `observation_only=false` as the new default.
+
+### Configuration (`workflow.json`)
+
+```json
+{
+  "circuit_breaker": {
+    "enabled": true,
+    "observation_only": true,
+    "diversity_window": 5,
+    "diversity_threshold": 3,
+    "confidence_floor": 0.7,
+    "same_class_thresholds": {
+      "policy_violation": 2,
+      "coverage_below_threshold": 2,
+      "claude_subprocess_timeout": 3,
+      "claude_subprocess_error": 3
+    },
+    "default_same_class_threshold": 3
+  }
+}
+```
+
+All fields optional — defaults track the values shown above.
+
+### Telemetry events
+
+Three new events (all in `telemetry.py`):
+
+```python
+@dataclass
+class CircuitBreakerTripped(TelemetryEvent):
+    rule_matched: str            # same_class_repeat | diversity_overflow
+    primary_class: str
+    window_size: int
+    threshold: int
+    remediation_hint: str
+
+@dataclass
+class CircuitBreakerWouldTrip(TelemetryEvent):
+    # Same shape — emitted in observation_only mode instead of Tripped.
+    ...
+
+@dataclass
+class CircuitBreakerReset(TelemetryEvent):
+    prior_window_size: int
+    # Reserved for v1.3.27 `sw breaker reset` CLI.
+```
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 10 | Circuit breaker tripped (enforced mode) |
+
+### Stats
+
+- **Tests: 1917 → 1938** (+21):
+  - 18 unit tests for the pure-function `evaluate` (rule coverage,
+    counter snapshot, low-confidence behavior, remediation hint
+    population)
+  - 3 state-migration regression tests (pre-v1.3.26 load, round-trip,
+    missing file)
+- New: `src/superpower_workflow/circuit_breaker.py` (~270 LOC pure functional)
+- New: `Orchestrator._evaluate_circuit_breaker` (best-effort, swallows
+  internal failures, never crashes the run loop)
+- New: `Orchestrator._breaker_enabled` helper
+- New: `CircuitBreakerTripped` + `CircuitBreakerWouldTrip` +
+  `CircuitBreakerReset` telemetry events
+- Modified: `WorkflowState.breaker_window` field (default `[]`)
+- Modified: orchestrator milestone loop replaces class-blind
+  `consecutive_failures >= 3` with breaker call, legacy fallback
+  kept as triage-disabled safety net
+- Ruff + format clean.
+
+### Distinct from neighboring features
+
+| Feature | Asks |
+|---|---|
+| Drift Detector (v1.3.19) | Is this run abnormal? |
+| Cost Ceilings (v1.3.20) | Did we exceed rolling budget? |
+| Failure Triage (v1.3.21) | Why did this fail? |
+| Calibration Loop (v1.3.24) | What will the next run cost? |
+| **Circuit Breaker (v1.3.26)** | **Should the next milestone even run?** |
+
+The breaker is the only feature in the stack that can ABORT a run mid-flow.
+
 ## [1.3.25] — 2026-06-02
 
 **`DEFAULT_TABLE` recalibration from real soak data.**
