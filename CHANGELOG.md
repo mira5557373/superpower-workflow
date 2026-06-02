@@ -3,6 +3,61 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.4.0] — 2026-06-02
+
+**Feature-complete stabilization release. API frozen for the 1.x line.**
+
+No new features. No code changes (vs v1.3.27). This release is the
+documentation pass that closes the v1.3.x sweep and declares the public
+surface stable.
+
+### What changed
+
+- **README.md rewrite** — accurate status badges (1953 tests passing,
+  v1.4.0, internal-only, Python 3.11+), holistic value proposition
+  ("what sw provides that Claude Code alone does not"), five-feature
+  table grounded in actual code defaults, honest scope ("what sw is
+  NOT"), production track record (e2e_agent: 35 milestones, $665.44,
+  zero failures).
+- **`docs/architecture.md`** — one-page mental model: the big picture,
+  the four core + two optional phase pipeline, deep dives on the five
+  telemetry features (Drift Detector v1.3.19, Cost Ceilings v1.3.20,
+  Failure Triage v1.3.21, Calibration Loop v1.3.24, Circuit Breaker
+  v1.3.26), data model + file inventory, configuration reference, all
+  env-var kill switches, module map, concurrency model, exit-code
+  catalog.
+- **`docs/cookbook.md`** — 10 task-oriented recipes (Goal → Steps →
+  Verify → Pitfalls) covering project setup, post-run inspection,
+  failure recovery, model swap, rolling cost ceilings, circuit-breaker
+  inspection, `sw triage --reclassify`, `--explain` / `--health`, audit
+  verification, and pre-v1.3.x telemetry migration.
+- **`docs/migration.md`** — schema bumps (`MilestoneCompleted.model_id`
+  v1.3.24, `WorkflowState.breaker_window` v1.3.26), telemetry event
+  additions (v1.3.17 through v1.3.26), audit-event additions, exit-code
+  additions (7/8/10), model canonicalization, DEFAULT_TABLE
+  recalibration, kill-switch summary, general forward/backward-compat
+  principles, upgrade steps.
+
+### Status
+
+- **Tests: 1953 (unchanged from v1.3.27)** — all passing on master
+- Ruff + format clean
+- CI green
+- All four docs cross-checked for factual consistency vs the live code
+
+### What v1.4.0 means
+
+- **API frozen for 1.x.** No new public surface in 1.x. Bug fixes and
+  security patches will continue on the 1.x branch; behavioral
+  changes belong to 2.x.
+- **Verdict scores plateaued** at 45-46/60 across the last few feature
+  workflows, signaling the high-value feature space is depleted.
+- **Bug rate trended to zero** across four soaks ($3.94 real spend).
+- **The motivating project (e2e_agent) is done** — 35 milestones at
+  $665.44 with zero failed runs.
+
+The orchestrator earned its retirement on the 1.x line.
+
 ## [1.3.27] — 2026-06-02
 
 **Deferred CLI features shipped — `sw triage --reclassify/--explain/--health`

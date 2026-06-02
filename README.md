@@ -1,406 +1,189 @@
 # superpower-workflow
 
-[![Tests](https://img.shields.io/badge/tests-779%2B%20passing-brightgreen)](https://github.com/mira5557373/superpower-workflow)
+[![Status](https://img.shields.io/badge/status-feature--complete-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.4.0-blue)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-1953%20passing-brightgreen)](#)
+[![Distribution](https://img.shields.io/badge/distribution-internal--only-lightgrey)](#honest-scope--what-sw-is-not)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.1.0-blue)](CHANGELOG.md)
 
-**Automated post-brainstorming development lifecycle for Claude Code.**
-
-After you've designed something (e.g., via `superpowers:brainstorming`), `sw` drives the entire build: spec → milestone decomposition → TDD implementation → ultrathink reviews → push.
-
-Proven on 35 milestones across multiple real projects, with code-enforced gap validation, spec-compliance verification, and feature-verification testing built in.
+A Python CLI (`sw`) that orchestrates `claude -p` subprocesses to drive a software
+project from spec to pushed commits through verifiable Plan / Implement / Review /
+Push phases — with cost ceilings, drift detection, failure triage, calibration,
+and a class-aware circuit breaker built in.
 
 ---
 
-## Table of Contents
+## Status
 
-- [What sw does](#what-sw-does)
-- [Why it exists](#why-it-exists)
-- [Installation](#installation)
-- [Quickstart](#quickstart)
-- [Commands](#commands)
-- [Configuration](#configuration)
-- [Architecture](#architecture)
-- [Trust-but-verify](#trust-but-verify)
-- [Lock & resume](#lock--resume)
-- [Unified dashboard (optional)](#unified-dashboard-optional)
-- [Examples](#examples)
-- [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
+**v1.4.0 — feature-complete, API frozen for the 1.x line.** 1953 tests passing.
+Distributed internally only (no PyPI). Five telemetry features finished in the
+1.3.x series; 1.4.0 is the stabilization release.
+
+No new public surface is planned for 1.x. Bug fixes and security patches will
+continue on the 1.x branch; behavioral changes belong to 2.x.
 
 ---
 
-## What sw does
+## Why sw exists
 
-For each milestone in your spec, `sw run` executes four phases inside a self-correcting loop:
+Claude Code on its own is a capable interactive assistant. It is not, on its
+own, a development lifecycle.
 
-| Phase | Purpose | Convergence loop |
-|---|---|---|
-| **A — Plan** | Writes a detailed implementation plan with file edits, tests, and risk analysis. | Plan is fed to ultrathink-gap-analysis (≥20 gaps) until convergence. |
-| **B — Implement** | Writes code TDD-style (red → green → refactor). | Runs lint, tests, coverage, SAST, dep scan. |
-| **C — Review + Fix** | Post-implementation review across functional/security/perf/quality dimensions. | Loops with fixes until reviewer reports zero blockers. |
-| **D — Push** | Commits with conventional message and pushes to the remote. | Single pass. |
+`sw` is the deterministic Python controller around `claude -p` that turns a
+spec into committed code without a human babysitting every prompt. Specifically,
+`sw` provides what Claude Code alone does not:
 
-Between phases, `sw` runs **gap validation** (code-enforced), **spec compliance** (independent claude pass), and **feature verification** (independent claude pass) so AI-reported "done" is checked against reality.
+- **Milestone decomposition.** A spec is split into milestones with explicit
+  acceptance criteria, so each `claude -p` call has a tightly scoped goal
+  instead of an open-ended chat.
+- **Four-phase per-milestone loop.** Plan → Implement → Review → Push, with
+  an optional Phase E (CI Fix) when CI is wired. Each phase is a fresh
+  `claude -p` invocation with a curated prompt — not a long-running
+  conversation that drifts.
+- **Convergence loops with hard caps.** Gap-analysis on plans, post-impl
+  review on code — both bounded by configurable max iterations so they
+  cannot loop forever.
+- **Trust-but-verify.** Independent `claude -p` passes plus code-enforced
+  checks cross-check AI claims against `ruff`, `pytest`, `pip-audit`, and
+  `git diff`. Self-reported "done" is verified against reality.
+- **Resilience.** Atomic file locks with PID + start-time + hostname identity,
+  heartbeat-based stale detection, automatic retry, class-aware circuit
+  breaker, and git-log-aware resume across crashes, terminal restarts, and
+  hung claude calls.
+- **Telemetry that informs decisions.** JSONL flat-file always; cost
+  ceilings, drift detection, failure triage, calibration, and circuit
+  breaker built in (see below).
 
-## Why it exists
-
-Three pain points:
-
-1. **Ad-hoc TDD loops break down.** Without orchestration, agents drift from the plan, skip tests, or call something "done" when half the spec is missing.
-2. **AI self-review hallucinates.** A reviewer that reads its own code is too easily convinced. `sw` runs independent verification passes that cross-check claims against `ruff`, `pytest`, `pip-audit`, and `git diff`.
-3. **Long-running development needs resilience.** `sw` survives terminal restarts, crashed runs, hung claude calls, PID reuse, and stale locks — and resumes from the right phase via git-log analysis.
-
----
-
-## Installation
-
-> superpower-workflow is distributed internally — not on PyPI. Pick one of the three install paths below.
-
-### Option A — pip install from git (recommended for individual users)
-
-```bash
-pip install git+ssh://git@github.com/mira5557373/superpower-workflow.git@v1.1.0
-# or via https if you have a token:
-pip install git+https://github.com/mira5557373/superpower-workflow.git@v1.1.0
-```
-
-Pin to a specific tag (`@v1.1.0`) — `master` is unstable.
-
-### Option B — wheel install (offline or air-gapped)
-
-```bash
-# on a build host:
-git clone git@github.com:mira5557373/superpower-workflow.git
-cd superpower-workflow && python -m build --wheel
-# copy dist/*.whl to the target host, then:
-pip install superpower_workflow-1.1.0-py3-none-any.whl
-```
-
-### Option C — git submodule + editable install (for parent projects like `e2e_agent`)
-
-```bash
-git submodule add git@github.com:mira5557373/superpower-workflow.git
-git submodule update --init --recursive
-pip install -e ./superpower-workflow
-```
-
-This is how the `e2e_agent` repo consumes it.
-
-### With the unified dashboard server
-
-Append the `[server]` extra to any of the above:
-
-```bash
-pip install "superpower-workflow[server] @ git+ssh://git@github.com/mira5557373/superpower-workflow.git@v1.1.0"
-```
-
-This adds `sqlalchemy`, `alembic`, `fastapi`, `uvicorn`, and `psycopg2-binary`.
-
-### Requirements
-
-- Python 3.11+
-- [Claude Code](https://claude.com/claude-code) CLI on PATH (`claude --version` must work)
-- Git
-- Optional: Docker + Docker Compose (for the unified dashboard)
+In short: `sw` is what you wrap around Claude Code when you need a 35-milestone,
+multi-week build to finish without you watching it.
 
 ---
 
-## Quickstart
+## Quick start
 
 ```bash
-# 1. Inside the project you want to build:
+pip install -e ./superpower-workflow   # internal install path
 cd /path/to/your-project
-sw init                          # creates .claude/workflow.json + per-project skills
-
-# 2. Health check:
-sw doctor                        # verifies claude, git, lint/test commands
-
-# 3. Break the spec into milestones:
-sw decompose docs/spec.md        # writes .claude/milestones.json
-
-# 4. (Optional) Cost/duration estimate:
-sw estimate
-
-# 5. Run it:
-sw run                           # full pipeline — Plan → Implement → Review → Push, per milestone
-
-# 6. Watch progress in another terminal:
-sw status                        # one-shot snapshot
-sw watch                         # live TUI
-sw dashboard                     # single-project web dashboard on :3000
+sw init                                # writes .claude/workflow.json + skills
+sw doctor                              # verifies claude, git, lint/test commands
+sw lint-spec docs/spec.md              # optional: spec quality gate
+sw decompose                           # writes milestones into workflow.json
+sw estimate                            # cost band forecast (per-model calibrated)
+sw run                                 # full pipeline, all milestones
+sw status                              # snapshot in another terminal
+sw watch                               # live TUI
 ```
+
+Resume after a crash: `sw resume`. Force-clean a stuck lock: `sw lock force-clean`.
 
 ---
 
-## Commands
+## The five telemetry features (1.3.x)
 
-### Core lifecycle
+All five ship enabled by default, write to `.claude/sw-telemetry.jsonl`, and
+respect existing budget/convergence config. Each has a per-feature env-var
+kill switch.
 
-| Command | Purpose |
+| Feature | What it asks | How it works | Default mode |
+|---|---|---|---|
+| **Drift Detector** (v1.3.19) | Is this run abnormal vs baseline? | Sigma-band z-score over 5 metrics per (phase, model_id) bucket; log1p for cost/duration. Emits `DriftDetected` at 2σ/3σ/4σ. | `observation_only` (INFO suppressed); `baseline_floor=15` |
+| **Cost Ceilings** (v1.3.20) | Did we exceed a rolling-window budget? | Reads `RunCompleted` events across runs, sums `total_cost_usd` over rolling 24h / 7d / 30d windows. Evaluated at run-start / milestone-start / phase-E-retry preflight gates. | `warn` mode emits telemetry; `block` mode exits 7 |
+| **Failure Triage** (v1.3.21) | Why did this milestone fail? | Rule-only classifier — 14 `FailureClass` values + `UNKNOWN`. Anchors on `MilestoneFailed`. Pure-function, deterministic, zero LLM cost. | Always-on; consumed by circuit breaker |
+| **Calibration Loop** (v1.3.24) | What will the next run cost? | Per-model bands (p10/p50/p90) from `MilestoneCompleted` events. Three tiers: `cold_start` (n=0), `partial` (1 ≤ n < 5), `warm` (n ≥ 5). Log1p EWMA. | Always-on; `SW_CALIBRATION_DISABLE=1` opts out |
+| **Circuit Breaker** (v1.3.26) | Should the next milestone even run? | Per-`FailureClass` thresholds (deterministic=2, transient=3) + diversity overflow (3 failures in last 5 milestones regardless of class) over `state.breaker_window`. | `observation_only=true` — emits `CircuitBreakerWouldTrip` without aborting until you flip the config |
+
+Inspect any feature on the corpus: `sw drift`, `sw budget show`, `sw triage`,
+`sw breaker status`. Replay/explain: `sw triage --reclassify`,
+`sw triage --explain <CLASS>`, `sw triage --health`. Reset:
+`sw budget reset --window day --confirm`, `sw breaker reset --confirm`.
+
+Telemetry rollup: `sw metrics`. Audit chain integrity: `sw audit verify`.
+
+---
+
+## CLI surface
+
+Top-level commands (all support `--help`):
+
+- **Lifecycle:** `init`, `doctor`, `lint-spec`, `decompose`, `estimate`,
+  `run`, `status`, `resume`, `clean`
+- **Telemetry inspection:** `drift`, `budget`, `triage`, `breaker`, `metrics`
+- **Observability:** `watch`, `dashboard`, `mcp-server`, `audit verify`
+- **Lock management:** `lock status`, `lock force-clean`
+- **Project setup:** `bootstrap`, `upgrade`, `plugin add/list/remove`,
+  `onboard`, `recommend-model`, `migrate-gitignore`
+- **Optional server (`[server]` extra):** `server start/sync`
+
+`sw run` flags worth knowing: `--dry-run`, `--milestone NAME`, `--from MS`,
+`--to MS`, `--from-issue N`, `--parallel`, `--best-of-n N`,
+`--ignore-ceiling` (requires `SW_ALLOW_CEILING_BYPASS=1`).
+
+---
+
+## Honest scope — what sw is NOT
+
+`sw` is internal tooling that does a few things well. It is not:
+
+- **On PyPI.** Distribution is git+ssh, wheel, or submodule. There is no
+  `pip install superpower-workflow` from a public index in the 1.x line.
+- **A multi-tenant SaaS.** Single-project optimized. The optional `[server]`
+  extra adds a Postgres-backed dashboard for cross-project visibility on
+  your own infrastructure, but there is no hosted version.
+- **A replacement for Claude Code.** `sw` invokes `claude -p`. If the
+  Claude Code CLI isn't installed and on PATH, `sw` does nothing.
+- **A general-purpose CI runner.** It runs `ruff`, `pytest`, `pip-audit`,
+  etc. via your `verify_commands` config — it does not replace CI.
+- **Framework-agnostic out of the box.** Heuristics and prompts assume
+  Python projects with ruff + pytest. Other stacks work but require
+  `verify_commands` rewrites and possibly skill-asset changes.
+- **An autonomous coding agent without supervision.** The trust-but-verify
+  layer + circuit breaker exist precisely because LLMs need
+  cross-checking. You should still read the diffs before merging.
+- **Stable across major versions.** 1.x is frozen; 2.x may break things.
+  Pin to a tag.
+
+---
+
+## Production track record
+
+`sw` built `e2e_agent` end-to-end:
+
+- **35 milestones** across phases P1 / P2 / P3 / P4
+- **$665.44 total Claude API spend**
+- **Zero failed runs** that required manual rescue beyond `sw resume`
+- **1953 tests** in `sw` itself, all passing on the v1.4.0 release commit
+
+This is not a synthetic benchmark. `e2e_agent` is a real Python library with a
+published spec, ~10 sub-packages, and integration test suites at each phase
+boundary. Every commit on its main branch was produced by `sw run` and reviewed
+by the trust-but-verify pipeline before push.
+
+Four soak archives under `soak-archive/` document the v1.3.x feature
+validations on `examples/todo-cli`. Three real production bugs were caught and
+fixed by those soaks (regression tests added for each).
+
+---
+
+## Documentation
+
+| Doc | What it covers |
 |---|---|
-| `sw init` | Create `.claude/workflow.json` and install per-project skills + slash commands. |
-| `sw doctor` | Pre-flight health checks (claude CLI, git, lint/test commands, disk, perms). |
-| `sw decompose <spec>` | Two-pass spec → milestone breakdown (writes `.claude/milestones.json`). |
-| `sw estimate` | Cost/duration estimate using historical telemetry when available. |
-| `sw run [--from M] [--milestone M] [--dry-run]` | Execute milestones with full Plan/Implement/Review/Push loop. `--dry-run` previews without spend. |
-| `sw status` | Show current run state, phase, retries, and progress. |
-| `sw resume` | Resume from last failure point (git-log aware smart resume). |
-| `sw clean` | Remove all runtime files (state, lock, gap reports, telemetry). |
+| [`docs/architecture.md`](docs/architecture.md) | Orchestrator design, phase lifecycle, how the 5 telemetry features compose |
+| [`docs/cookbook.md`](docs/cookbook.md) | Recipes: set up a new project, recover a failed run, swap models, etc. |
+| [`docs/migration.md`](docs/migration.md) | Schema bumps, exit-code additions, forward/backward-compat guarantees |
+| [`docs/budget-ceilings.md`](docs/budget-ceilings.md) | Rolling-window cost ceiling reference (v1.3.20) |
+| [`docs/calibration.md`](docs/calibration.md) | Per-model calibration reference (v1.3.24) |
+| [`docs/failure-triage.md`](docs/failure-triage.md) | Failure classification taxonomy (v1.3.21) |
+| [`CHANGELOG.md`](CHANGELOG.md) | Per-release detail across all 1.x releases |
 
-### Observability
-
-| Command | Purpose |
-|---|---|
-| `sw watch` | Live terminal TUI of the current run. |
-| `sw dashboard [--port 3000]` | Single-project web dashboard. |
-| `sw metrics` | Show cost/duration/retry telemetry summary. |
-| `sw audit` | Inspect tamper-evident HMAC audit chain. |
-
-### Lock management
-
-| Command | Purpose |
-|---|---|
-| `sw lock status` | Show lock holder (PID, host, heartbeat age, stale flag). |
-| `sw lock force-clean` | Release the lock when auto-recovery can't. |
-
-### Project setup & maintenance
-
-| Command | Purpose |
-|---|---|
-| `sw bootstrap` | One-command setup (devcontainer, CI, hooks, CLAUDE.md, docs). |
-| `sw upgrade` | Detect outdated deps with AI-assisted migration plan. |
-| `sw plugin add/list/remove` | Manage workflow plugins via setuptools entry points. |
-
-### Unified server (optional `[server]` extra)
-
-| Command | Purpose |
-|---|---|
-| `sw server init-db` | Apply schema migrations. |
-| `sw server sync [--all]` | Import existing JSONL telemetry into Postgres. |
-| `sw server start [--host --port]` | Start FastAPI + WebSocket on :3001. |
-| `sw server stop` | Graceful shutdown via PID file. |
-
-Run `sw <command> --help` for full options.
+For a one-page understanding of the runtime, start with `architecture.md`. For
+"how do I do X", start with `cookbook.md`.
 
 ---
 
-## Configuration
+## License & author
 
-`sw init` writes `.claude/workflow.json`:
-
-```jsonc
-{
-  "project_name": "your-project",
-  "spec_path": "docs/spec.md",
-  "verify_commands": {
-    "lint":     "ruff check . && ruff format --check .",
-    "test":     null,                          // set when you have tests
-    "coverage": null,
-    "sast":     null,
-    "dep_scan": null
-  },
-  "budget": {
-    "per_milestone_usd": 25.0,
-    "global_usd": 250.0,
-    "wall_seconds": 14400
-  },
-  "convergence": {
-    "max_ultrathink_passes": 3,
-    "max_review_passes": 3
-  },
-  "resilience": {
-    "max_retries": 3,
-    "max_milestone_retries": 2,
-    "skip_and_continue_after": 5,
-    "circuit_breaker_failures": 3
-  },
-  "trust_but_verify": {
-    "gap_validator":         { "enabled": true },
-    "spec_compliance":       { "enabled": true },
-    "feature_verification":  { "enabled": true }
-  },
-  "database": {                                // optional, only with [server]
-    "url_env": "SW_DATABASE_URL"               // never put the URL here directly
-  },
-  "docs": { "readme": { "enabled": true } }
-}
-```
-
-**Secrets stay out of config files** — only env-var references are allowed.
-
----
-
-## Architecture
-
-```
-sw run
-  └─ Orchestrator (orchestrator.py)
-       ├─ Preflight: lock, git clean, doctor
-       ├─ For each milestone:
-       │    ├─ Phase A — Plan          (claude -p, ultrathink convergence loop)
-       │    ├─ Gap Validator           (code-enforced verification of plan gaps)
-       │    ├─ Phase B — Implement     (claude -p, runs lint/test/coverage/SAST)
-       │    ├─ Spec Compliance Check   (independent claude -p pass)
-       │    ├─ Feature Verification    (independent claude -p pass, runs feature tests)
-       │    ├─ Phase C — Review + Fix  (claude -p, loops on blockers)
-       │    └─ Phase D — Push          (claude -p, conventional commit + push)
-       ├─ Heartbeat updater (per-milestone, ~10min stale threshold)
-       ├─ Resilience: retry / milestone-retry / skip+continue / circuit breaker
-       └─ Telemetry (JSONL flat-file always; Postgres optional)
-
-hooks/
-  └─ convergence_gate.py — Stop hook (exit 2 to block stop and force another pass)
-```
-
-Subprocess orchestration of `claude -p` — `sw` is not itself an LLM agent. It's a deterministic Python controller that drives Claude Code with carefully scoped prompts, then verifies the result.
-
----
-
-## Trust-but-verify
-
-Three independent verifiers cross-check AI claims:
-
-| Verifier | What it checks | How |
-|---|---|---|
-| **Gap Validator** | Every gap an ultrathink pass reports actually points at real files/lines/symbols. | Code-enforced: walks the gap report, opens the file, greps for the symbol. Three states: valid / invalid / unverifiable. |
-| **Spec Compliance Checker** | Every requirement in the spec is implemented in code. | Fresh `claude -p` session with no implementation context. Reports missing features to Phase C. |
-| **Feature Verification Tester** | Spec features actually *work* (not just exist). | Fresh `claude -p` session that runs verification tests/probes against the implementation. |
-
-These run between phases. Anything they flag is fed back into Phase C as actionable context — not a rubber stamp.
-
----
-
-## Lock & resume
-
-`sw` survives interrupted runs:
-
-- **Atomic lock** — `filelock` (`O_EXCL`) for race-free acquisition.
-- **Composite identity** — PID + process `start_time` + hostname. Detects PID reuse after terminal restart.
-- **Heartbeat** — orchestrator pings every milestone iteration. Locks older than 10 minutes are considered hung and reclaimed automatically.
-- **Hostname check** — locks held by another machine (e.g., NFS-shared `.claude/` dirs) are respected.
-- **`sw resume`** — reads `git log` since the run started, infers the last successful phase, and picks up there. Phase B crashes are recovered via diff analysis.
-- **Escape hatch** — if all automation fails, `sw lock force-clean` releases the lock immediately.
-
-```bash
-sw lock status
-# active  pid=24851  host=dev-box  heartbeat 32s ago  not stale
-```
-
----
-
-## Unified dashboard (optional)
-
-For multi-project visibility, install the `[server]` extra and run a Postgres-backed dashboard.
-
-```bash
-pip install "superpower-workflow[server]"
-docker compose -f docker/docker-compose.yml up -d   # postgres + api-server
-export SW_DATABASE_URL="postgresql://sw:sw@localhost:5432/sw"
-export SW_API_KEY="<generate-a-key>"
-sw server init-db
-sw server sync --all                                 # import existing JSONL
-sw server start                                      # http://localhost:3001
-```
-
-Features:
-- Cross-project overview, drill-down per project
-- Real-time updates via WebSocket
-- Run comparison, event search, model analytics
-- REST API at `/api/v1/*` (Bearer-auth, rate-limited, paginated)
-- Health check at `/api/v1/health`
-- `sw run` continues to dual-write JSONL + Postgres; the dashboard is non-blocking infrastructure.
-
----
-
-## Examples
-
-### Preview before spending
-
-```bash
-sw run --dry-run
-```
-
-Prints the milestone list, per-phase budget, convergence loop settings, verify commands, and a cost/duration forecast (uses historical telemetry when available). No claude calls made.
-
-### Run a single milestone
-
-```bash
-sw run --milestone M3
-```
-
-### Re-run from the middle after a crash
-
-```bash
-sw resume
-# Or explicitly:
-sw run --from M2
-```
-
-### Run from a GitHub issue
-
-```bash
-sw run --from-issue 42
-```
-
-### Force-clean a stuck lock (last resort)
-
-```bash
-sw lock status        # confirm it's actually stale
-sw lock force-clean
-sw resume
-```
-
-### Inspect telemetry
-
-```bash
-sw metrics                              # rollup
-sw dashboard --port 3000                # single-project web UI
-sw audit --verify                       # check HMAC audit chain integrity
-```
-
----
-
-## Troubleshooting
-
-**"Workflow lock held by another process"**
-Run `sw lock status`. If the listed PID is gone or heartbeat is >10 min old, `sw` would normally reclaim it on the next run. If it doesn't, `sw lock force-clean`.
-
-**"claude command not found"**
-`sw` shells out to `claude -p`. Install [Claude Code](https://claude.com/claude-code) and ensure `claude --version` works.
-
-**"verify command 'lint' failed" during preflight**
-Your `verify_commands.lint` produced errors before the run started. Fix lint errors first, or set the verify command to `null` if not applicable.
-
-**Phase B crashed and resume can't find the last commit**
-`sw resume` uses git log since the run started. If you've manually committed, set `--from <milestone>` explicitly.
-
-**Tests fail with `ModuleNotFoundError: psutil`**
-`pip install -e .` to pick up the new runtime deps (`filelock`, `psutil`) added in 1.1.0.
-
----
-
-## Contributing
-
-```bash
-git clone https://github.com/mira5557373/superpower-workflow.git
-cd superpower-workflow
-pip install -e ".[dev]"
-pytest -q
-ruff check . && ruff format --check .
-```
-
-779+ tests. Conventional commits. PRs welcome.
-
----
-
-## License
-
-MIT. See [LICENSE](LICENSE).
-
-## Links
-
-- [CHANGELOG](CHANGELOG.md)
-- [Issue tracker](https://github.com/mira5557373/superpower-workflow/issues)
-- [Design spec](docs/superpowers/specs/2026-05-22-superpower-workflow-design.md)
+MIT (see [`LICENSE`](LICENSE)). Authored and maintained for internal use;
+external pull requests are not currently accepted, but issues filed by internal
+consumers are welcome. Contact the maintainer through the parent project
+(`e2e_agent`) for access, support, or to request a 2.x scoping conversation.
