@@ -3,6 +3,51 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.23] — 2026-06-02
+
+**Drift Detector validation soak + third soak-surfaced fix.**
+
+### Fixed
+
+- **`runner.py:277` crashed with `AttributeError: 'NoneType' has no
+  'strip'`** when the subprocess return path landed in the success
+  branch with `result.stdout=None` (e.g., subprocess killed via
+  process-group SIGTERM mid-stream, salvage path returned a
+  CompletedProcess-like object with null streams). Fix: defensive
+  `result.stdout and result.stdout.strip()` check before calling
+  `.strip()`. Falls through to retry cleanly. Regression test
+  `test_returncode_0_but_stdout_none_falls_through_to_retry` mocks
+  the exact null-stdout return shape.
+
+### Drift Detector validated end-to-end on real data
+
+`soak-archive/v1.3.22-drift-2026-06-02/` — $0.50 / 5 min wall-clock.
+
+- 8 `phase_completed` events across 4 phase buckets after running M2
+- All buckets reached `n=2`, `meets_floor=true`
+- Per-`(phase, model_id)` partitioning correct on real data
+- `sw drift --baseline --json` displays accurate baseline statistics
+- Zero false-positives under stable run conditions (M2 within sigma
+  of M1's baseline) — the right behavior
+
+### Soak bug tally
+
+Three real production bugs caught by two soaks, all fixed with
+regression tests:
+
+| # | Bug | Caught by | Fixed in |
+|---|---|---|---|
+| 1 | `--ignore-ceiling` `EOFError` non-interactive | v1.3.21-e2e | 1154760 |
+| 2 | `error_kind=nonzero_exit` misclassification | v1.3.21-e2e | 1154760 |
+| 3 | `runner.py` crash on null stdout | v1.3.22-drift | 240beba |
+
+### Stats
+
+- Tests: 1861 → 1862 (+1 regression).
+- One additional production bug fixed.
+- Drift Detector verified production-ready.
+- Ruff + format clean.
+
 ## [1.3.22] — 2026-06-02
 
 **Soak fixes.** End-to-end real-project soak on `examples/todo-cli`
