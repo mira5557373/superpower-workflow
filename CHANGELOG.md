@@ -3,6 +3,71 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.22] — 2026-06-02
+
+**Soak fixes.** End-to-end real-project soak on `examples/todo-cli`
+($1.49 / 1 milestone / 23 telemetry events) surfaced two production
+bugs in v1.3.20+v1.3.21 instrumentation. Both fixed mid-soak with
+regression tests added.
+
+### Fixed
+
+- **`--ignore-ceiling` crashed with `EOFError` in non-interactive
+  shells.** When `python -c "..."` is launched from a bash subprocess
+  (or any non-TTY caller), `sys.stdin.isatty()` reports True but
+  `input()` raises `EOFError` because the subprocess has no actual
+  TTY input. Pre-fix: full traceback bled to user. Post-fix:
+  `EOFError` / `KeyboardInterrupt` treated as explicit
+  non-confirmation → exit 8 cleanly. **Unit test missed it** because
+  pytest's monkeypatch on `sys.stdin` made `isatty()` return False
+  in tests. Regression test
+  `test_ignore_ceiling_tty_but_no_stdin_input_exits_8` patches
+  `isatty()=True` AND `input()` to raise `EOFError` — the exact
+  production failure mode.
+- **`ClaudeInvocationFailed.error_kind` misclassified as
+  `nonzero_exit`** when claude returned `is_error=true`. The
+  substring scan for `"is_error"` / `"returncode"` in `r.text` never
+  matched real-world output because those are SDK field names, not
+  result body content. Every `is_error` event fell through to the
+  catch-all `nonzero_exit` bucket — wrong forensic detail. Fix: when
+  `r.is_error=true` AND not `timed_out`, default to `is_error` unless
+  auth/mcp keywords ACTUALLY appear. Triage rule_09 user-visible
+  class unchanged (still `CLAUDE_SUBPROCESS_ERROR`) because both
+  values are in its trigger set — only the audit forensic detail
+  improves.
+
+### Soak validations passed
+
+- v1.3.20 preflight at `run_start` + `milestone_start` gates (4 events
+  with `decision=no_history` correctly bypassing block for fresh
+  project)
+- v1.3.20 block path: exit code **7**, `CostCeilingBlocked` telemetry,
+  `CEILING_BLOCK` audit at seq=9, hash-chained
+- v1.3.20 `sw budget show` + `--json` reading real `RunCompleted`
+  spend data
+- v1.3.21 typed `ClaudeInvocationFailed` emitted on real claude error
+- v1.3.21 `sw triage` correctly classified 2 real failures
+  (cost_ceiling_blocked at conf=1.0 + claude_subprocess_error at
+  conf=0.7 via the typed event)
+- v1.3.18 `sw audit verify`: "Audit trail OK. 8 entries verified."
+- Spec linter scored 94/100 on todo-cli spec
+- Decomposer produced 3 sensible milestones
+
+### Default-tuning recommendation surfaced by soak
+
+Estimator over-projects by **~3.8×** on haiku-4-5 ($1.49 actual vs
+$5.60-$8.00 estimated for the same milestone). Per-model calibration
+recommended for a future release — see
+`soak-archive/v1.3.21-e2e-2026-06-02/REPORT.md`.
+
+### Stats
+
+- Tests: 1860 → 1861 (+1 regression test).
+- Two real production bugs caught + fixed.
+- Full soak artifacts committed under
+  `soak-archive/v1.3.21-e2e-2026-06-02/`.
+- Ruff + format clean.
+
 ## [1.3.21] — 2026-06-01
 
 **Failure Triage Classifier — typed-cause classification for every
