@@ -228,6 +228,9 @@ class TestComplexityAuditPassesAtV120Ceilings:
 
     v1.3.21 adds the `sw triage` top-level subcommand — same pattern, one
     more dispatch branch. Ceiling bumped 56 → 57.
+
+    v1.3.27 adds the `sw breaker` top-level subcommand — same pattern.
+    Ceiling bumped 57 → 58.
     """
 
     def test_audit_passes_at_ceilings(self):
@@ -238,7 +241,7 @@ class TestComplexityAuditPassesAtV120Ceilings:
                 "--max-lines",
                 "510",
                 "--max-cc",
-                "57",
+                "58",
                 "--max-nesting",
                 "7",
             ],

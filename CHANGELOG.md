@@ -3,6 +3,94 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.27] — 2026-06-02
+
+**Deferred CLI features shipped — `sw triage --reclassify/--explain/--health`
++ `sw breaker status/reset`.**
+
+### Strategic context
+
+After deep analysis (ultrathink pass), Path A from the previous session
+guide turned out to be incoherent: all 35 e2e_agent milestones are
+already DONE ($665.44 historical cost), so there's literally no "next
+milestone" to soak sw against. Pivoted to shipping the deferred CLI
+work that prior REPORTs called out — zero claude spend, real value.
+
+### What it adds
+
+#### `sw triage --reclassify`
+
+Replays the classifier rules over the project's historical telemetry
+and writes a sidecar `.claude/.triage-replay.jsonl`. Does NOT mutate
+`sw-telemetry.jsonl`. Useful when rules evolve: replay surfaces what
+would have been classified differently under the current rule set.
+
+```bash
+sw triage --reclassify         # human summary + class distribution
+sw triage --reclassify --json  # machine-readable count + sidecar path
+```
+
+#### `sw triage --explain <FailureClass>`
+
+Prints the rule id, recommendation, and IMPLIES subsumption for a
+given class. Lets users understand WHY a particular classification was
+made without reading the source.
+
+```bash
+sw triage --explain policy_violation
+sw triage --explain quality_gate_fail --json
+```
+
+Unknown class → exit 3 with list of valid values.
+
+#### `sw triage --health`
+
+UNKNOWN-rate monitoring over rolling window of last 30 failures.
+Reports OK / DEGRADED based on a 15% threshold; surfaces per-class
+distribution + actionable recommendation when degraded.
+
+#### `sw breaker status`
+
+v1.3.26 deferred this. Shows the rolling failure window, per-class
+counter snapshot, and `TRIP`/`ok` indicator per class based on
+configured thresholds. Critical operational visibility — when the
+breaker is about to trip, users can see it coming.
+
+```bash
+sw breaker status         # human table
+sw breaker status --json  # machine-readable
+```
+
+#### `sw breaker reset`
+
+Clears the breaker window. Emits `CIRCUIT_BREAKER_RESET` audit entry
+(when audit-trail enabled). Required `--confirm` flag prevents
+accidental clears.
+
+```bash
+sw breaker reset           # DRY-RUN (no effect)
+sw breaker reset --confirm # actually clears + audit
+```
+
+### Stats
+
+- **Tests: 1938 → 1953** (+15 across explain/reclassify/health +
+  breaker status/reset)
+- Modified: `cli.py` (+~280 LOC): three new triage subcommand helpers
+  + `_cmd_breaker` + argparse wiring
+- Complexity audit `max-cc` bumped 57 → 58 (new `sw breaker` top-level
+  dispatch — same precedent as v1.3.20/v1.3.21).
+- Ruff + format clean. CI green.
+
+### Strategic pivot documented
+
+This release closes out the v1.3.x sweep. After 5 telemetry features
+(Drift, Cost Ceilings, Triage, Calibration, Circuit Breaker) +
+deferred-feature cleanup + 3 production-bug fixes from soaks, the
+v1.3.x line is now feature-complete. Further iteration should focus
+on real-world validation rather than more telemetry features (verdict
+scores were already plateauing at 45-46/60).
+
 ## [1.3.26] — 2026-06-02
 
 **Classed Circuit Breaker — class-aware run-level fail-fast.** Replaces

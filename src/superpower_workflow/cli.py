@@ -263,6 +263,53 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show only the failure for this milestone (deep view + full evidence chain)",
     )
     triage_p.add_argument("--json", action="store_true", help="Emit machine-readable JSON output")
+    # v1.3.27 — deferred triage v2 flags
+    triage_p.add_argument(
+        "--reclassify",
+        action="store_true",
+        help=(
+            "Replay the classifier rules over the project's historical telemetry "
+            "and write FailureTriaged events to .claude/.triage-replay.jsonl "
+            "(does NOT mutate sw-telemetry.jsonl)."
+        ),
+    )
+    triage_p.add_argument(
+        "--explain",
+        default=None,
+        metavar="CLASS",
+        help=(
+            "Print the rule, recommendation, and trigger conditions for a given "
+            "FailureClass enum value (e.g. quality_gate_fail)."
+        ),
+    )
+    triage_p.add_argument(
+        "--health",
+        action="store_true",
+        help=(
+            "Show UNKNOWN-rate over the last 30 failures + per-class distribution. "
+            "Warns when UNKNOWN > 15%%."
+        ),
+    )
+
+    # v1.3.27 — sw breaker subcommand for circuit-breaker visibility + reset.
+    breaker_p = sub.add_parser(
+        "breaker",
+        help="Inspect + reset the v1.3.26 Classed Circuit Breaker state.",
+    )
+    breaker_sub = breaker_p.add_subparsers(dest="breaker_command")
+    breaker_sub.add_parser(
+        "status",
+        help="Show current breaker window + per-class counter + thresholds.",
+    )
+    breaker_show = breaker_sub.choices.get("status")
+    if breaker_show is not None:
+        breaker_show.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+    breaker_reset = breaker_sub.add_parser(
+        "reset", help="Clear the breaker window (emits CircuitBreakerReset event)."
+    )
+    breaker_reset.add_argument(
+        "--confirm", action="store_true", help="Required: actually perform the reset"
+    )
 
     # v1.3.20 — sw budget subcommand for rolling cost ceiling visibility + config.
     budget_p = sub.add_parser(
@@ -1345,6 +1392,272 @@ def _ensure_ceiling_bypass_authorized() -> None:
         sys.exit(EXIT_BYPASS_UNAUTHORIZED)
 
 
+def _cmd_triage_explain(class_name: str, *, json_out: bool) -> None:
+    """v1.3.27 — print rule + trigger + recommendation for a FailureClass."""
+    from superpower_workflow.failure_triage import (
+        IMPLIES,
+        RECOMMENDATIONS,
+        RULES,
+        FailureClass,
+    )
+
+    target = class_name.strip().lower()
+    try:
+        cls = FailureClass(target)
+    except ValueError:
+        valid = sorted(c.value for c in FailureClass)
+        print(f"  Unknown FailureClass '{class_name}'. Valid values:")
+        for v in valid:
+            print(f"    - {v}")
+        sys.exit(3)
+
+    matching_rule = next((r for r in RULES if r.primary == cls), None)
+    recommendation = RECOMMENDATIONS.get(cls, "")
+    implies = sorted(IMPLIES.get(cls, frozenset()))
+    out = {
+        "class": cls.value,
+        "rule_id": matching_rule.id if matching_rule else None,
+        "recommendation": recommendation,
+        "implies_subsumes": [c.value for c in implies],
+    }
+    if json_out:
+        print(json.dumps(out, indent=2))
+        return
+    print(f"  FailureClass: {cls.value}")
+    print(f"  Rule:         {matching_rule.id if matching_rule else '(fallback UNKNOWN)'}")
+    if implies:
+        print(f"  Implies:      {', '.join(c.value for c in implies)}")
+        print("                  (these classes will NOT appear as secondary when this is primary)")
+    print()
+    print(f"  Recommendation:\n    {recommendation}")
+
+
+def _cmd_triage_reclassify(project_root: Path, *, json_out: bool) -> None:
+    """v1.3.27 — replay classifier over historical telemetry, write sidecar.
+
+    Reads sw-telemetry.jsonl, classifies every anchor (MilestoneFailed /
+    CostCeilingBlocked) using the CURRENT rule set, and writes the
+    resulting FailureTriaged events to `.claude/.triage-replay.jsonl`.
+
+    Does NOT mutate the live telemetry. Useful when rules evolve: replay
+    catches what would have been classified differently.
+    """
+    from superpower_workflow.failure_triage import classify_run, to_event_dict
+
+    claude_dir = project_root / ".claude"
+    telemetry_path = claude_dir / "sw-telemetry.jsonl"
+    audit_path = claude_dir / "audit-trail.jsonl"
+    state_path = claude_dir / "workflow-state.json"
+
+    if not telemetry_path.exists():
+        print(f"  No telemetry at {telemetry_path}.")
+        sys.exit(2)
+
+    results = classify_run(
+        telemetry_path,
+        audit_path=audit_path if audit_path.exists() else None,
+        state_path=state_path if state_path.exists() else None,
+    )
+    sidecar = claude_dir / ".triage-replay.jsonl"
+    with sidecar.open("w", encoding="utf-8") as f:
+        for r in results:
+            f.write(json.dumps(to_event_dict(r)) + "\n")
+
+    if json_out:
+        print(
+            json.dumps(
+                {
+                    "replayed_count": len(results),
+                    "sidecar_path": str(sidecar),
+                    "triage_version": 1,
+                }
+            )
+        )
+        return
+    print(f"  Replayed {len(results)} failure(s) over historical telemetry.")
+    print(f"  Sidecar: {sidecar}")
+    if results:
+        from collections import Counter
+
+        primary_counts = Counter(r.primary_class.value for r in results)
+        print()
+        print("  Class distribution:")
+        for cls, n in primary_counts.most_common():
+            print(f"    {cls:30s} {n:>3d}")
+
+
+def _cmd_triage_health(project_root: Path, *, json_out: bool) -> None:
+    """v1.3.27 — UNKNOWN-rate monitoring over rolling window of last 30 failures."""
+    from superpower_workflow.failure_triage import (
+        FailureClass,
+        classify_run,
+    )
+
+    claude_dir = project_root / ".claude"
+    telemetry_path = claude_dir / "sw-telemetry.jsonl"
+    if not telemetry_path.exists():
+        print(f"  No telemetry at {telemetry_path}.")
+        sys.exit(2)
+    audit_path = claude_dir / "audit-trail.jsonl"
+    state_path = claude_dir / "workflow-state.json"
+
+    results = classify_run(
+        telemetry_path,
+        audit_path=audit_path if audit_path.exists() else None,
+        state_path=state_path if state_path.exists() else None,
+    )
+    window = results[-30:]
+    total = len(window)
+    unknown = sum(1 for r in window if r.primary_class == FailureClass.UNKNOWN)
+    unknown_pct = round(unknown / total, 4) if total else 0.0
+    healthy = unknown_pct <= 0.15
+
+    from collections import Counter
+
+    by_class = Counter(r.primary_class.value for r in window)
+
+    if json_out:
+        print(
+            json.dumps(
+                {
+                    "window_size": total,
+                    "unknown_count": unknown,
+                    "unknown_pct": unknown_pct,
+                    "healthy": healthy,
+                    "threshold": 0.15,
+                    "class_distribution": dict(by_class),
+                }
+            )
+        )
+        return
+    status = "OK" if healthy else "DEGRADED"
+    print(f"  Triage health (last {total} failures): {status}")
+    print(f"  UNKNOWN rate: {unknown}/{total} = {unknown_pct * 100:.1f}% (threshold 15%)")
+    print()
+    print("  Class distribution:")
+    for cls, n in by_class.most_common():
+        print(f"    {cls:30s} {n:>3d}")
+    if not healthy:
+        print()
+        print(
+            "  Recommendation: UNKNOWN rate exceeds 15%. Inspect raw_reason fields "
+            "in recent FailureTriaged events for patterns; add a new rule to "
+            "failure_triage.RULES."
+        )
+
+
+def _cmd_breaker(project_root: Path, args) -> None:
+    """v1.3.27 — `sw breaker status` + `sw breaker reset`."""
+    from superpower_workflow.circuit_breaker import (
+        BreakerWindowEntry,
+        parse_config,
+    )
+    from superpower_workflow.state import load_state, save_state
+
+    claude_dir = project_root / ".claude"
+    cfg_path = claude_dir / "workflow.json"
+    if not cfg_path.exists():
+        print(f"  No workflow.json at {cfg_path}.")
+        sys.exit(2)
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"  Failed to read workflow.json: {exc}")
+        sys.exit(2)
+    breaker_cfg = parse_config(cfg.get("circuit_breaker", {}))
+
+    sub = getattr(args, "breaker_command", None)
+    state = load_state(claude_dir)
+    window = state.breaker_window or []
+
+    if sub == "reset":
+        if not getattr(args, "confirm", False):
+            print(
+                f"  DRY-RUN: would clear breaker window ({len(window)} entry(ies)). "
+                "Re-run with --confirm."
+            )
+            return
+        prior_size = len(window)
+        state.breaker_window = []
+        save_state(claude_dir, state)
+        # Emit CircuitBreakerReset audit (if audit-trail enabled).
+        from superpower_workflow.audit import AuditTrail, derive_key
+
+        security = cfg.get("security", {})
+        if security.get("audit_trail", False):
+            key = derive_key()
+            if key is not None:
+                trail = AuditTrail(claude_dir / "audit-trail.jsonl", key=key)
+                trail.append(
+                    "CIRCUIT_BREAKER_RESET",
+                    data={"prior_window_size": prior_size},
+                )
+        print(f"  Reset breaker window. Cleared {prior_size} entry(ies).")
+        return
+
+    # Default: status.
+    window_entries: list[BreakerWindowEntry] = []
+    for raw in window:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            window_entries.append(BreakerWindowEntry(**raw))
+        except TypeError:
+            continue
+    from collections import Counter
+
+    counter = Counter(e.primary_class for e in window_entries)
+
+    if getattr(args, "json", False):
+        out = {
+            "enabled": breaker_cfg.enabled,
+            "observation_only": breaker_cfg.observation_only,
+            "diversity_window": breaker_cfg.diversity_window,
+            "diversity_threshold": breaker_cfg.diversity_threshold,
+            "confidence_floor": breaker_cfg.confidence_floor,
+            "window": [
+                {
+                    "milestone_name": e.milestone_name,
+                    "primary_class": e.primary_class,
+                    "confidence": e.confidence,
+                    "ts": e.ts,
+                }
+                for e in window_entries
+            ],
+            "counter": dict(counter),
+            "same_class_thresholds": breaker_cfg.same_class_thresholds,
+        }
+        print(json.dumps(out, indent=2))
+        return
+
+    mode = "observation_only" if breaker_cfg.observation_only else "ENFORCED"
+    print(f"  Circuit Breaker: enabled={breaker_cfg.enabled} mode={mode}")
+    print(
+        f"  Window: {len(window_entries)} / {breaker_cfg.diversity_window} "
+        f"(diversity trips at {breaker_cfg.diversity_threshold})"
+    )
+    print(f"  Confidence floor: {breaker_cfg.confidence_floor}")
+    if window_entries:
+        print()
+        print(f"  {'milestone':24s} {'class':30s} {'conf':>5s}  {'ts':>20s}")
+        for e in window_entries:
+            print(
+                f"  {e.milestone_name[:24]:24s} {e.primary_class[:30]:30s} "
+                f"{e.confidence:>5.2f}  {e.ts:>20s}"
+            )
+        print()
+        print("  Per-class counter:")
+        for cls, n in counter.most_common():
+            threshold = breaker_cfg.same_class_thresholds.get(
+                cls, breaker_cfg.default_same_class_threshold
+            )
+            status = "TRIP" if n >= threshold else "ok"
+            print(f"    {cls:30s} {n:>2d} / {threshold:>2d}  [{status}]")
+    else:
+        print()
+        print("  No failures in the rolling window.")
+
+
 def _cmd_triage(project_root: Path, args) -> None:
     """v1.3.21 — `sw triage` replay over .claude/sw-telemetry.jsonl.
 
@@ -1359,6 +1672,17 @@ def _cmd_triage(project_root: Path, args) -> None:
     """
     if os.environ.get("SW_TRIAGE_OFF") == "1":
         print("  triage disabled via SW_TRIAGE_OFF=1")
+        return
+
+    # v1.3.27 — three deferred flags handled before the default code path.
+    if getattr(args, "explain", None):
+        _cmd_triage_explain(args.explain, json_out=bool(getattr(args, "json", False)))
+        return
+    if getattr(args, "reclassify", False):
+        _cmd_triage_reclassify(project_root, json_out=bool(getattr(args, "json", False)))
+        return
+    if getattr(args, "health", False):
+        _cmd_triage_health(project_root, json_out=bool(getattr(args, "json", False)))
         return
 
     from superpower_workflow.failure_triage import (
@@ -2384,6 +2708,10 @@ def main() -> None:
 
     if args.command == "triage":
         _cmd_triage(project_root, args)
+        return
+
+    if args.command == "breaker":
+        _cmd_breaker(project_root, args)
         return
 
     if args.command == "bootstrap":
