@@ -1,0 +1,17 @@
+sw-run.log
+.claude/sw-telemetry.jsonl
+.claude/audit-trail.jsonl
+.claude/workflow-state.json
+.claude/workflow-complete.json
+.claude/*.log
+.claude/.workflow.lock*
+.claude/*.tmp*
+.claude/.heartbeat
+.claude/.gap-report.json
+.claude/.spec-compliance.json
+.claude/.feature-verification.json
+.claude/.workflow-phase.json
+.claude/reports/
+.coverage
+__pycache__/
+*.pyc

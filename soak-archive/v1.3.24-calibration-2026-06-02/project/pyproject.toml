@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "todo-cli"
+version = "0.1.0"
+description = "Minimal command-line todo manager"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "E2E Agent Dev", email = "dev@example.com" },
+]
+dependencies = [
+    "click>=8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.0.275",
+    "freezegun>=1.2.0",
+]
+
+[project.scripts]
+todo = "todo.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers -v"
+minversion = "7.0"
+markers = [
+    "integration: integration tests",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["todo"]
+omit = [
+    "*/tests/*",
+    "*/__main__.py",
+]
+
+[tool.coverage.report]
+fail_under = 90
+precision = 2
+show_missing = true
+skip_covered = false
+
+[tool.hatch.build.targets.wheel]
+packages = ["todo"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["todo"]
