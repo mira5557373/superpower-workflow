@@ -1,0 +1,71 @@
+{
+  "spec": "spec.md",
+  "model": "claude-haiku-4-5",
+  "max_total_budget_usd": 20.0,
+  "budgets": {
+    "plan": 1.5,
+    "implement": 5.0,
+    "review": 3.0,
+    "push": 0.5
+  },
+  "telemetry": {
+    "enabled": true,
+    "path": ".claude/sw-telemetry.jsonl"
+  },
+  "verify_commands": {},
+  "drift_detection": {
+    "enabled": true,
+    "mode": "observation_only",
+    "baseline_floor": 2,
+    "sample_cap": 200
+  },
+  "cost_ceilings": {
+    "daily": {
+      "usd": 25.0,
+      "mode": "warn"
+    },
+    "weekly": {
+      "usd": 100.0,
+      "mode": "warn"
+    }
+  },
+  "triage": {
+    "enabled": true
+  },
+  "security": {
+    "audit_trail": true
+  },
+  "milestones": [
+    {
+      "name": "phase-m1-cli-and-storage",
+      "spec_sections": [
+        "Functional requirements",
+        "Non-functional requirements"
+      ],
+      "description": "Core CLI infrastructure and JSON storage. Implement add, list, done, rm subcommands with atomic writes to ~/.todo/store.json. Storage initialization with 0o600 permissions.",
+      "depends_on": []
+    },
+    {
+      "name": "phase-m2-test-coverage",
+      "spec_sections": [
+        "Functional requirements",
+        "Non-functional requirements",
+        "Quality gates"
+      ],
+      "description": "Comprehensive test suite covering all CLI subcommands, storage edge cases, atomic write behavior, and determinism. Target \u00e2\u2030\u00a590% coverage on todo/ package.",
+      "depends_on": [
+        "phase-m1-cli-and-storage"
+      ]
+    },
+    {
+      "name": "phase-m3-quality-gates",
+      "spec_sections": [
+        "Quality gates"
+      ],
+      "description": "Linting, formatting compliance, and final verification. Run ruff check and ruff format, ensure all tests pass, verify coverage thresholds met.",
+      "depends_on": [
+        "phase-m2-test-coverage"
+      ]
+    }
+  ]
+}
