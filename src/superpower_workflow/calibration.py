@@ -49,15 +49,24 @@ WARM_THRESHOLD: int = 5  # n >= this is "warm"
 MAX_AGE_DAYS_DEFAULT: int = 60
 MAX_EVENTS_DEFAULT: int = 10_000
 
-# Per-milestone cost bands (p10, p50, p90 USD). Derived from soak data.
-# Used as the cold-start prior AND the blend partner for partial-tier.
+# Per-milestone cost bands (p10, p50, p90 USD). The cold-start prior +
+# blend partner for partial-tier. Real-soak-derived where indicated.
+#
+# Methodology: haiku-4-5 numbers updated v1.3.25 based on 3 real soaks
+# (v1.3.21-e2e M1=$1.49, v1.3.22-drift M2=$0.50, v1.3.24-cal M3=$1.95).
+# p10/p50/p90 chosen as approximate-interpolated percentiles of those
+# samples. Original v1.3.24 values (0.08, 0.18, 0.42) were 7× too low —
+# derived from per-PHASE costs by mistake, not per-MILESTONE.
+#
+# Sonnet/opus entries remain seed values (no soak data yet); they'll be
+# replaced organically as projects accumulate samples under those models.
 DEFAULT_TABLE: dict[str, tuple[float, float, float]] = {
-    "haiku-4-5": (0.08, 0.18, 0.42),
-    "sonnet-4-5": (0.35, 0.85, 2.10),
-    "sonnet-4": (0.35, 0.85, 2.10),
-    "opus-4-7": (1.20, 2.80, 6.50),
-    "opus-4-8": (1.20, 2.80, 6.50),
-    "unknown": (0.15, 0.50, 1.80),
+    "haiku-4-5": (0.50, 1.49, 1.95),  # v1.3.25 — 3-soak calibration
+    "sonnet-4-5": (1.80, 4.50, 12.00),  # seed, ~3× haiku
+    "sonnet-4": (1.80, 4.50, 12.00),
+    "opus-4-7": (6.00, 15.00, 35.00),  # seed, ~10× haiku
+    "opus-4-8": (6.00, 15.00, 35.00),
+    "unknown": (0.50, 1.50, 5.00),
 }
 
 

@@ -3,6 +3,39 @@
 All notable changes to superpower-workflow are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.25] — 2026-06-02
+
+**`DEFAULT_TABLE` recalibration from real soak data.**
+
+### Fixed
+
+The v1.3.24 `DEFAULT_TABLE` haiku-4-5 entry was 7× too low — derived
+inadvertently from per-PHASE costs (~$0.18) instead of per-MILESTONE
+costs (~$1.49). The v1.3.24-calibration soak surfaced this when the
+estimator under-predicted by 78% (`error_ratio=1.78`).
+
+Three real soak samples on `claude-haiku-4-5` (todo-cli project):
+- v1.3.21-e2e M1: $1.49
+- v1.3.22-drift M2: $0.50
+- v1.3.24-cal M3: $1.95
+
+Updated entry: `(0.50, 1.49, 1.95)` — p10/p50/p90 interpolated from
+those three samples. Sonnet/opus entries scaled proportionally as
+seed values (no soak data yet for those models).
+
+### Impact
+
+- New cold-start projects on `haiku-4-5` get a realistic prior:
+  3-milestone estimate goes from $0.54 → $4.47 (closer to truth).
+- Existing projects with telemetry hit `partial` or `warm` tier
+  quickly and the DEFAULT_TABLE prior matters less.
+
+### Stats
+
+- Test: one test bound updated (`test_partial_blends_table_and_telemetry`)
+  to reflect new default p50; logic unchanged.
+- Tests still: 1917.
+
 ## [1.3.24] — 2026-06-02
 
 **Estimator Calibration Loop.** Closes the 3.8× over-projection the
